@@ -4,13 +4,25 @@ import {
   AircraftTarget,
   FieldOperator,
   HeliAdminSheetData,
+  HelideckWeatherState,
   InstallationOrAirport,
 } from '../types/radar';
 import {
   FIELD_OPERATOR_COLORS,
   resolveHeliAdminStopCode,
 } from '../data/installationsAndAirports';
-import { Compass, Crosshair, Globe, Layers, LocateFixed, Minus, Plus } from 'lucide-react';
+import {
+  Building2,
+  Compass,
+  Crosshair,
+  Eye,
+  Globe,
+  Layers,
+  LocateFixed,
+  Minus,
+  Plus,
+  Star,
+} from 'lucide-react';
 
 interface RadarMapProps {
   flights: AircraftTarget[];
@@ -28,6 +40,13 @@ interface RadarMapProps {
   onUseMyGps: () => void;
   mapViewTarget: { lat: number; lon: number; zoom: number; seq: number };
   onMapCenterChanged: (lat: number, lon: number) => void;
+  isFavoriteFacility: boolean;
+  onToggleFavoriteFacility: (id: string) => void;
+  singleRigFocus: boolean;
+  onToggleSingleRigFocus: () => void;
+  weather: HelideckWeatherState | null;
+  onOpenDirectory: () => void;
+  onOpenWeather: () => void;
 }
 
 type MapStyleMode = 'dark_radar' | 'daylight_osm' | 'satellite' | 'nautical_ocean';
@@ -167,6 +186,13 @@ export const RadarMap: React.FC<RadarMapProps> = ({
   onUseMyGps,
   mapViewTarget,
   onMapCenterChanged,
+  isFavoriteFacility,
+  onToggleFavoriteFacility,
+  singleRigFocus,
+  onToggleSingleRigFocus,
+  weather,
+  onOpenDirectory,
+  onOpenWeather,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -488,21 +514,96 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       {/* Main Leaflet Canvas */}
       <div ref={containerRef} className="w-full h-full z-0" />
 
-      {/* Top-Left Active Helideck / Airport Lock HUD */}
-      <div className="absolute top-3 left-3 z-[400] bg-slate-950/90 backdrop-blur-md border border-slate-800 rounded-lg px-3 py-2 max-w-[290px] sm:max-w-xs pointer-events-auto">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[11px] font-mono text-cyan-400 tracking-tight truncate">
-            LOCKED RADAR CENTER · {activeFacility.code}
+      {/* Top-Left Active Helideck / Airport Lock HUD (Mobile & Single-Rig Optimised) */}
+      <div className="absolute top-2.5 left-2.5 z-[400] bg-slate-950/92 backdrop-blur-md border border-slate-800 rounded-xl p-2.5 w-[calc(100vw-72px)] max-w-[310px] sm:max-w-xs pointer-events-auto shadow-xl">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] font-mono text-cyan-400 tracking-tight truncate font-semibold">
+            {isFavoriteFacility ? '★ MY FAVOURITE RIG' : 'LOCKED RIG / BASE'} · {activeFacility.code}
           </span>
-          <span className="text-[11px] font-mono tabular-nums text-slate-400">
+          <span className="text-[10px] font-mono tabular-nums text-slate-400 shrink-0">
             {activeFacility.elevationFt} FT
           </span>
         </div>
-        <div className="text-sm font-semibold text-white truncate mt-0.5">
-          {activeFacility.name}
+
+        <div className="flex items-center justify-between gap-2 mt-0.5">
+          <div className="text-sm font-bold text-white truncate">
+            {activeFacility.shortName}
+          </div>
+          <button
+            onClick={() => onToggleFavoriteFacility(activeFacility.id)}
+            title={
+              isFavoriteFacility
+                ? 'Saved as Favourite Rig (Tap to remove)'
+                : 'Save as My Favourite Rig on this phone'
+            }
+            className={`px-2 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1 border shrink-0 transition-colors cursor-pointer ${
+              isFavoriteFacility
+                ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
+                : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-700'
+            }`}
+          >
+            <Star
+              className={`w-3.5 h-3.5 ${
+                isFavoriteFacility ? 'fill-amber-400 text-amber-400' : 'text-slate-400'
+              }`}
+            />
+            {isFavoriteFacility ? 'Saved' : 'Save Rig'}
+          </button>
         </div>
+
         <div className="text-[11px] text-slate-400 truncate mt-0.5">
           {activeFacility.fieldOperator} · {activeFacility.assetType} · Base {activeFacility.primaryShoreBase}
+        </div>
+
+        {/* Live Weather & Sea State Mini-Bar (tappable to open full METAR/WX) */}
+        {weather && (
+          <button
+            onClick={onOpenWeather}
+            className="mt-2 w-full px-2 py-1 rounded-md bg-slate-900/95 hover:bg-slate-900 border border-slate-800 flex items-center justify-between gap-2 text-[11px] font-mono cursor-pointer transition-colors"
+          >
+            <span
+              className={`font-bold ${
+                weather.cap437Status === 'GO'
+                  ? 'text-emerald-400'
+                  : weather.cap437Status === 'CAUTION'
+                  ? 'text-amber-400'
+                  : 'text-rose-400'
+              }`}
+            >
+              ● WX {weather.cap437Status}
+            </span>
+            <span className="text-slate-200 tabular-nums">
+              Wind {weather.windSpeedKts}G{weather.windGustKts}kt
+            </span>
+            <span className="text-cyan-300 tabular-nums">
+              Wave {weather.significantWaveHeightM}m
+            </span>
+          </button>
+        )}
+
+        {/* Quick Mobile Action Row: Focus Only 1 Rig + Change Rig */}
+        <div className="mt-2 grid grid-cols-2 gap-1.5">
+          <button
+            onClick={onToggleSingleRigFocus}
+            className={`px-2 py-1.5 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 border transition-colors cursor-pointer ${
+              singleRigFocus
+                ? 'bg-cyan-500 text-slate-950 border-cyan-400 font-bold'
+                : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-800'
+            }`}
+          >
+            <Eye className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">
+              {singleRigFocus ? `Only ${activeFacility.code} (ON)` : `Only ${activeFacility.code}`}
+            </span>
+          </button>
+
+          <button
+            onClick={onOpenDirectory}
+            className="px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-800 flex items-center justify-center gap-1 transition-colors cursor-pointer"
+          >
+            <Building2 className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Change Rig</span>
+          </button>
         </div>
       </div>
 

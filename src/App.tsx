@@ -43,7 +43,7 @@ import {
   Plane,
   Radar,
   Share2,
-  Smartphone,
+  Star,
   X,
 } from 'lucide-react';
 
@@ -115,34 +115,63 @@ export default function App() {
     INSTALLATIONS_AND_AIRPORTS
   );
 
-  // Active locked installation or airport (defaults to Apache Forties Charlie)
-  const [activeFacilityId, setActiveFacilityId] = useState<string>('apache-forties-charlie');
+  // Active locked installation or airport (persisted in localStorage so phone always opens on user's rig)
+  const [activeFacilityId, setActiveFacilityId] = useState<string>(() => {
+    try {
+      return localStorage.getItem('choppercheck_home_rig_id') || 'apache-forties-charlie';
+    } catch {
+      return 'apache-forties-charlie';
+    }
+  });
   const activeFacility = useMemo(
     () => facilities.find((f) => f.id === activeFacilityId) || facilities[0],
     [facilities, activeFacilityId]
   );
 
+  // Favourite / Starred Rigs (persisted in localStorage for 1-tap mobile switching)
+  const [favoriteFacilityIds, setFavoriteFacilityIds] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem('choppercheck_favorite_rigs');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return ['apache-forties-charlie', 'wos-glen-lyon-fpso', 'uk-culzean', 'apt-egpd'];
+  });
+
+  // Single-Rig Focus Mode (hides all other 60+ rigs on the map so phone screen only shows your 1 rig + shore base)
+  const [singleRigFocus, setSingleRigFocus] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('choppercheck_single_rig_focus') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
   // Active navigation tab (used on mobile and right dock on desktop)
   const [activeTab, setActiveTab] = useState<ActiveTab>('radar');
   const [dockTab, setDockTab] = useState<'flights' | 'directory' | 'weather'>('flights');
 
-  // Map viewport target state
-  const [activeSector, setActiveSector] = useState<SectorId>('apache_north_sea');
+  // Map viewport target state (boots directly onto user's saved rig coordinates)
+  const [activeSector, setActiveSector] = useState<SectorId>(() => activeFacility.sector);
   const [mapViewTarget, setMapViewTarget] = useState<{
     lat: number;
     lon: number;
     zoom: number;
     seq: number;
-  }>({
-    lat: 57.7269,
-    lon: 0.8472,
-    zoom: 7,
+  }>(() => ({
+    lat: activeFacility.lat,
+    lon: activeFacility.lon,
+    zoom: 8,
     seq: 1,
-  });
-  const [queryCenter, setQueryCenter] = useState<{ lat: number; lon: number }>({
-    lat: 57.7269,
-    lon: 0.8472,
-  });
+  }));
+  const [queryCenter, setQueryCenter] = useState<{ lat: number; lon: number }>(() => ({
+    lat: activeFacility.lat,
+    lon: activeFacility.lon,
+  }));
 
   // Filters
   const [categoryFilter, setCategoryFilter] = useState<
@@ -152,7 +181,7 @@ export default function App() {
   const [selectedFieldOperator, setSelectedFieldOperator] = useState<'all' | FieldOperator>('all');
   const [showRangeRings, setShowRangeRings] = useState<boolean>(true);
   const [showFacilityLabels, setShowFacilityLabels] = useState<boolean>(true);
-  const [includeScheduleWave, setIncludeScheduleWave] = useState<boolean>(false);
+  const [includeScheduleWave] = useState<boolean>(false);
   const [liveCount, setLiveCount] = useState<number>(0);
 
   // Flights & Selection State
@@ -306,13 +335,54 @@ export default function App() {
     loadWeather();
   }, [loadWeather]);
 
-  // Filter installations shown on map by selectedFieldOperator
+  // Filter installations shown on map by Single-Rig Focus or selectedFieldOperator
   const visibleInstallations = useMemo(() => {
+    if (singleRigFocus) {
+      return facilities.filter(
+        (f) =>
+          f.id === activeFacility.id ||
+          f.code.toUpperCase() === activeFacility.primaryShoreBase.toUpperCase()
+      );
+    }
     if (selectedFieldOperator === 'all') return facilities;
     return facilities.filter(
       (f) => f.fieldOperator === selectedFieldOperator || f.id === activeFacility.id
     );
-  }, [facilities, selectedFieldOperator, activeFacility.id]);
+  }, [facilities, singleRigFocus, selectedFieldOperator, activeFacility.id, activeFacility.primaryShoreBase]);
+
+  const favoriteFacilities = useMemo(
+    () =>
+      favoriteFacilityIds
+        .map((id) => facilities.find((f) => f.id === id))
+        .filter((f): f is InstallationOrAirport => !!f),
+    [facilities, favoriteFacilityIds]
+  );
+
+  const handleToggleFavoriteFacility = useCallback((facId: string) => {
+    setFavoriteFacilityIds((prev) => {
+      const next = prev.includes(facId)
+        ? prev.filter((id) => id !== facId)
+        : [facId, ...prev];
+      try {
+        localStorage.setItem('choppercheck_favorite_rigs', JSON.stringify(next));
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  }, []);
+
+  const handleToggleSingleRigFocus = useCallback(() => {
+    setSingleRigFocus((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('choppercheck_single_rig_focus', String(next));
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  }, []);
 
   // Filter flights shown on map
   const visibleFlights = useMemo(() => {
@@ -382,6 +452,11 @@ export default function App() {
   const handleSelectSector = (preset: (typeof SECTOR_PRESETS)[number]) => {
     setActiveSector(preset.id);
     setActiveFacilityId(preset.defaultFacilityId);
+    try {
+      localStorage.setItem('choppercheck_home_rig_id', preset.defaultFacilityId);
+    } catch {
+      // ignore storage errors
+    }
     if (preset.id === 'apache_north_sea') {
       setSelectedFieldOperator('Apache');
     } else {
@@ -398,6 +473,12 @@ export default function App() {
 
   const handleSelectFacility = useCallback((fac: InstallationOrAirport) => {
     setActiveFacilityId(fac.id);
+    setActiveSector(fac.sector);
+    try {
+      localStorage.setItem('choppercheck_home_rig_id', fac.id);
+    } catch {
+      // ignore storage errors
+    }
     setQueryCenter({ lat: fac.lat, lon: fac.lon });
     setMapViewTarget((prev) => ({
       lat: fac.lat,
@@ -697,6 +778,64 @@ export default function App() {
         </div>
       </div>
 
+      {/* ★ MY FAVOURITE RIGS QUICK-JUMP BAR (Mobile & Desktop 1-Tap Rig Switcher) */}
+      <div className="bg-slate-950/95 border-b border-slate-800/90 px-3 sm:px-6 py-1.5 flex items-center justify-between gap-2 overflow-x-auto shrink-0">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="text-[11px] font-mono uppercase tracking-wider text-amber-400 font-semibold flex items-center gap-1 whitespace-nowrap shrink-0">
+            <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+            My Rigs:
+          </span>
+          {favoriteFacilities.map((fac) => {
+            const isActive = fac.id === activeFacility.id;
+            return (
+              <button
+                key={fac.id}
+                onClick={() => {
+                  handleSelectFacility(fac);
+                  setActiveTab('radar');
+                }}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                  isActive
+                    ? 'bg-amber-400 text-slate-950 font-bold shadow-sm'
+                    : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
+                }`}
+              >
+                <span>{fac.shortName}</span>
+                <span
+                  className={`font-mono text-[10px] ${
+                    isActive ? 'text-slate-950' : 'text-amber-400'
+                  }`}
+                >
+                  {fac.code}
+                </span>
+              </button>
+            );
+          })}
+          <button
+            onClick={() => {
+              setActiveTab('directory');
+              setDockTab('directory');
+            }}
+            className="px-2 py-1 rounded-md text-[11px] font-medium bg-slate-900/70 hover:bg-slate-800 text-cyan-400 border border-slate-800/80 whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            + Pick / Star Rig
+          </button>
+        </div>
+
+        <button
+          onClick={handleToggleSingleRigFocus}
+          className={`px-2.5 py-1 rounded-md text-[11px] font-semibold whitespace-nowrap shrink-0 border transition-colors cursor-pointer hidden sm:flex items-center gap-1 ${
+            singleRigFocus
+              ? 'bg-cyan-500 text-slate-950 border-cyan-400 font-bold'
+              : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
+          }`}
+        >
+          {singleRigFocus
+            ? `Showing Only ${activeFacility.shortName} (${activeFacility.code})`
+            : 'Focus Only 1 Rig'}
+        </button>
+      </div>
+
       {/* Live Triggered Flight / Approach Alert Banner */}
       {activeAlertBanner && (
         <div className="bg-emerald-950/80 border-b border-emerald-500/50 px-3 sm:px-6 py-2 flex items-center justify-between gap-3 text-xs shrink-0">
@@ -852,6 +991,19 @@ export default function App() {
             onUseMyGps={handleUseMyGps}
             mapViewTarget={mapViewTarget}
             onMapCenterChanged={(lat, lon) => setQueryCenter({ lat, lon })}
+            isFavoriteFacility={favoriteFacilityIds.includes(activeFacility.id)}
+            onToggleFavoriteFacility={handleToggleFavoriteFacility}
+            singleRigFocus={singleRigFocus}
+            onToggleSingleRigFocus={handleToggleSingleRigFocus}
+            weather={weather}
+            onOpenDirectory={() => {
+              setActiveTab('directory');
+              setDockTab('directory');
+            }}
+            onOpenWeather={() => {
+              setActiveTab('weather');
+              setDockTab('weather');
+            }}
           />
 
           {/* Mobile Bottom Sheet for Selected Flight when viewing Map */}
@@ -958,6 +1110,10 @@ export default function App() {
                 selectedFieldOperator={selectedFieldOperator}
                 onSelectFieldOperator={setSelectedFieldOperator}
                 onAddCustomCoordinate={handleAddCustomCoordinate}
+                favoriteFacilityIds={favoriteFacilityIds}
+                onToggleFavoriteFacility={handleToggleFavoriteFacility}
+                singleRigFocus={singleRigFocus}
+                onToggleSingleRigFocus={handleToggleSingleRigFocus}
               />
             )}
 
