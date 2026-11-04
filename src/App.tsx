@@ -172,13 +172,9 @@ export default function App() {
   const [activeAlertBanner, setActiveAlertBanner] = useState<FlightAlertEvent | null>(null);
   const firedAlertKeysRef = useRef<Set<string>>(new Set());
 
-  // Weather & CAP 437 Deck Motion State
+  // Weather & METAR State
   const [weather, setWeather] = useState<HelideckWeatherState | null>(null);
   const [weatherLoading, setWeatherLoading] = useState<boolean>(false);
-  const [customPitch, setCustomPitch] = useState<number>(0.8);
-  const [customRoll, setCustomRoll] = useState<number>(1.1);
-  const [customHeave, setCustomHeave] = useState<number>(0.4);
-  const [useCustomDeckMotion, setUseCustomDeckMotion] = useState<boolean>(false);
 
   // Modals: Mobile/GitHub Setup, 360° Overhead Sky Compass & Heli-Admin Noticeboard Sheets
   const [showInstallModal, setShowInstallModal] = useState<boolean>(false);
@@ -301,20 +297,10 @@ export default function App() {
   // Fetch live Open-Meteo marine, aviation & METAR weather for activeFacility
   const loadWeather = useCallback(async () => {
     setWeatherLoading(true);
-    const wx = await fetchHelideckWeather(
-      activeFacility,
-      useCustomDeckMotion ? customPitch : undefined,
-      useCustomDeckMotion ? customRoll : undefined,
-      useCustomDeckMotion ? customHeave : undefined
-    );
+    const wx = await fetchHelideckWeather(activeFacility);
     setWeather(wx);
-    if (!useCustomDeckMotion) {
-      setCustomPitch(wx.vesselPitchDeg);
-      setCustomRoll(wx.vesselRollDeg);
-      setCustomHeave(wx.vesselHeaveRateMps);
-    }
     setWeatherLoading(false);
-  }, [activeFacility, useCustomDeckMotion, customPitch, customRoll, customHeave]);
+  }, [activeFacility]);
 
   useEffect(() => {
     loadWeather();
@@ -534,8 +520,6 @@ export default function App() {
       if (match) {
         setSelectedFlightHex(match.hex);
         setPinnedFlightHex(match.hex);
-      } else {
-        setIncludeScheduleWave(true);
       }
     },
     [facilities, flights]
@@ -556,7 +540,7 @@ export default function App() {
           }}
           className="text-base sm:text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0 font-display"
         >
-          ChopperCheck.com
+          ChopperCheck.com · Made by onemadpunk
         </a>
 
         {/* Zone 2: 4 clean single-line navigation links */}
@@ -707,19 +691,9 @@ export default function App() {
             {alertsEnabled ? 'Alerts Armed' : 'Alerts Muted'}
           </button>
 
-          <button
-            onClick={() => setIncludeScheduleWave((prev) => !prev)}
-            title="Toggle between 100% Live 1090MHz ADS-B transponders only vs adding Simulated Offshore Crew Waves"
-            className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border whitespace-nowrap shrink-0 cursor-pointer ${
-              !includeScheduleWave
-                ? 'bg-slate-950 text-emerald-400 border-emerald-500/40'
-                : 'bg-amber-950/40 text-amber-300 border-amber-500/40'
-            }`}
-          >
-            {!includeScheduleWave
-              ? `100% Live ADS-B (${liveCount} Real Aircraft)`
-              : `Live (${liveCount}) + Demo Offshore Wave`}
-          </button>
+          <div className="px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium bg-slate-950 text-emerald-400 border border-emerald-500/40 whitespace-nowrap shrink-0">
+            ● LIVE 1090MHz ADS-B ({liveCount} Aircraft)
+          </div>
         </div>
       </div>
 
@@ -993,20 +967,14 @@ export default function App() {
                 weather={weather}
                 loading={weatherLoading}
                 onRefresh={loadWeather}
-                customPitch={customPitch}
-                customRoll={customRoll}
-                customHeave={customHeave}
-                onUpdateDeckMotion={(p, r, h) => {
-                  setUseCustomDeckMotion(true);
-                  setCustomPitch(p);
-                  setCustomRoll(r);
-                  setCustomHeave(h);
-                }}
-                onResetDeckMotion={() => {
-                  setUseCustomDeckMotion(false);
-                }}
               />
             )}
+          </div>
+
+          {/* Creator Signature Footer */}
+          <div className="px-3 py-1.5 bg-slate-950 border-t border-slate-800/90 flex items-center justify-between text-[11px] font-mono text-slate-400 shrink-0">
+            <span>ChopperCheck.com</span>
+            <span className="text-cyan-400 font-semibold">Made by onemadpunk</span>
           </div>
         </aside>
       </main>

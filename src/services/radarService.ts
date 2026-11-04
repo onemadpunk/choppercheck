@@ -531,55 +531,29 @@ export async function fetchHelideckWeather(
     // Fallback if offline
   }
 
-  const isFloatingVessel = facility.assetType === 'FPSO' || facility.assetType === 'Semi-Sub';
-  const pitchDeg =
-    customPitchDeg !== undefined
-      ? customPitchDeg
-      : isFloatingVessel
-      ? Number(Math.min(4.2, Math.max(0.6, waveHeightM * 0.45)).toFixed(1))
-      : 0.0;
-  const rollDeg =
-    customRollDeg !== undefined
-      ? customRollDeg
-      : isFloatingVessel
-      ? Number(Math.min(4.8, Math.max(0.8, waveHeightM * 0.55)).toFixed(1))
-      : 0.0;
-  const heaveRateMps =
-    customHeaveMps !== undefined
-      ? customHeaveMps
-      : isFloatingVessel
-      ? Number(Math.min(1.6, Math.max(0.2, waveHeightM * 0.22)).toFixed(2))
-      : 0.0;
-
-  const inclinationDeg = Number(Math.sqrt(pitchDeg * pitchDeg + rollDeg * rollDeg).toFixed(1));
+  const pitchDeg = 0;
+  const rollDeg = 0;
+  const heaveRateMps = 0;
+  const inclinationDeg = 0;
 
   let cap437Status: 'GO' | 'CAUTION' | 'HOLD' = 'GO';
-  let cap437Reason = 'Within UK CAA CAP 437 & HCA Helideck Operational Limits';
+  let cap437Reason = `Normal Offshore Weather Conditions — Wind ${windSpeedKts}G${windGustKts} kt, Significant Wave ${waveHeightM}m`;
 
-  if (
-    windSpeedKts >= 55 ||
-    windGustKts >= 60 ||
-    pitchDeg > 3.0 ||
-    rollDeg > 3.0 ||
-    inclinationDeg > 3.5 ||
-    heaveRateMps > 1.3
-  ) {
+  if (windSpeedKts >= 55 || windGustKts >= 60 || waveHeightM >= 6.5) {
     cap437Status = 'HOLD';
-    if (pitchDeg > 3.0 || rollDeg > 3.0 || heaveRateMps > 1.3) {
-      cap437Reason = `HELIDECK HOLD: Vessel motion exceeds CAP 437 S-92/H175 limits (Pitch ±${pitchDeg}°, Roll ±${rollDeg}°, Heave ${heaveRateMps} m/s)`;
+    if (windSpeedKts >= 55 || windGustKts >= 60) {
+      cap437Reason = `WEATHER HOLD: Live Wind/Gusts (${windSpeedKts}G${windGustKts} kt) exceed 60 kt offshore rotor engagement limit`;
     } else {
-      cap437Reason = `HELIDECK HOLD: Wind/Gusts (${windSpeedKts}G${windGustKts} kt) exceed 60 kt rotor engagement limit`;
+      cap437Reason = `SEA STATE HOLD: Significant Wave Height (${waveHeightM}m) exceeds severe offshore operating threshold`;
     }
   } else if (
     windSpeedKts >= 40 ||
+    windGustKts >= 45 ||
     windGustKts - windSpeedKts >= 15 ||
-    pitchDeg >= 2.2 ||
-    rollDeg >= 2.2 ||
-    heaveRateMps >= 1.0 ||
     waveHeightM >= 4.5
   ) {
     cap437Status = 'CAUTION';
-    cap437Reason = `CAUTION: Elevated deck turbulence / gust spread (${windSpeedKts}G${windGustKts} kt, Wave ${waveHeightM}m)`;
+    cap437Reason = `CAUTION: Elevated offshore wind/sea state (${windSpeedKts}G${windGustKts} kt, Significant Wave ${waveHeightM}m)`;
   }
 
   const shoreBaseIcao =

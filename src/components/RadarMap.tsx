@@ -587,7 +587,9 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         <span aria-hidden="true">·</span>
         <span className="text-orange-400 font-medium">Orange: HM Coastguard SAR</span>
         <span aria-hidden="true">·</span>
-        <span className="text-amber-400 font-medium">Amber: Airline / Fixed-Wing</span>
+        <span className="text-amber-400 font-medium">Amber: Airline</span>
+        <span aria-hidden="true">·</span>
+        <span className="font-mono text-slate-300 font-semibold">Made by onemadpunk</span>
       </div>
     </div>
   );

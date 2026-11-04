@@ -24,7 +24,6 @@ export const REAL_HELIADMIN_SHEETS: HeliAdminSheetData[] = [
       'Inter-rig shuttle loop: Aberdeen (ABZ) → Forties Alpha (FA) → Forties Delta (FD) → Forties Charlie (FC) → Aberdeen (ABZ)',
       'Empty locker, return locker key & check survival suit size before mustering',
     ],
-    sampleImageUrl: '/assets/aistudio/image_818a1e1d.png',
   },
   {
     id: 'sheet-bp-gl3-thursday',
@@ -52,7 +51,6 @@ export const REAL_HELIADMIN_SHEETS: HeliAdminSheetData[] = [
       'Locker emptied & key returned to Heli-Admin',
       'Please strip bed on day of departure',
     ],
-    sampleImageUrl: '/assets/aistudio/image_df5a798e.png',
   },
   {
     id: 'sheet-total-culzean-fr',
@@ -79,7 +77,6 @@ export const REAL_HELIADMIN_SHEETS: HeliAdminSheetData[] = [
       'Hand in S3ID cards, empty your locker & hand in the key',
       'Strip bed prior to check-in',
     ],
-    sampleImageUrl: '/assets/aistudio/image_aa5784a2.png',
   },
   {
     id: 'sheet-bp-gl3-60byg',
@@ -106,6 +103,5 @@ export const REAL_HELIADMIN_SHEETS: HeliAdminSheetData[] = [
       'Verify Lifeboat (LB01 / LB02) and Muster station assignment on Departing/Arriving Beds Report',
       'Empty cabin locker, return key & strip bed on morning of departure',
     ],
-    sampleImageUrl: '/assets/aistudio/image_65e5cd04.png',
   },
 ];

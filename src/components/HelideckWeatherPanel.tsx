@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   CloudFog,
+  Compass,
   RefreshCw,
   ShieldAlert,
   Waves,
@@ -15,11 +16,6 @@ interface HelideckWeatherPanelProps {
   weather: HelideckWeatherState | null;
   loading: boolean;
   onRefresh: () => void;
-  customPitch: number;
-  customRoll: number;
-  customHeave: number;
-  onUpdateDeckMotion: (pitch: number, roll: number, heave: number) => void;
-  onResetDeckMotion: () => void;
 }
 
 export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
@@ -27,16 +23,11 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   weather,
   loading,
   onRefresh,
-  customPitch,
-  customRoll,
-  customHeave,
-  onUpdateDeckMotion,
-  onResetDeckMotion,
 }) => {
   if (!weather) {
     return (
       <div className="p-6 text-center text-slate-400 text-sm">
-        Loading meteorological, marine & aviation METAR telemetry for {facility.name}...
+        Loading live meteorological, marine & aviation METAR telemetry for {facility.name}...
       </div>
     );
   }
@@ -61,11 +52,11 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <div className="text-[11px] font-mono text-cyan-400">
-            HELIDECK & SHORE METAR TELEMETRY · {facility.code}
+            LIVE METAR & MARINE TELEMETRY · {facility.code}
           </div>
           <h3 className="text-base font-bold text-white truncate">{facility.name}</h3>
           <div className="text-xs text-slate-400">
-            {facility.fieldOperator} · {facility.assetType} · Updated {weather.updatedAt}
+            {facility.fieldOperator} · {facility.assetType} · Live Sync {weather.updatedAt}
           </div>
         </div>
         <button
@@ -77,17 +68,21 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
         </button>
       </div>
 
-      {/* CAP 437 Operational Status Box */}
+      {/* Weather & Wind Operational Status Box */}
       <div className={`p-3 rounded-lg border ${statusColor}`}>
         <div className="flex items-center gap-2 font-semibold text-sm">
           {weather.cap437Status === 'GO' && <CheckCircle2 className="w-4 h-4 shrink-0" />}
           {weather.cap437Status === 'CAUTION' && <AlertTriangle className="w-4 h-4 shrink-0" />}
           {weather.cap437Status === 'HOLD' && <ShieldAlert className="w-4 h-4 shrink-0" />}
           <span>
-            HELIDECK STATUS: {weather.cap437Status} (CAA CAP 437 / HCA)
+            LIVE WEATHER & SEA STATE:{' '}
+            {weather.cap437Status === 'GO' ? 'FAVOURABLE (GO)' : weather.cap437Status}
           </span>
         </div>
         <p className="text-xs mt-1 opacity-90">{weather.cap437Reason}</p>
+        <p className="text-[10px] mt-1 opacity-75 font-mono">
+          Calculated from live offshore wind/wave model & shore METAR (onboard HMS pitch/roll sensors are private to vessel bridge).
+        </p>
       </div>
 
       {/* Live Shore Base METAR / TAF & Fog / Haar Delay Predictor */}
@@ -122,7 +117,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
         {weather.rawMetar && (
           <div className="pt-2 border-t border-slate-800/80 space-y-1">
             <div className="text-[10px] font-mono text-slate-400">
-              LIVE METAR ({weather.shoreBaseIcao}):
+              OFFICIAL AIRPORT METAR ({weather.shoreBaseIcao}):
             </div>
             <div className="p-2 bg-slate-950 rounded border border-slate-800 font-mono text-[11px] text-cyan-300 break-words">
               {weather.rawMetar}
@@ -133,7 +128,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
         {weather.rawTaf && (
           <div className="space-y-1">
             <div className="text-[10px] font-mono text-slate-400">
-              TERMINAL FORECAST (TAF):
+              OFFICIAL TERMINAL FORECAST (TAF):
             </div>
             <div className="p-2 bg-slate-950 rounded border border-slate-800 font-mono text-[10px] text-slate-300 break-words max-h-24 overflow-y-auto">
               {weather.rawTaf}
@@ -142,11 +137,11 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
         )}
       </div>
 
-      {/* Primary Wind, Sea State & Atmospheric Grid */}
+      {/* Primary Live Wind, Sea State & Atmospheric Grid */}
       <div className="grid grid-cols-2 gap-2.5">
         <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
           <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>Wind & Gusts (10m/Deck)</span>
+            <span>Live Wind & Gusts</span>
             <Wind className="w-3.5 h-3.5 text-cyan-400" />
           </div>
           <div className="text-xl font-mono font-bold tabular-nums text-white mt-1">
@@ -201,86 +196,35 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
         </div>
       </div>
 
-      {/* Vessel / FPSO Pitch, Roll & Heave Simulator (CAP 437) */}
-      <div className="p-3.5 bg-slate-900/90 border border-slate-800 rounded-lg space-y-3">
+      {/* Helideck Hardware Specs & Live Data Source Verification */}
+      <div className="p-3.5 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2 text-xs">
         <div className="flex items-center justify-between">
-          <div>
-            <h4 className="text-xs font-semibold text-white">
-              FPSO / Vessel Helideck Motion Limits (Pitch, Roll & Heave)
-            </h4>
-            <p className="text-[11px] text-slate-400">
-              Test deck motion thresholds for floating assets (e.g. Glen Lyon, Kraken, Captain FPSO)
-            </p>
-          </div>
-          <button
-            onClick={onResetDeckMotion}
-            className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] cursor-pointer"
-          >
-            Auto Wave Sync
-          </button>
+          <span className="font-semibold text-white flex items-center gap-1.5">
+            <Compass className="w-3.5 h-3.5 text-cyan-400" />
+            Installation Helideck Specs & Live Telemetry Sources
+          </span>
+          <span className="font-mono text-[10px] text-emerald-400">100% LIVE FEEDS</span>
         </div>
 
-        <div className="space-y-2.5 text-xs">
-          <div>
-            <div className="flex justify-between font-mono tabular-nums">
-              <span className="text-slate-300">Deck Pitch (±3.0° Day / ±2.0° Night Limit)</span>
-              <span className={weather.vesselPitchDeg > 3.0 ? 'text-rose-400 font-bold' : 'text-cyan-400'}>
-                ±{weather.vesselPitchDeg.toFixed(1)}°
-              </span>
+        <div className="grid grid-cols-2 gap-2 pt-1 font-mono text-[11px]">
+          <div className="p-2 rounded bg-slate-950 border border-slate-800">
+            <div className="text-[10px] text-slate-400">COORDINATES</div>
+            <div className="text-slate-200 tabular-nums mt-0.5">
+              {facility.lat.toFixed(4)}°N, {facility.lon.toFixed(4)}°E
             </div>
-            <input
-              type="range"
-              min="0"
-              max="5"
-              step="0.1"
-              value={customPitch}
-              onChange={(e) =>
-                onUpdateDeckMotion(parseFloat(e.target.value), customRoll, customHeave)
-              }
-              className="w-full accent-cyan-400 mt-1 cursor-pointer"
-            />
           </div>
-
-          <div>
-            <div className="flex justify-between font-mono tabular-nums">
-              <span className="text-slate-300">Deck Roll (±3.0° Day / ±2.0° Night Limit)</span>
-              <span className={weather.vesselRollDeg > 3.0 ? 'text-rose-400 font-bold' : 'text-cyan-400'}>
-                ±{weather.vesselRollDeg.toFixed(1)}°
-              </span>
+          <div className="p-2 rounded bg-slate-950 border border-slate-800">
+            <div className="text-[10px] text-slate-400">CERTIFIED HELIDECK</div>
+            <div className="text-slate-200 truncate mt-0.5">
+              {facility.helideckDValueM ? `D-Value ${facility.helideckDValueM}m` : facility.assetType}{' '}
+              {facility.maxHeliType ? `· ${facility.maxHeliType}` : ''}
             </div>
-            <input
-              type="range"
-              min="0"
-              max="5"
-              step="0.1"
-              value={customRoll}
-              onChange={(e) =>
-                onUpdateDeckMotion(customPitch, parseFloat(e.target.value), customHeave)
-              }
-              className="w-full accent-cyan-400 mt-1 cursor-pointer"
-            />
-          </div>
-
-          <div>
-            <div className="flex justify-between font-mono tabular-nums">
-              <span className="text-slate-300">Significant Heave Rate (1.3 m/s Limit)</span>
-              <span className={weather.vesselHeaveRateMps > 1.3 ? 'text-rose-400 font-bold' : 'text-cyan-400'}>
-                {weather.vesselHeaveRateMps.toFixed(2)} m/s
-              </span>
-            </div>
-            <input
-              type="range"
-              min="0"
-              max="2.2"
-              step="0.05"
-              value={customHeave}
-              onChange={(e) =>
-                onUpdateDeckMotion(customPitch, customRoll, parseFloat(e.target.value))
-              }
-              className="w-full accent-cyan-400 mt-1 cursor-pointer"
-            />
           </div>
         </div>
+
+        <p className="text-[11px] text-slate-400 leading-relaxed pt-1">
+          <strong>Live Sources:</strong> Airport METAR/TAF from NOAA/CAA Aviation Weather ({weather.shoreBaseIcao}); Offshore Wind, QNH & Marine Wave Height (Hs) queried live at {facility.lat.toFixed(2)}°N, {facility.lon.toFixed(2)}°E via Open-Meteo Marine & ECMWF.
+        </p>
       </div>
     </div>
   );

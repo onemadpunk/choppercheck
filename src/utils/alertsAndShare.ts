@@ -81,7 +81,7 @@ export function buildFlightShareText(
     `Route: ${flight.originCode} (${flight.originName}) → ${flight.destinationCode} (${flight.destinationName})`,
     `Position: ${flight.distanceFromRefNm} NM (${flight.distanceFromRefMiles} mi) from ${refCode} · Bearing ${flight.bearingFromRefDeg}°`,
     `Telemetry: Alt ${flight.altitudeFt.toLocaleString()} ft · Speed ${flight.groundSpeedKts} kt (${flight.groundSpeedMph} mph) · ${etaPart}`,
-    `Track live: https://choppercheck.com`,
+    `Track live: https://choppercheck.com (Made by onemadpunk)`,
   ].join('\n');
 }
 
