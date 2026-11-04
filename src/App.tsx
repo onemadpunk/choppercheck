@@ -678,7 +678,7 @@ export default function App() {
             onClick={() => setShowInstallModal(true)}
             className="px-3.5 py-2 text-xs font-semibold text-slate-950 bg-cyan-400 hover:bg-cyan-300 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            choppercheck.com & Phone Setup
+            Install to Phone
           </button>
         </div>
       </header>
