@@ -1,0 +1,6 @@
+{
+  "name": "DeckWatch Radar",
+  "description": "Free full-featured UK & Offshore Flight Radar covering all UK airports, offshore heliports, HM Coastguard SAR, and North Sea / West of Shetland / Norwegian platforms & FPSOs by operator.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
