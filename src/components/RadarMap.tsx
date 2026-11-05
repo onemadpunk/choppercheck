@@ -140,7 +140,9 @@ function createFacilityIconHtml(
   const ringBorder = isActive ? '2px solid #ffffff' : `1.5px solid ${color}`;
   const size = isActive ? 15 : 11;
 
-  const shapeHtml = isFpso
+  const shapeHtml = fac.assetType === 'GPS location' || fac.assetType === 'Custom location'
+    ? `<div style="width:14px;height:14px;border-radius:50%;background:#38bdf8;border:3px solid white;box-shadow:0 0 0 6px rgba(56,189,248,0.2);"></div>`
+    : isFpso
     ? `<div style="width:${size + 6}px;height:${size - 2}px;background:${color};border:${ringBorder};border-radius:6px;box-shadow:0 0 8px rgba(0,0,0,0.9);"></div>`
     : isAirport
     ? `<div style="width:${size + 3}px;height:${size + 3}px;background:#0f172a;border:2px solid ${color};border-radius:3px;display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:700;color:${color};">H</div>`
@@ -575,3 +577,4 @@ export const RadarMap: React.FC<RadarMapProps> = ({
     </div>
   );
 };
+

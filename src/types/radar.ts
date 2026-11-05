@@ -1,4 +1,7 @@
 export type AssetType =
+  | 'Map reference'
+  | 'GPS location'
+  | 'Custom location'
   | 'Fixed Platform'
   | 'FPSO'
   | 'Semi-Sub'
@@ -171,3 +174,4 @@ export interface FlightAlertEvent {
   triggerType: 'AIRBORNE_LIFTOFF' | 'RING_25NM' | 'RING_10NM';
   message: string;
 }
+

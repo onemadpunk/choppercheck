@@ -128,7 +128,7 @@ export function normalizeWeather(data: any, facility: InstallationOrAirport, now
   const marineTime = epoch(marine?.time);
   const currentWx = weatherTime !== null && now - weatherTime <= 2 * 3600_000 && weatherTime <= now + 15 * 60_000 ? wx : null;
   const currentMarine = marineTime !== null && now - marineTime <= 2 * 3600_000 && marineTime <= now + 15 * 60_000 ? marine : null;
-  const station = facility.code.length === 4 && /^[A-Z]{4}$/.test(facility.code) ? facility.code : facility.primaryShoreBase;
+  const station = ['Map reference', 'GPS location', 'Custom location'].includes(facility.assetType) ? '' : facility.code.length === 4 && /^[A-Z]{4}$/.test(facility.code) ? facility.code : facility.primaryShoreBase;
   const metar = Array.isArray(data?.metar) ? data.metar.find((m: any) => m.icaoId === station && typeof m.rawOb === 'string') : null;
   const metarTime = epoch(metar?.obsTime);
   const category = ['VFR', 'MVFR', 'IFR', 'LIFR'].includes(metar?.fltCat) ? metar.fltCat : undefined;
@@ -146,7 +146,7 @@ export function normalizeWeather(data: any, facility: InstallationOrAirport, now
 }
 
 export async function fetchHelideckWeather(facility: InstallationOrAirport): Promise<HelideckWeatherState> {
-  const station = /^[A-Z]{4}$/.test(facility.code) ? facility.code : facility.primaryShoreBase;
+  const station = ['Map reference', 'GPS location', 'Custom location'].includes(facility.assetType) ? '' : /^[A-Z]{4}$/.test(facility.code) ? facility.code : facility.primaryShoreBase;
   let data: any = {};
   try {
     const url = FLIGHT_API_ORIGIN + '/api/weather?lat=' + facility.lat.toFixed(2) + '&lon=' + facility.lon.toFixed(2) + '&icao=' + encodeURIComponent(station);

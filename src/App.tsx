@@ -111,7 +111,7 @@ export default function App() {
   const [activeFacilityId, setActiveFacilityId] = useState<string>('');
   const [referenceLocation, setReferenceLocation] = useState({ lat: 57.65, lon: 0.8 });
   const activeFacility = useMemo(
-    () => facilities.find((f) => f.id === activeFacilityId) || { id: 'map-reference', code: 'MAP', name: 'North Sea map reference', shortName: 'Map reference', lat: referenceLocation.lat, lon: referenceLocation.lon, assetType: 'UK Airport', fieldOperator: 'UK Airport / Heliport', primaryShoreBase: '', helicopterOperators: [], regionLabel: '', elevationFt: 0, sector: 'uk_north_sea' } as InstallationOrAirport,
+    () => facilities.find((f) => f.id === activeFacilityId) || { id: 'map-reference', code: 'MAP', name: 'North Sea map reference', shortName: 'Map reference', lat: referenceLocation.lat, lon: referenceLocation.lon, assetType: 'Map reference', fieldOperator: 'UK Airport / Heliport', primaryShoreBase: '', helicopterOperators: [], regionLabel: '', elevationFt: 0, sector: 'uk_north_sea' } as InstallationOrAirport,
     [facilities, activeFacilityId, referenceLocation]
   );
 
@@ -480,7 +480,7 @@ export default function App() {
             name: 'My GPS Location',
             shortName: 'My GPS Location',
             fieldOperator: 'UK Airport / Heliport',
-            assetType: 'UK Airport',
+            assetType: 'GPS location',
             sector: 'uk_north_sea',
             lat,
             lon,
@@ -521,7 +521,7 @@ export default function App() {
       name,
       shortName: name,
       fieldOperator: 'UK Airport / Heliport',
-      assetType: 'Fixed Platform',
+      assetType: 'Custom location',
       sector: 'uk_north_sea',
       lat,
       lon,
