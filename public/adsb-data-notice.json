@@ -1,0 +1,32 @@
+{
+  "title": "ChopperCheck aircraft-data attribution and alteration method",
+  "updated": "2026-11-05",
+  "source": {
+    "name": "adsb.lol",
+    "url": "https://www.adsb.lol/",
+    "licence": "Open Database License (ODbL) 1.0",
+    "licenceUrl": "https://opendatacommons.org/licenses/odbl/1-0/"
+  },
+  "scope": "This notice applies to adsb.lol-sourced aircraft data and ChopperCheck's database-derived aircraft additions. It does not apply other providers' licences to their data, relicense application code, or include private browser preferences or independent map/weather layers.",
+  "reuse": "The adsb.lol data and ChopperCheck's database-derived aircraft additions are available under ODbL 1.0. Preserve source and licence notices and the applicable share-alike and access rights. No additional restrictions are imposed on those data rights.",
+  "publicData": {
+    "endpoint": "https://choppercheck-flight-api.ornatehinny4.chatgpt.site/api/flights",
+    "example": "https://choppercheck-flight-api.ornatehinny4.chatgpt.site/api/flights?lat=57.2&lon=-2.2&radius=250",
+    "selection": "The response source field identifies the provider. This ODbL notice applies when source is adsb.lol."
+  },
+  "alterationMethod": {
+    "upstream": "Request a point query around the requested latitude/longitude, rounded to 0.1 degree, for a validated radius of 25 to 250 nautical miles.",
+    "transport": "Normalise the provider aircraft-array name to ac, preserve aircraft record fields and the provider timestamp, and add source/attribution metadata. Reject invalid provider timestamps, responses older than 45 seconds, and timestamps over 30 seconds ahead.",
+    "serverFiltering": "Require finite latitude/longitude, exclude emitter categories starting with C, type TWR, and records with seen_pos over 120 seconds.",
+    "browserFiltering": "Require coordinates within latitude/longitude bounds and a nonempty hex identifier. Exclude ground reports, ground-vehicle/tower categories, known non-aircraft transmitter identifiers and records without a valid nonnegative position age. Retain positions no older than 45 seconds. Deduplicate by hex.",
+    "browserAdditions": "Calculate observation time from the provider timestamp minus seen_pos; decode type names using the linked public lookup table; identify operators only from reported owner/callsign rules in the linked source; otherwise retain unknowns. Calculate great-circle distance and bearing to the chosen reference. Do not infer routes or departure/arrival times.",
+    "prediction": "For targets with reported speed and track and speed of at least 25 knots, estimate displacement from the original reported position for at most 10 seconds. Preserve original observation time and observed trail. Remove the target after 45 seconds without a position report.",
+    "history": "Keep up to 120 received trail points per aircraft, within the latest 20 minutes of the page session. Predictions do not add observed history.",
+    "retention": "The backend caches queried aircraft responses for five seconds where available. No persistent historical aircraft database is operated by ChopperCheck.",
+    "sourceFiles": [
+      "https://github.com/onemadpunk/choppercheck/blob/main/src/services/radarService.ts",
+      "https://github.com/onemadpunk/choppercheck/blob/main/src/data/aircraftDecoder.ts",
+      "https://github.com/onemadpunk/choppercheck/blob/main/src/utils/dataQuality.ts"
+    ]
+  }
+}

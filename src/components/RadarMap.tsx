@@ -201,6 +201,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
   const facilityLayerRef = useRef<L.LayerGroup | null>(null);
   const ringsLayerRef = useRef<L.LayerGroup | null>(null);
   const trailLayerRef = useRef<L.LayerGroup | null>(null);
+  const aircraftAttributionRef = useRef('');
 
   const [mapStyle, setMapStyle] = useState<MapStyleMode>('dark_radar');
   const [referenceCardExpanded, setReferenceCardExpanded] = useState(false);
@@ -258,6 +259,20 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       mapRef.current = null;
     };
   }, []);
+
+  // Keep source and data-licence attribution attached to the displayed aircraft.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const sources = new Set(flights.map(f => f.provider));
+    const notice = sources.has('adsb.lol')
+      ? 'Aircraft: <a href="https://www.adsb.lol/" target="_blank" rel="noopener">adsb.lol</a> · <a href="https://opendatacommons.org/licenses/odbl/1-0/" target="_blank" rel="noopener">ODbL</a>'
+      : sources.has('adsb.fi') ? 'Aircraft: <a href="https://adsb.fi/" target="_blank" rel="noopener">adsb.fi</a>' : '';
+    if (notice === aircraftAttributionRef.current) return;
+    if (aircraftAttributionRef.current) map.attributionControl.removeAttribution(aircraftAttributionRef.current);
+    if (notice) map.attributionControl.addAttribution(notice);
+    aircraftAttributionRef.current = notice;
+  }, [flights]);
 
   // Switch Map Tile Layer (All 4 options are 100% free & require NO API Key)
   useEffect(() => {

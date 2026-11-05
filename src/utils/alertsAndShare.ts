@@ -79,7 +79,7 @@ export function buildFlightShareText(
     'Position: ' + flight.distanceFromRefNm + ' NM from ' + refCode + ' · Bearing ' + flight.bearingFromRefDeg + '°',
     'Altitude: ' + (flight.altitudeReported === false ? 'unavailable' : flight.altitudeFt + ' ft') + ' · Speed: ' + (flight.speedReported === false ? 'unavailable' : flight.groundSpeedKts + ' kt'),
     'Position report: ' + age + ' · ' + (flight.source === 'dead_reckoning' ? 'Displayed position is estimated' : 'Reported position'),
-    'Source: ' + (flight.provider || 'ADS-B'),
+    'Source: ' + (flight.provider === 'adsb.lol' ? 'adsb.lol — ODbL 1.0 (https://opendatacommons.org/licenses/odbl/1-0/)' : flight.provider || 'ADS-B'),
     'https://choppercheck.com',
   ].join('\n');
 }
