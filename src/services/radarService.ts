@@ -403,15 +403,17 @@ export async function fetchHybridRadarTraffic(
 
   // 2. Direct Phone / Browser Mode (GitHub Pages / choppercheck.com with ZERO backend server):
   // Because api.adsb.lol and opendata.adsb.fi do not send browser CORS headers (ACAO: null),
-  // we query them via CORS-enabled relays + direct fallback so live flights appear on choppercheck.com!
+  // we query them via CORS-enabled relays with a 4-second cache-buster so aircraft move live every 4 seconds!
   if (liveTargets.length === 0) {
-    const adsbLolTarget = `https://api.adsb.lol/v2/point/${centerLat.toFixed(3)}/${centerLon.toFixed(3)}/250`;
+    const cacheBust = Math.floor(Date.now() / 4000);
+    const adsbLolTarget = `https://api.adsb.lol/v2/point/${centerLat.toFixed(3)}/${centerLon.toFixed(3)}/250?_=${cacheBust}`;
     const adsbFiTarget = `https://opendata.adsb.fi/api/v2/lat/${centerLat.toFixed(3)}/lon/${centerLon.toFixed(3)}/dist/250`;
 
     const browserSafeUrls = [
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(adsbLolTarget)}&disableCache=true`,
-      `https://api.allorigins.win/get?url=${encodeURIComponent(adsbLolTarget)}&disableCache=true`,
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(adsbFiTarget)}&disableCache=true`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(adsbLolTarget)}&_=${cacheBust}`,
+      `https://api.allorigins.win/get?url=${encodeURIComponent(adsbLolTarget)}&_=${cacheBust}`,
+      `https://ais-pre-xajwn6eve4wfyqp5gx7jme-855352357329.europe-west2.run.app/api/flights?lat=${centerLat.toFixed(2)}&lon=${centerLon.toFixed(2)}&radius=250&_=${cacheBust}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(adsbFiTarget)}&_=${cacheBust}`,
       adsbLolTarget,
       adsbFiTarget,
     ];
