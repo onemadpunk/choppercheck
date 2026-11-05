@@ -12,6 +12,17 @@ const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: '15mb' }));
 
+// Enable CORS so static GitHub Pages (choppercheck.com) can also query API routes directly
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
 // In-memory cache for live ADS-B queries (3.5 seconds TTL)
 const flightCache = new Map<string, { timestamp: number; data: unknown }>();
 // Cache for resolved real-world callsign routes

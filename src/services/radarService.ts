@@ -401,21 +401,35 @@ export async function fetchHybridRadarTraffic(
     // Static GitHub Pages host — proceed to direct phone-to-API queries below
   }
 
-  // 2. Direct Phone / Browser Mode (GitHub Pages with ZERO backend server):
-  // Query direct CORS-enabled live ADS-B feeds straight from the user's phone
+  // 2. Direct Phone / Browser Mode (GitHub Pages / choppercheck.com with ZERO backend server):
+  // Because api.adsb.lol and opendata.adsb.fi do not send browser CORS headers (ACAO: null),
+  // we query them via CORS-enabled relays + direct fallback so live flights appear on choppercheck.com!
   if (liveTargets.length === 0) {
-    const directPointUrls = [
-      `https://api.airplanes.live/v2/point/${centerLat.toFixed(3)}/${centerLon.toFixed(3)}/250`,
-      `https://api.adsb.lol/v2/point/${centerLat.toFixed(3)}/${centerLon.toFixed(3)}/250`,
+    const adsbLolTarget = `https://api.adsb.lol/v2/point/${centerLat.toFixed(3)}/${centerLon.toFixed(3)}/250`;
+    const adsbFiTarget = `https://opendata.adsb.fi/api/v2/lat/${centerLat.toFixed(3)}/lon/${centerLon.toFixed(3)}/dist/250`;
+
+    const browserSafeUrls = [
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(adsbLolTarget)}&disableCache=true`,
+      `https://api.allorigins.win/get?url=${encodeURIComponent(adsbLolTarget)}&disableCache=true`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(adsbFiTarget)}&disableCache=true`,
+      adsbLolTarget,
+      adsbFiTarget,
     ];
 
-    for (const url of directPointUrls) {
+    for (const url of browserSafeUrls) {
       try {
         const directRes = await fetch(url, { headers: { Accept: 'application/json' } });
         if (directRes.ok) {
-          const directJson = await directRes.json();
-          if (Array.isArray(directJson?.ac) && directJson.ac.length > 0) {
-            liveTargets = (directJson.ac as RawAdsbAircraft[])
+          const rawJson = await directRes.json();
+          // Handle both raw JSON and allorigins /get wrapper ({ contents: "..." })
+          const parsed =
+            typeof rawJson?.contents === 'string'
+              ? JSON.parse(rawJson.contents)
+              : rawJson;
+
+          const aircraftArray = parsed?.ac || parsed?.aircraft;
+          if (Array.isArray(aircraftArray) && aircraftArray.length > 0) {
+            liveTargets = (aircraftArray as RawAdsbAircraft[])
               .slice(0, 220)
               .map((raw) => classifyLiveAircraft(raw, referenceFacility))
               .filter((item): item is AircraftTarget => item !== null);
@@ -423,21 +437,20 @@ export async function fetchHybridRadarTraffic(
           }
         }
       } catch {
-        // Try next direct feed
+        // Try next browser-safe feed
       }
     }
   }
 
-  // 3. Secondary Direct Phone Fallback: OpenSky Network live states (CORS enabled)
+  // 3. Secondary Direct Phone Fallback: OpenSky Network live states
   if (liveTargets.length === 0) {
     try {
       const lamin = (centerLat - 3.5).toFixed(2);
       const lamax = (centerLat + 3.5).toFixed(2);
       const lomin = (centerLon - 5.5).toFixed(2);
       const lomax = (centerLon + 5.5).toFixed(2);
-      const osRes = await fetch(
-        `https://opensky-network.org/api/states/all?lamin=${lamin}&lomin=${lomin}&lamax=${lamax}&lomax=${lomax}`
-      );
+      const openSkyTarget = `https://opensky-network.org/api/states/all?lamin=${lamin}&lomin=${lomin}&lamax=${lamax}&lomax=${lomax}`;
+      const osRes = await fetch(openSkyTarget);
       if (osRes.ok) {
         const osJson = await osRes.json();
         if (Array.isArray(osJson?.states)) {
@@ -579,18 +592,42 @@ export async function fetchHelideckWeather(
   )}/${windSpeedKts}KT VIS ${visKm}KM CLOUD BASE ${cloudBaseFt}FT`;
   let flightCategory: 'VFR' | 'MVFR' | 'IFR' | 'LIFR' = 'VFR';
 
+  let metarLoaded = false;
   try {
     const metarRes = await fetch(`/api/metar?icao=${shoreBaseIcao}`);
     if (metarRes.ok) {
-      const mData = await metarRes.json();
-      if (Array.isArray(mData) && mData.length > 0 && mData[0]?.rawOb) {
-        rawMetar = String(mData[0].rawOb);
-        if (mData[0].rawTaf) rawTaf = String(mData[0].rawTaf);
-        if (mData[0].fltCat) flightCategory = mData[0].fltCat;
+      const cType = metarRes.headers.get('content-type') || '';
+      if (cType.includes('application/json')) {
+        const mData = await metarRes.json();
+        if (Array.isArray(mData) && mData.length > 0 && mData[0]?.rawOb) {
+          rawMetar = String(mData[0].rawOb);
+          if (mData[0].rawTaf) rawTaf = String(mData[0].rawTaf);
+          if (mData[0].fltCat) flightCategory = mData[0].fltCat;
+          metarLoaded = true;
+        }
       }
     }
   } catch {
-    // Fallback to synthesized METAR from live Open-Meteo telemetry
+    // Proceed to direct browser-safe METAR relay below
+  }
+
+  if (!metarLoaded) {
+    try {
+      const targetMetarUrl = `https://aviationweather.gov/api/data/metar?ids=${shoreBaseIcao}&format=json&taf=true`;
+      const relayMetarRes = await fetch(
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(targetMetarUrl)}&disableCache=true`
+      );
+      if (relayMetarRes.ok) {
+        const mData = await relayMetarRes.json();
+        if (Array.isArray(mData) && mData.length > 0 && mData[0]?.rawOb) {
+          rawMetar = String(mData[0].rawOb);
+          if (mData[0].rawTaf) rawTaf = String(mData[0].rawTaf);
+          if (mData[0].fltCat) flightCategory = mData[0].fltCat;
+        }
+      }
+    } catch {
+      // Fallback to synthesized METAR from live Open-Meteo telemetry
+    }
   }
 
   if (cloudBaseFt < 500 || visKm < 1.5) flightCategory = 'LIFR';
