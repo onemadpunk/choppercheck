@@ -507,6 +507,14 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       {/* Right Map Floating Tactical Controls */}
       <div className="map-controls absolute top-3 right-3 z-[400] flex flex-col gap-1.5 pointer-events-auto">
         <button
+          onClick={() => mapRef.current?.flyTo([58.7, -0.5], 6, { duration: 0.7 })}
+          title="Show North Sea tracking area"
+          aria-label="Show North Sea tracking area"
+          className="min-w-[44px] min-h-[44px] bg-slate-950/90 hover:bg-slate-900 text-cyan-300 border border-slate-800 rounded-lg flex items-center justify-center text-[10px] font-semibold cursor-pointer"
+        >
+          N SEA
+        </button>
+        <button
           onClick={() => mapRef.current?.zoomIn()}
           title="Zoom In"
           className="min-w-[44px] min-h-[44px] bg-slate-950/90 hover:bg-slate-900 text-slate-200 border border-slate-800 rounded-lg flex items-center justify-center transition-colors cursor-pointer"
@@ -525,6 +533,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
             mapRef.current?.flyTo([activeFacility.lat, activeFacility.lon], 8, { duration: 0.7 })
           }
           title="Center on Active Rig / Airport"
+          data-secondary-control="true"
           className="min-w-[44px] min-h-[44px] bg-slate-950/90 hover:bg-slate-900 text-cyan-400 border border-slate-800 rounded-lg flex items-center justify-center transition-colors cursor-pointer"
         >
           <Crosshair className="w-4 h-4" />
@@ -539,6 +548,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         <button
           onClick={cycleMapStyle}
           title={`Switch Map Layer (Current: ${mapStyleLabel})`}
+          data-secondary-control="true"
           className="min-w-[44px] min-h-[44px] bg-slate-950/90 hover:bg-slate-900 text-emerald-400 border border-slate-800 rounded-lg flex flex-col items-center justify-center transition-colors cursor-pointer px-1"
         >
           <Globe className="w-4 h-4" />
@@ -547,6 +557,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         <button
           onClick={onToggleRangeRings}
           title="Toggle distance rings"
+          data-secondary-control="true"
           className={`min-w-[44px] min-h-[44px] border rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
             showRangeRings
               ? 'bg-cyan-950/90 text-cyan-300 border-cyan-500/60'
@@ -558,6 +569,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         <button
           onClick={onToggleFacilityLabels}
           title="Toggle Rig & Aircraft Labels"
+          data-secondary-control="true"
           className={`min-w-[44px] min-h-[44px] border rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
             showFacilityLabels
               ? 'bg-cyan-950/90 text-cyan-300 border-cyan-500/60'
@@ -592,4 +604,5 @@ export const RadarMap: React.FC<RadarMapProps> = ({
     </div>
   );
 };
+
 

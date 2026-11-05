@@ -25,6 +25,7 @@ import { HelideckWeatherPanel } from './components/HelideckWeatherPanel';
 import { InstallAndGitHubModal } from './components/InstallAndGitHubModal';
 import { OverheadSkyCompassModal } from './components/OverheadSkyCompassModal';
 import { reported } from './utils/dataQuality';
+import { startVisiblePolling } from './utils/visiblePolling';
 import { useOnlineStatus } from './hooks/usePWAInstall';
 import {
   getWhatsAppShareUrl,
@@ -219,19 +220,15 @@ export default function App() {
   }, [activeFacility]);
 
   useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const controller = new AbortController();
     recentAircraftMapRef.current.clear();
     previousAlertPositions.current.clear();
     firedAlertKeysRef.current.clear();
     setFlights([]);
     setFeedState('loading');
-    const poll = async () => {
-      try {
+    const stop = startVisiblePolling(async signal => {
         const center = queryCenterRef.current;
-        const result = await fetchHybridRadarTraffic(center.lat, center.lon, activeFacility, 0, false, controller.signal);
-        if (cancelled) return;
+        const result = await fetchHybridRadarTraffic(center.lat, center.lon, activeFacility, 0, false, signal);
+        if (signal.aborted) return;
         setFeedState(result.feedAvailable ? 'available' : 'unavailable');
         if (result.provider) setFeedProvider(result.provider);
         const now = Date.now();
@@ -239,17 +236,14 @@ export default function App() {
           recentAircraftMapRef.current.set(flight.hex, { flight, seenAt: flight.observedAt! });
         }
         for (const [hex, entry] of recentAircraftMapRef.current) {
-          if (!entry.flight.observedAt || now - entry.flight.observedAt > 45000 || Math.abs(entry.flight.lat - center.lat) > 4.5 || Math.abs(entry.flight.lon - center.lon) > 8) recentAircraftMapRef.current.delete(hex);
+          if (!entry.flight.observedAt || now - entry.flight.observedAt > 45000) recentAircraftMapRef.current.delete(hex);
         }
         const current = advanceAircraftPositionsSmoothly([...recentAircraftMapRef.current.values()].map(e => e.flight), 0, activeFacility);
         setFlights(current);
         setSelectedFlightHex(prev => current.some(f => f.hex === prev) ? prev : null);
-      } finally {
-        if (!cancelled) timer = setTimeout(poll, 5000);
-      }
-    };
-    void poll();
-    return () => { cancelled = true; controller.abort(); clearTimeout(timer); };
+        return result.retryAfterMs;
+    });
+    return stop;
   }, [activeFacility]);
 
   // Only observed positions trigger alerts. Proximity is not evidence of an approach or destination.
@@ -695,7 +689,7 @@ export default function App() {
           </button>
 
           <div className="px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium bg-slate-950 text-emerald-400 border border-emerald-500/40 whitespace-nowrap shrink-0">
-            {feedState === 'loading' ? 'Connecting to aircraft feed…' : feedState === 'unavailable' ? 'Feed unavailable · last known positions' : feedProvider + ' · ' + liveCount + ' tracked aircraft'}
+            {feedState === 'loading' ? 'Connecting to aircraft feed…' : feedState === 'unavailable' ? 'Feed unavailable · last known positions' : 'North Sea · ' + feedProvider + ' · ' + liveCount + ' tracked aircraft'}
           </div>
         </div>
       </div>
@@ -802,7 +796,7 @@ export default function App() {
           }`}
         >
           <button onClick={() => { setActiveTab('flights'); setDockTab('flights'); }} className={'lg:hidden absolute bottom-6 left-2 z-[450] max-w-[calc(100%-76px)] text-left rounded-lg border px-2.5 py-2 text-[11px] shadow-lg ' + (feedState === 'unavailable' ? 'bg-amber-950/95 border-amber-700 text-amber-200' : 'bg-slate-950/95 border-slate-700 text-slate-300')}>
-            {feedState === 'loading' ? 'Connecting to aircraft feed…' : feedState === 'unavailable' ? 'Feed unavailable · retrying' : flights.length + ' aircraft · ' + flights.filter(f => f.category === 'offshore_heli' || f.category === 'coastguard_sar').length + ' helicopters · View list'}
+            {feedState === 'loading' ? 'Connecting to aircraft feed…' : feedState === 'unavailable' ? 'Feed unavailable · retrying' : 'North Sea · ' + flights.length + ' aircraft · ' + flights.filter(f => f.category === 'offshore_heli' || f.category === 'coastguard_sar').length + ' helicopters · View list'}
           </button>
           {locationError && <div role="alert" className="absolute top-16 left-2 right-2 max-w-sm z-[500] px-3 py-2 rounded-lg border border-amber-700 bg-amber-950/95 text-amber-200 text-xs flex justify-between gap-2">{locationError}<button onClick={() => setLocationError('')} aria-label="Dismiss location message"><X className="w-4 h-4" /></button></div>}
           <RadarMap
@@ -1038,4 +1032,3 @@ export default function App() {
     </div>
   );
 }
-

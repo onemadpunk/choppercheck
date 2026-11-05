@@ -15,18 +15,35 @@
     "selection": "The response source field identifies the provider. This ODbL notice applies when source is adsb.lol."
   },
   "alterationMethod": {
-    "upstream": "Request a point query around the requested latitude/longitude, rounded to 0.1 degree, for a validated radius of 25 to 250 nautical miles.",
+    "upstream": "When the backup is used, request one shared point query centred on 58.7N, 0.5W with a 250 NM radius.",
     "transport": "Normalise the provider aircraft-array name to ac, preserve aircraft record fields and the provider timestamp, and add source/attribution metadata. Reject invalid provider timestamps, responses older than 45 seconds, and timestamps over 30 seconds ahead.",
     "serverFiltering": "Require finite latitude/longitude, exclude emitter categories starting with C, type TWR, and records with seen_pos over 120 seconds.",
     "browserFiltering": "Require coordinates within latitude/longitude bounds and a nonempty hex identifier. Exclude ground reports, ground-vehicle/tower categories, known non-aircraft transmitter identifiers and records without a valid nonnegative position age. Retain positions no older than 45 seconds. Deduplicate by hex.",
     "browserAdditions": "Calculate observation time from the provider timestamp minus seen_pos; decode type names using the linked public lookup table; identify operators only from reported owner/callsign rules in the linked source; otherwise retain unknowns. Calculate great-circle distance and bearing to the chosen reference. Do not infer routes or departure/arrival times.",
     "prediction": "For targets with reported speed and track and speed of at least 25 knots, estimate displacement from the original reported position for at most 10 seconds. Preserve original observation time and observed trail. Remove the target after 45 seconds without a position report.",
     "history": "Keep up to 120 received trail points per aircraft, within the latest 20 minutes of the page session. Predictions do not add observed history.",
-    "retention": "The backend caches queried aircraft responses for five seconds where available. No persistent historical aircraft database is operated by ChopperCheck.",
+    "retention": "The backend stores one latest shared snapshot and operational coordination/cooldown/backup-usage counters. Aircraft snapshots over 45 seconds old are not served. No historical aircraft database is maintained.",
     "sourceFiles": [
       "https://github.com/onemadpunk/choppercheck/blob/main/src/services/radarService.ts",
       "https://github.com/onemadpunk/choppercheck/blob/main/src/data/aircraftDecoder.ts",
       "https://github.com/onemadpunk/choppercheck/blob/main/src/utils/dataQuality.ts"
     ]
+  },
+  "status": "The live backend tries adsb.fi first, with a strictly quota-limited authenticated adsb.lol backup. Source and attribution are included in every snapshot. Neither source guarantees complete reception or uninterrupted access.",
+  "activeFeed": {
+    "name": "adsb.fi",
+    "url": "https://adsb.fi/",
+    "terms": "https://github.com/adsbfi/opendata#terms",
+    "query": "https://opendata.adsb.fi/api/v3/lat/58.7/lon/-0.5/dist/250",
+    "coverage": "250 nautical mile radius around 58.7N, 0.5W; not global coverage",
+    "processing": "Preserve provider fields and timestamps, filter invalid positions/ground transmitters, and use the same public browser decoding, expiry and prediction methods described below. The ODbL statements below do not apply to adsb.fi data.",
+    "refresh": "On demand only. One centrally coordinated refresh no more often than every five seconds. The primary is tried when its cooldown permits; backup is used only when primary cannot serve data and budget remains. Visible clients request the shared feed; hidden clients stop polling. No timers or scheduled background queries run on the backend.",
+    "retention": "A single latest snapshot and request-coordination metadata are stored in the backend database. No historical flight database or visitor-location database is maintained. Snapshots over 45 seconds old are not served.",
+    "backup": {
+      "name": "adsb.lol",
+      "query": "https://api.adsb.lol/v2/point/58.7/-0.5/250",
+      "licence": "https://opendatacommons.org/licenses/odbl/1-0/",
+      "limits": "Persistent UTC request counters stop below the issued key limits: 18/30s, 100/min, 900/hour, 900/day, 4500/week and 9000/month. Conservative local transfer caps are 900 MB/day and 3.6 GB/month. Errors count. Failed or interrupted transfers keep a conservative byte reservation. Provider Retry-After is also respected. These counters only cover this backend, not any external use of the key."
+    }
   }
 }

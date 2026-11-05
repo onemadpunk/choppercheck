@@ -102,14 +102,17 @@ export function normalizeTraffic(data: any, facility: InstallationOrAirport, now
 }
 
 export async function fetchHybridRadarTraffic(lat: number, lon: number, facility: InstallationOrAirport,
-  _tick: number, _includeSchedule: boolean, signal?: AbortSignal): Promise<{ flights: AircraftTarget[]; liveCount: number; feedAvailable: boolean; provider?: string }> {
+  _tick: number, _includeSchedule: boolean, signal?: AbortSignal): Promise<{ flights: AircraftTarget[]; liveCount: number; feedAvailable: boolean; provider?: string; retryAfterMs?: number }> {
   try {
-    const url = FLIGHT_API_ORIGIN + '/api/flights?lat=' + lat.toFixed(1) + '&lon=' + lon.toFixed(1) + '&radius=250';
+    const url = FLIGHT_API_ORIGIN + '/api/flights';
     const response = await fetch(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000) });
-    if (!response.ok) throw new Error('Aircraft feed unavailable');
+    if (!response.ok) {
+      const seconds = Number(response.headers.get('Retry-After'));
+      return { flights: [], liveCount: 0, feedAvailable: false, retryAfterMs: Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 10000 };
+    }
     const data = await response.json();
     const flights = normalizeTraffic(data, facility);
-    return { flights, liveCount: flights.length, feedAvailable: true, provider: data.source };
+    return { flights, liveCount: flights.length, feedAvailable: data.feedAvailable !== false, provider: data.source, retryAfterMs: finite(data.retryAfterMs) ? data.retryAfterMs : undefined };
   } catch {
     return { flights: [], liveCount: 0, feedAvailable: false };
   }
@@ -163,4 +166,3 @@ export async function fetchHelideckWeather(facility: InstallationOrAirport): Pro
   }
   return normalizeWeather(data, facility);
 }
-

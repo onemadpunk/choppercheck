@@ -4,6 +4,7 @@ import { advanceAircraftPositionsSmoothly, fetchHybridRadarTraffic } from '../se
 import { compassDirectionFromBearing } from '../utils/alertsAndShare';
 import { coordinate, positionLabel, reported } from '../utils/dataQuality';
 import { LocateFixed, X } from 'lucide-react';
+import { startVisiblePolling } from '../utils/visiblePolling';
 interface Props { isOpen: boolean; onClose: () => void; flights: AircraftTarget[]; activeFacility: InstallationOrAirport; onSelectFlight: (f: AircraftTarget) => void; onUseMyGps: () => void; }
 export const OverheadSkyCompassModal: React.FC<Props> = ({ isOpen, onClose, activeFacility, onSelectFlight }) => {
   const [location, setLocation] = useState<{lat: number; lon: number; accuracy: number} | null>(null);
@@ -22,18 +23,16 @@ export const OverheadSkyCompassModal: React.FC<Props> = ({ isOpen, onClose, acti
   const reference = useMemo<InstallationOrAirport | null>(() => mode === 'rig' && activeFacility.id !== 'map-reference' ? activeFacility : mode === 'gps' && location ? { ...activeFacility, id: 'compass-gps', code: 'GPS', name: 'Your GPS location', shortName: 'Your GPS location', lat: location.lat, lon: location.lon } : null, [mode, location, activeFacility]);
   useEffect(() => {
     if (!isOpen || !reference) { setTargets([]); return; }
-    let cancelled = false; let timer: ReturnType<typeof setTimeout>;
-    const controller = new AbortController(); setTargets([]); setFeed('Connecting…');
-    const poll = async () => {
-      const result = await fetchHybridRadarTraffic(reference.lat, reference.lon, reference, 0, false, controller.signal);
-      if (cancelled) return;
+    setTargets([]); setFeed('Connecting…');
+    const stop = startVisiblePolling(async signal => {
+      const result = await fetchHybridRadarTraffic(reference.lat, reference.lon, reference, 0, false, signal);
+      if (signal.aborted) return;
       setFeed(result.feedAvailable ? (result.provider || 'ADS-B') : 'Feed unavailable');
       if (result.feedAvailable) setTargets(advanceAircraftPositionsSmoothly(result.flights, 0, reference));
-      if (!cancelled) timer = setTimeout(poll, 5000);
-    };
-    void poll();
+      return result.retryAfterMs;
+    });
     const expiry = setInterval(() => setTargets(prev => advanceAircraftPositionsSmoothly(prev, 2, reference)), 2000);
-    return () => { cancelled = true; controller.abort(); clearTimeout(timer); clearInterval(expiry); };
+    return () => { stop(); clearInterval(expiry); };
   }, [isOpen, reference]);
   const nearby = useMemo(() => targets.filter(f => f.distanceFromRefNm <= 40).sort((a,b) => a.distanceFromRefNm - b.distanceFromRefNm), [targets]);
   if (!isOpen) return null;
@@ -48,7 +47,7 @@ export const OverheadSkyCompassModal: React.FC<Props> = ({ isOpen, onClose, acti
       <text x="130" y="15" textAnchor="middle" fontSize="12" fill="#22d3ee">N</text><text x="246" y="134" fontSize="12" fill="#94a3b8">E</text><text x="130" y="253" textAnchor="middle" fontSize="12" fill="#94a3b8">S</text><text x="4" y="134" fontSize="12" fill="#94a3b8">W</text><circle cx="130" cy="130" r="4" fill="#f59e0b"/>
       {nearby.slice(0,20).map(f => {const r=f.distanceFromRefNm*2.5,rad=(f.bearingFromRefDeg-90)*Math.PI/180;const x=130+r*Math.cos(rad),y=130+r*Math.sin(rad);return <g key={f.hex}><circle cx={x} cy={y} r="4" fill={f.category==='offshore_heli'?'#22d3ee':'#34d399'}/><text x={x+6} y={y+3} fontSize="7" fill="#cbd5e1">{f.callsign}</text></g>;})}
     </svg>
-    <p className="text-xs text-slate-400">{feed} · Within 40 NM · North is true north, not the direction your phone is facing. Aircraft may be below the horizon or obscured.</p>
+    <p className="text-xs text-slate-400">{feed} · Within 40 NM · North Sea feed coverage only · North is true north, not the direction your phone is facing. Aircraft may be below the horizon or obscured.</p>
     {nearby.length===0 && <p className="text-sm text-slate-400">{feed === 'Feed unavailable' ? 'Aircraft updates are currently unavailable.' : 'No fresh aircraft positions detected within 40 NM.'}</p>}
     <div className="divide-y divide-slate-800">{nearby.slice(0,20).map(f => <button key={f.hex} onClick={() => { onSelectFlight(f); onClose(); }} className="block w-full text-left py-3"><div className="flex justify-between gap-2"><span className="font-bold text-sm text-white">{f.callsign}</span><span className="font-mono text-cyan-300 text-xs">{compassDirectionFromBearing(f.bearingFromRefDeg)} {f.bearingFromRefDeg}° · {f.distanceFromRefNm} NM</span></div><p className="text-xs text-slate-300 mt-1">{f.typeFullName} · {reported(f.altitudeReported,f.altitudeFt,' ft')}</p><p className="text-[11px] text-slate-500 mt-1">{positionLabel(f)}</p></button>)}</div></>}
   </div></div>;
