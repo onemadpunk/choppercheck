@@ -49,3 +49,19 @@ test('airport reports remain separate from offshore model values and preserve ob
   assert.equal(wx.pressureMslHpa, 1020); assert.equal(wx.windSpeedKts, null); assert.equal(wx.rawMetar, 'REAL REPORT');
   assert.equal(wx.metarTime, now - 1800000); assert.equal(wx.flightCategory, 'IFR');
 });
+
+test('a direct model fallback preserves the genuine airport report when the shared forecast is unavailable', async () => {
+  const { fetchHelideckWeather } = await import('../src/services/radarService');
+  const saved = globalThis.fetch; const requests: string[] = [];
+  try {
+    globalThis.fetch = async input => {
+      const url=String(input); requests.push(url);
+      if(url.includes('/api/weather')) return Response.json({weather:null,metar:[{icaoId:facility.primaryShoreBase,rawOb:'ACTUAL AIRPORT REPORT',obsTime:Date.now()/1000}]});
+      return Response.json({current:{time:Date.now()/1000,wind_speed_10m:11,pressure_msl:1037}});
+    };
+    const wx=await fetchHelideckWeather(facility);
+    assert.equal(wx.windSpeedKts,11); assert.equal(wx.rawMetar,'ACTUAL AIRPORT REPORT');
+    assert.equal(wx.rawTaf,undefined); assert.equal(requests.length,2);
+  } finally {globalThis.fetch=saved;}
+});
+

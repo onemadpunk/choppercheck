@@ -147,10 +147,20 @@ export function normalizeWeather(data: any, facility: InstallationOrAirport, now
 
 export async function fetchHelideckWeather(facility: InstallationOrAirport): Promise<HelideckWeatherState> {
   const station = /^[A-Z]{4}$/.test(facility.code) ? facility.code : facility.primaryShoreBase;
+  let data: any = {};
   try {
     const url = FLIGHT_API_ORIGIN + '/api/weather?lat=' + facility.lat.toFixed(2) + '&lon=' + facility.lon.toFixed(2) + '&icao=' + encodeURIComponent(station);
     const response = await fetch(url, { signal: AbortSignal.timeout(12_000) });
-    if (!response.ok) throw new Error('Weather unavailable');
-    return normalizeWeather(await response.json(), facility);
-  } catch { return normalizeWeather(null, facility); }
+    if (response.ok) data = await response.json();
+  } catch { /* Keep independent sources available when one provider fails. */ }
+  // Open-Meteo supports browser requests. Avoid shared server-IP restrictions when its forecast request fails.
+  if (!data?.weather?.current) {
+    try {
+      const url = 'https://api.open-meteo.com/v1/forecast?latitude=' + facility.lat.toFixed(2) + '&longitude=' + facility.lon.toFixed(2) + '&current=temperature_2m,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility&wind_speed_unit=kn&timeformat=unixtime';
+      const response = await fetch(url, { signal: AbortSignal.timeout(6000) });
+      if (response.ok) data = { ...data, weather: await response.json() };
+    } catch { /* Missing model values remain null, without changing the airport report. */ }
+  }
+  return normalizeWeather(data, facility);
 }
+
