@@ -183,6 +183,7 @@ export default function App() {
   const [showFacilityLabels, setShowFacilityLabels] = useState<boolean>(true);
   const [includeScheduleWave] = useState<boolean>(false);
   const [liveCount, setLiveCount] = useState<number>(0);
+  const [feedStatus, setFeedStatus] = useState<'connecting' | 'ready' | 'unavailable'>('connecting');
 
   // Flights & Selection State
   const [flights, setFlights] = useState<AircraftTarget[]>([]);
@@ -226,26 +227,44 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch hybrid live ADS-B + optional offshore wave traffic
+  // Complete each request before scheduling another: slow relays must not
+  // be invalidated by the independent four-second animation clock.
   useEffect(() => {
     let cancelled = false;
-    fetchHybridRadarTraffic(
-      queryCenter.lat,
-      queryCenter.lon,
-      activeFacility,
-      tickSeconds,
-      includeScheduleWave
-    ).then(({ flights: updated, liveCount: count }) => {
-      if (!cancelled) {
-        setFlights(updated);
-        setLiveCount(count);
-        setSelectedFlightHex((prev) => prev || (updated[0]?.hex ?? null));
+    let nextPoll: ReturnType<typeof setTimeout>;
+    const controller = new AbortController();
+    setFeedStatus('connecting');
+    setFlights([]);
+    setLiveCount(0);
+    const poll = async () => {
+      try {
+        const result = await fetchHybridRadarTraffic(
+          queryCenter.lat, queryCenter.lon, activeFacility, 0,
+          includeScheduleWave, controller.signal
+        );
+        if (cancelled) return;
+        setFlights(result.flights);
+        setLiveCount(result.liveCount);
+        setFeedStatus(result.feedAvailable ? 'ready' : 'unavailable');
+        setSelectedFlightHex(prev => result.flights.some(f => f.hex === prev)
+          ? prev : result.flights[0]?.hex ?? null);
+      } catch {
+        if (!cancelled) {
+          setFeedStatus('unavailable');
+          setFlights([]);
+          setLiveCount(0);
+        }
+      } finally {
+        if (!cancelled) nextPoll = setTimeout(poll, 15000);
       }
-    });
+    };
+    void poll();
     return () => {
       cancelled = true;
+      controller.abort();
+      clearTimeout(nextPoll);
     };
-  }, [queryCenter.lat, queryCenter.lon, activeFacility, tickSeconds, includeScheduleWave]);
+  }, [queryCenter.lat, queryCenter.lon, activeFacility, includeScheduleWave]);
 
   // Monitor Pinned Due-Off Flight & Active Rig 25 NM / 10 NM Approach Rings for Alerts
   useEffect(() => {
@@ -773,7 +792,7 @@ export default function App() {
           </button>
 
           <div className="px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium bg-slate-950 text-emerald-400 border border-emerald-500/40 whitespace-nowrap shrink-0">
-            ● LIVE 1090MHz ADS-B ({liveCount} Aircraft)
+            {feedStatus === 'ready' ? '● LIVE 1090MHz ADS-B' : feedStatus === 'connecting' ? 'CONNECTING TO ADS-B' : 'ADS-B UNAVAILABLE'} ({liveCount} Aircraft)
           </div>
         </div>
       </div>
@@ -958,6 +977,11 @@ export default function App() {
         </div>
       )}
 
+      {feedStatus !== 'ready' && (
+        <div role="status" className="bg-amber-950/60 border-b border-amber-500/40 px-4 py-2 text-xs text-amber-200 shrink-0">
+          {feedStatus === 'connecting' ? 'Connecting to live aircraft data…' : 'Live flight data is temporarily unavailable. Retrying automatically — this does not mean there are no aircraft.'}
+        </div>
+      )}
       {/* Offline Connectivity Banner */}
       {!isOnline && (
         <div className="bg-rose-950/80 border-b border-rose-500/40 px-4 py-1 text-xs text-rose-200 text-center shrink-0">
@@ -1231,3 +1255,4 @@ export default function App() {
     </div>
   );
 }
+

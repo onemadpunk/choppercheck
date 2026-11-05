@@ -17,6 +17,7 @@ import { INSTALLATIONS_AND_AIRPORTS } from '../data/installationsAndAirports';
 
 interface RawAdsbAircraft {
   hex?: string;
+  seen_pos?: number;
   flight?: string;
   r?: string; // registration
   t?: string; // ICAO type code
@@ -47,6 +48,7 @@ function classifyLiveAircraft(
   raw: RawAdsbAircraft,
   referenceFacility: InstallationOrAirport
 ): AircraftTarget | null {
+  if (raw.category?.startsWith('C') || raw.t === 'TWR' || (raw.seen_pos ?? 0) > 120) return null;
   if (typeof raw.lat !== 'number' || typeof raw.lon !== 'number') return null;
 
   const hex = (raw.hex || '').trim().toUpperCase();
@@ -372,24 +374,29 @@ export async function fetchHybridRadarTraffic(
   centerLon: number,
   referenceFacility: InstallationOrAirport,
   tickSeconds: number,
-  includeOffshoreWaveSchedule: boolean
-): Promise<{ flights: AircraftTarget[]; liveCount: number }> {
+  includeOffshoreWaveSchedule: boolean,
+  signal?: AbortSignal
+): Promise<{ flights: AircraftTarget[]; liveCount: number; feedAvailable: boolean }> {
   const scheduledTraffic = includeOffshoreWaveSchedule
     ? generateActiveOffshoreAndUkTraffic(referenceFacility, tickSeconds)
     : [];
 
   let liveTargets: AircraftTarget[] = [];
+  let feedAvailable = false;
+  const requestSignal = () => signal ? AbortSignal.any([signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000);
 
   try {
     // 1. If running with the optional Node server (e.g. AI Studio preview), use /api/flights proxy
     const res = await fetch(
-      `/api/flights?lat=${centerLat.toFixed(2)}&lon=${centerLon.toFixed(2)}&radius=250`
+      `/api/flights?lat=${centerLat.toFixed(2)}&lon=${centerLon.toFixed(2)}&radius=250`,
+      { signal: requestSignal() }
     );
     if (res.ok) {
       const contentType = res.headers.get('content-type') || '';
       if (contentType.includes('application/json')) {
         const data = await res.json();
-        if (Array.isArray(data?.ac) && data.ac.length > 0) {
+        if (Array.isArray(data?.ac) && !['empty', 'error'].includes(data.source)) {
+          feedAvailable = true;
           liveTargets = (data.ac as RawAdsbAircraft[])
             .slice(0, 220)
             .map((raw) => classifyLiveAircraft(raw, referenceFacility))
@@ -404,7 +411,7 @@ export async function fetchHybridRadarTraffic(
   // 2. Direct Phone / Browser Mode (GitHub Pages / choppercheck.com with ZERO backend server):
   // Because api.adsb.lol and opendata.adsb.fi do not send browser CORS headers (ACAO: null),
   // we query them via CORS-enabled relays with a 4-second cache-buster so aircraft move live every 4 seconds!
-  if (liveTargets.length === 0) {
+  if (!feedAvailable && !signal?.aborted) {
     const cacheBust = Math.floor(Date.now() / 4000);
     const adsbLolTarget = `https://api.adsb.lol/v2/point/${centerLat.toFixed(3)}/${centerLon.toFixed(3)}/250?_=${cacheBust}`;
     const adsbFiTarget = `https://opendata.adsb.fi/api/v2/lat/${centerLat.toFixed(3)}/lon/${centerLon.toFixed(3)}/dist/250`;
@@ -419,8 +426,9 @@ export async function fetchHybridRadarTraffic(
     ];
 
     for (const url of browserSafeUrls) {
+      if (signal?.aborted) break;
       try {
-        const directRes = await fetch(url, { headers: { Accept: 'application/json' } });
+        const directRes = await fetch(url, { headers: { Accept: 'application/json' }, signal: requestSignal() });
         if (directRes.ok) {
           const rawJson = await directRes.json();
           // Handle both raw JSON and allorigins /get wrapper ({ contents: "..." })
@@ -430,12 +438,15 @@ export async function fetchHybridRadarTraffic(
               : rawJson;
 
           const aircraftArray = parsed?.ac || parsed?.aircraft;
-          if (Array.isArray(aircraftArray) && aircraftArray.length > 0) {
+          const providerTime = typeof parsed?.now === 'number' ? (parsed.now < 1e12 ? parsed.now * 1000 : parsed.now) : null;
+          if (providerTime !== null && (Date.now() - providerTime > 120000 || providerTime > Date.now() + 30000)) continue;
+          if (Array.isArray(aircraftArray)) {
+            feedAvailable = true;
             liveTargets = (aircraftArray as RawAdsbAircraft[])
               .slice(0, 220)
               .map((raw) => classifyLiveAircraft(raw, referenceFacility))
               .filter((item): item is AircraftTarget => item !== null);
-            if (liveTargets.length > 0) break;
+            break;
           }
         }
       } catch {
@@ -445,17 +456,18 @@ export async function fetchHybridRadarTraffic(
   }
 
   // 3. Secondary Direct Phone Fallback: OpenSky Network live states
-  if (liveTargets.length === 0) {
+  if (!feedAvailable && !signal?.aborted) {
     try {
       const lamin = (centerLat - 3.5).toFixed(2);
       const lamax = (centerLat + 3.5).toFixed(2);
       const lomin = (centerLon - 5.5).toFixed(2);
       const lomax = (centerLon + 5.5).toFixed(2);
       const openSkyTarget = `https://opensky-network.org/api/states/all?lamin=${lamin}&lomin=${lomin}&lamax=${lamax}&lomax=${lomax}`;
-      const osRes = await fetch(openSkyTarget);
+      const osRes = await fetch(openSkyTarget, { signal: requestSignal() });
       if (osRes.ok) {
         const osJson = await osRes.json();
         if (Array.isArray(osJson?.states)) {
+          feedAvailable = true;
           liveTargets = osJson.states
             .slice(0, 150)
             .map((st: unknown[]) =>
@@ -484,7 +496,7 @@ export async function fetchHybridRadarTraffic(
 
   // Trigger background route resolution for live ADS-B callsigns
   if (liveTargets.length > 0) {
-    resolveFlightRoutesBatch(liveTargets);
+    if (!signal?.aborted) void resolveFlightRoutesBatch(liveTargets);
   }
 
   const seenCallsigns = new Set(liveTargets.map((t) => t.callsign));
@@ -496,6 +508,7 @@ export async function fetchHybridRadarTraffic(
   return {
     flights: merged,
     liveCount: liveTargets.length,
+    feedAvailable,
   };
 }
 
@@ -691,3 +704,4 @@ export async function fetchHelideckWeather(
     delayRiskSummary,
   };
 }
+
