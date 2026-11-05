@@ -471,9 +471,12 @@ export async function fetchHybridRadarTraffic(
     signal ? AbortSignal.any([signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000);
 
   try {
-    // 1. If running with the optional Node server (e.g. AI Studio preview), use /api/flights proxy
+    // Keep AI Studio's local server; production uses the deployed shared backend.
+    const flightApiOrigin = import.meta.env?.PROD
+      ? 'https://choppercheck-flight-api.ornatehinny4.chatgpt.site'
+      : '';
     const res = await fetch(
-      `/api/flights?lat=${centerLat.toFixed(2)}&lon=${centerLon.toFixed(2)}&radius=250`,
+      `${flightApiOrigin}/api/flights?lat=${centerLat.toFixed(2)}&lon=${centerLon.toFixed(2)}&radius=250`,
       { signal: requestSignal() }
     );
     if (res.ok) {
