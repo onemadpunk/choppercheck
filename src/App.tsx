@@ -799,7 +799,7 @@ export default function App() {
           }`}
         >
           <button onClick={() => { setActiveTab('flights'); setDockTab('flights'); }} className={'lg:hidden absolute bottom-6 left-2 z-[450] max-w-[calc(100%-76px)] text-left rounded-lg border px-2.5 py-2 text-[11px] shadow-lg ' + (feedState === 'unavailable' ? 'bg-amber-950/95 border-amber-700 text-amber-200' : 'bg-slate-950/95 border-slate-700 text-slate-300')}>
-            {feedState === 'loading' ? 'Connecting to aircraft feed…' : feedState === 'unavailable' ? 'Feed unavailable · retrying' : (feedState === 'partial' ? 'Partial feed · ' : 'UK/IRE · ') + flights.length + ' aircraft · ' + flights.filter(f => isRotaryAircraft(f)).length + ' helicopters · View list'}
+            {feedState === 'loading' ? 'Connecting to aircraft feed…' : feedState === 'unavailable' ? 'Feed unavailable · retrying' : (feedState === 'partial' ? 'Partial feed · ' : 'UK/IRE · ') + visibleFlights.length + ' aircraft · ' + visibleFlights.filter(isRotaryAircraft).length + ' helicopters · View list'}
           </button>
           {locationError && <div role="alert" className="absolute top-16 left-2 right-2 max-w-sm z-[500] px-3 py-2 rounded-lg border border-amber-700 bg-amber-950/95 text-amber-200 text-xs flex justify-between gap-2">{locationError}<button onClick={() => setLocationError('')} aria-label="Dismiss location message"><X className="w-4 h-4" /></button></div>}
           <RadarMap

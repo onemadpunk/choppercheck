@@ -511,7 +511,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       {/* Right Map Floating Tactical Controls */}
       <div className="map-controls absolute top-3 right-3 z-[400] flex flex-col gap-1.5 pointer-events-auto">
         <button
-          onClick={() => mapRef.current?.fitBounds([[49.6, -11], [61.2, 7.8]], { padding: [20, 20], animate: true })}
+          onClick={() => mapRef.current?.fitBounds([[49.6, -11], [61.2, 2]], { padding: [20, 20], animate: true })}
           title="Show UK, Ireland and North Sea tracking area"
           aria-label="Show UK, Ireland and North Sea tracking area"
           className="min-w-[44px] min-h-[44px] bg-slate-950/90 hover:bg-slate-900 text-cyan-300 border border-slate-800 rounded-lg flex items-center justify-center text-[10px] font-semibold cursor-pointer"
