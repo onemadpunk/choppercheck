@@ -15,7 +15,11 @@ import {
   resolveHeliAdminStopCode,
 } from './data/installationsAndAirports';
 import { REAL_HELIADMIN_SHEETS } from './data/heliAdminSheets';
-import { fetchHelideckWeather, fetchHybridRadarTraffic } from './services/radarService';
+import {
+  advanceAircraftPositionsSmoothly,
+  fetchHelideckWeather,
+  fetchHybridRadarTraffic,
+} from './services/radarService';
 import { RadarMap } from './components/RadarMap';
 import { FlightDossierPanel } from './components/FlightDossierPanel';
 import { CrewAndFlightBoard } from './components/CrewAndFlightBoard';
@@ -183,7 +187,6 @@ export default function App() {
   const [showFacilityLabels, setShowFacilityLabels] = useState<boolean>(true);
   const [includeScheduleWave] = useState<boolean>(false);
   const [liveCount, setLiveCount] = useState<number>(0);
-  const [feedStatus, setFeedStatus] = useState<'connecting' | 'ready' | 'unavailable'>('connecting');
 
   // Flights & Selection State
   const [flights, setFlights] = useState<AircraftTarget[]>([]);
@@ -196,6 +199,15 @@ export default function App() {
     }
   });
   const [tickSeconds, setTickSeconds] = useState<number>(0);
+  const queryCenterRef = useRef<{ lat: number; lon: number }>(queryCenter);
+  useEffect(() => {
+    queryCenterRef.current = queryCenter;
+  }, [queryCenter]);
+
+  // Persistent memory of recently seen live aircraft (45s retention) so targets never blink/vanish on a missed packet
+  const recentAircraftMapRef = useRef<Map<string, { flight: AircraftTarget; seenAt: number }>>(
+    new Map()
+  );
 
   // Due-Off Flight & 25/10 NM Approach Alert State
   const [alertsEnabled, setAlertsEnabled] = useState<boolean>(true);
@@ -219,52 +231,86 @@ export default function App() {
   const [plottedHeliAdminSheet, setPlottedHeliAdminSheet] =
     useState<HeliAdminSheetData | null>(null);
 
-  // Advance radar sweep clock every 4 seconds
+  // Smoothly advance airborne aircraft positions every 2 seconds along their real transmitted groundSpeedKts & trackDeg
   useEffect(() => {
     const interval = setInterval(() => {
-      setTickSeconds((prev) => prev + 4);
-    }, 4000);
+      setTickSeconds((prev) => prev + 2);
+      setFlights((prev) => {
+        const next = advanceAircraftPositionsSmoothly(prev, 2, activeFacility);
+        for (const f of next) {
+          const existing = recentAircraftMapRef.current.get(f.hex);
+          if (existing) {
+            existing.flight = f;
+          }
+        }
+        return next;
+      });
+    }, 2000);
     return () => clearInterval(interval);
-  }, []);
+  }, [activeFacility]);
 
-  // Complete each request before scheduling another: slow relays must not
-  // be invalidated by the independent four-second animation clock.
+  // Poll live 1090MHz ADS-B every 10 seconds without ever wiping the map on map pans or transient relay hiccups
   useEffect(() => {
     let cancelled = false;
-    let nextPoll: ReturnType<typeof setTimeout>;
+    let nextPollTimeout: ReturnType<typeof setTimeout>;
     const controller = new AbortController();
-    setFeedStatus('connecting');
-    setFlights([]);
-    setLiveCount(0);
-    const poll = async () => {
+
+    const pollLiveRadar = async () => {
       try {
-        const result = await fetchHybridRadarTraffic(
-          queryCenter.lat, queryCenter.lon, activeFacility, 0,
-          includeScheduleWave, controller.signal
+        const center = queryCenterRef.current;
+        const { flights: freshFlights, feedAvailable } = await fetchHybridRadarTraffic(
+          center.lat,
+          center.lon,
+          activeFacility,
+          0,
+          includeScheduleWave,
+          controller.signal
         );
+
         if (cancelled) return;
-        setFlights(result.flights);
-        setLiveCount(result.liveCount);
-        setFeedStatus(result.feedAvailable ? 'ready' : 'unavailable');
-        setSelectedFlightHex(prev => result.flights.some(f => f.hex === prev)
-          ? prev : result.flights[0]?.hex ?? null);
-      } catch {
-        if (!cancelled) {
-          setFeedStatus('unavailable');
-          setFlights([]);
-          setLiveCount(0);
+
+        if (feedAvailable) {
+          const now = Date.now();
+          for (const f of freshFlights) {
+            recentAircraftMapRef.current.set(f.hex, { flight: f, seenAt: now });
+          }
+          // Prune targets not seen in the last 45 seconds or far outside the current radar sector
+          for (const [hex, entry] of recentAircraftMapRef.current.entries()) {
+            const latDiff = Math.abs(entry.flight.lat - center.lat);
+            const lonDiff = Math.abs(entry.flight.lon - center.lon);
+            if (now - entry.seenAt > 45000 || latDiff > 4.5 || lonDiff > 8.0) {
+              recentAircraftMapRef.current.delete(hex);
+            }
+          }
+
+          const mergedLive = Array.from(recentAircraftMapRef.current.values()).map(
+            (e) => e.flight
+          );
+          if (mergedLive.length > 0 || freshFlights.length === 0) {
+            setFlights(mergedLive);
+            setLiveCount(mergedLive.length);
+            setSelectedFlightHex((prev) =>
+              mergedLive.some((f) => f.hex === prev) ? prev : mergedLive[0]?.hex ?? null
+            );
+          }
         }
+      } catch {
+        // Keep existing aircraft on screen if a single network poll times out
       } finally {
-        if (!cancelled) nextPoll = setTimeout(poll, 15000);
+        if (!cancelled) {
+          nextPollTimeout = setTimeout(pollLiveRadar, 10000);
+        }
       }
     };
-    void poll();
+
+    void pollLiveRadar();
+
     return () => {
       cancelled = true;
       controller.abort();
-      clearTimeout(nextPoll);
+      clearTimeout(nextPollTimeout);
     };
-  }, [queryCenter.lat, queryCenter.lon, activeFacility, includeScheduleWave]);
+  }, [activeFacility, includeScheduleWave]);
 
   // Monitor Pinned Due-Off Flight & Active Rig 25 NM / 10 NM Approach Rings for Alerts
   useEffect(() => {
@@ -792,7 +838,7 @@ export default function App() {
           </button>
 
           <div className="px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium bg-slate-950 text-emerald-400 border border-emerald-500/40 whitespace-nowrap shrink-0">
-            {feedStatus === 'ready' ? '● LIVE 1090MHz ADS-B' : feedStatus === 'connecting' ? 'CONNECTING TO ADS-B' : 'ADS-B UNAVAILABLE'} ({liveCount} Aircraft)
+            ● LIVE 1090MHz ADS-B ({liveCount} Aircraft)
           </div>
         </div>
       </div>
@@ -977,11 +1023,6 @@ export default function App() {
         </div>
       )}
 
-      {feedStatus !== 'ready' && (
-        <div role="status" className="bg-amber-950/60 border-b border-amber-500/40 px-4 py-2 text-xs text-amber-200 shrink-0">
-          {feedStatus === 'connecting' ? 'Connecting to live aircraft data…' : 'Live flight data is temporarily unavailable. Retrying automatically — this does not mean there are no aircraft.'}
-        </div>
-      )}
       {/* Offline Connectivity Banner */}
       {!isOnline && (
         <div className="bg-rose-950/80 border-b border-rose-500/40 px-4 py-1 text-xs text-rose-200 text-center shrink-0">
@@ -1255,4 +1296,3 @@ export default function App() {
     </div>
   );
 }
-

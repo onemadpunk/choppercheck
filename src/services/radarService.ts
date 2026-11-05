@@ -17,7 +17,7 @@ import { INSTALLATIONS_AND_AIRPORTS } from '../data/installationsAndAirports';
 
 interface RawAdsbAircraft {
   hex?: string;
-  seen_pos?: number;
+  type?: string;
   flight?: string;
   r?: string; // registration
   t?: string; // ICAO type code
@@ -34,6 +34,7 @@ interface RawAdsbAircraft {
   true_heading?: number;
   squawk?: string;
   category?: string;
+  seen_pos?: number;
 }
 
 // Persistent trail history for real live aircraft across radar sweeps
@@ -48,12 +49,34 @@ function classifyLiveAircraft(
   raw: RawAdsbAircraft,
   referenceFacility: InstallationOrAirport
 ): AircraftTarget | null {
-  if (raw.category?.startsWith('C') || raw.t === 'TWR' || (raw.seen_pos ?? 0) > 120) return null;
+  // Exclude stationary rig calibration towers (TWR / adsb_icao_nt), ground vehicles, and stale targets
+  if (
+    raw.category?.startsWith('C') ||
+    raw.t === 'TWR' ||
+    raw.r === 'TWR' ||
+    raw.type === 'adsb_icao_nt' ||
+    raw.type === 'tisb_other' ||
+    raw.alt_baro === 'ground' ||
+    (raw.seen_pos ?? 0) > 120
+  ) {
+    return null;
+  }
+
   if (typeof raw.lat !== 'number' || typeof raw.lon !== 'number') return null;
 
   const hex = (raw.hex || '').trim().toUpperCase();
   const callsign = (raw.flight || raw.r || hex || 'LIVE').trim().toUpperCase();
   const registration = (raw.r || hex || 'N/A').trim().toUpperCase();
+
+  // Filter fixed North Sea platform transponders that broadcast without speed/type
+  if (
+    callsign.startsWith('TXLU') ||
+    callsign.startsWith('ID424') ||
+    (!raw.t && !raw.r && (raw.gs === undefined || raw.gs < 15))
+  ) {
+    return null;
+  }
+
   const decoded = decodeAircraftType(raw.t, raw.desc);
 
   const isCoastguard =
@@ -163,9 +186,7 @@ function classifyLiveAircraft(
   }
 
   const altFt =
-    raw.alt_baro === 'ground'
-      ? 25
-      : typeof raw.alt_baro === 'number'
+    typeof raw.alt_baro === 'number'
       ? raw.alt_baro
       : typeof raw.alt_geom === 'number'
       ? raw.alt_geom
@@ -327,6 +348,68 @@ function classifyLiveAircraft(
   };
 }
 
+/**
+ * Smoothly dead-reckons airborne aircraft along their real transmitted groundSpeedKts and trackDeg
+ * every 2 seconds between ADS-B radio sweeps so aircraft glide across the radar map without freezing.
+ */
+export function advanceAircraftPositionsSmoothly(
+  flights: AircraftTarget[],
+  dtSeconds: number,
+  referenceFacility: InstallationOrAirport
+): AircraftTarget[] {
+  if (flights.length === 0 || dtSeconds <= 0) return flights;
+
+  return flights.map((f) => {
+    if (f.groundSpeedKts < 25) return f;
+
+    // Distance traveled in Nautical Miles over dtSeconds (1 knot = 1 NM / 3600s)
+    const distNm = (f.groundSpeedKts * dtSeconds) / 3600;
+    const rad = (f.trackDeg * Math.PI) / 180;
+    const dLat = (distNm * Math.cos(rad)) / 60;
+    const cosLat = Math.max(0.2, Math.cos((f.lat * Math.PI) / 180));
+    const dLon = (distNm * Math.sin(rad)) / (60 * cosLat);
+
+    const newLat = Number((f.lat + dLat).toFixed(4));
+    const newLon = Number((f.lon + dLon).toFixed(4));
+
+    const distFromRefNm = calculateDistanceNm(
+      referenceFacility.lat,
+      referenceFacility.lon,
+      newLat,
+      newLon
+    );
+    const bearingFromRefDeg = calculateBearingDeg(
+      referenceFacility.lat,
+      referenceFacility.lon,
+      newLat,
+      newLon
+    );
+
+    const updatedTrail =
+      f.trail && f.trail.length > 0
+        ? [
+            ...f.trail.slice(0, -1),
+            {
+              lat: newLat,
+              lon: newLon,
+              altFt: f.altitudeFt,
+              timestamp: Date.now(),
+            },
+          ]
+        : f.trail;
+
+    return {
+      ...f,
+      lat: newLat,
+      lon: newLon,
+      distanceFromRefNm: distFromRefNm,
+      distanceFromRefMiles: Math.round(distFromRefNm * 1.15078 * 10) / 10,
+      bearingFromRefDeg,
+      trail: updatedTrail,
+    };
+  });
+}
+
 export async function resolveFlightRoutesBatch(
   flights: AircraftTarget[]
 ): Promise<boolean> {
@@ -383,7 +466,9 @@ export async function fetchHybridRadarTraffic(
 
   let liveTargets: AircraftTarget[] = [];
   let feedAvailable = false;
-  const requestSignal = () => signal ? AbortSignal.any([signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000);
+
+  const requestSignal = () =>
+    signal ? AbortSignal.any([signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000);
 
   try {
     // 1. If running with the optional Node server (e.g. AI Studio preview), use /api/flights proxy
@@ -409,26 +494,28 @@ export async function fetchHybridRadarTraffic(
   }
 
   // 2. Direct Phone / Browser Mode (GitHub Pages / choppercheck.com with ZERO backend server):
-  // Because api.adsb.lol and opendata.adsb.fi do not send browser CORS headers (ACAO: null),
-  // we query them via CORS-enabled relays with a 4-second cache-buster so aircraft move live every 4 seconds!
+  // Query CORS-enabled relays using a 10-second window so upstream ADS-B feeders never rate-limit!
   if (!feedAvailable && !signal?.aborted) {
-    const cacheBust = Math.floor(Date.now() / 4000);
-    const adsbLolTarget = `https://api.adsb.lol/v2/point/${centerLat.toFixed(3)}/${centerLon.toFixed(3)}/250?_=${cacheBust}`;
+    const cacheBust = Math.floor(Date.now() / 10000);
     const adsbFiTarget = `https://opendata.adsb.fi/api/v2/lat/${centerLat.toFixed(3)}/lon/${centerLon.toFixed(3)}/dist/250`;
+    const adsbLolTarget = `https://api.adsb.lol/v2/point/${centerLat.toFixed(3)}/${centerLon.toFixed(3)}/250?_=${cacheBust}`;
 
     const browserSafeUrls = [
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(adsbLolTarget)}&_=${cacheBust}`,
-      `https://api.allorigins.win/get?url=${encodeURIComponent(adsbLolTarget)}&_=${cacheBust}`,
-      `https://ais-pre-xajwn6eve4wfyqp5gx7jme-855352357329.europe-west2.run.app/api/flights?lat=${centerLat.toFixed(2)}&lon=${centerLon.toFixed(2)}&radius=250&_=${cacheBust}`,
       `https://api.allorigins.win/raw?url=${encodeURIComponent(adsbFiTarget)}&_=${cacheBust}`,
-      adsbLolTarget,
+      `https://api.allorigins.win/get?url=${encodeURIComponent(adsbLolTarget)}&_=${cacheBust}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(adsbLolTarget)}&_=${cacheBust}`,
+      `https://ais-pre-xajwn6eve4wfyqp5gx7jme-855352357329.europe-west2.run.app/api/flights?lat=${centerLat.toFixed(2)}&lon=${centerLon.toFixed(2)}&radius=250&_=${cacheBust}`,
       adsbFiTarget,
+      adsbLolTarget,
     ];
 
     for (const url of browserSafeUrls) {
       if (signal?.aborted) break;
       try {
-        const directRes = await fetch(url, { headers: { Accept: 'application/json' }, signal: requestSignal() });
+        const directRes = await fetch(url, {
+          headers: { Accept: 'application/json' },
+          signal: requestSignal(),
+        });
         if (directRes.ok) {
           const rawJson = await directRes.json();
           // Handle both raw JSON and allorigins /get wrapper ({ contents: "..." })
@@ -438,8 +525,19 @@ export async function fetchHybridRadarTraffic(
               : rawJson;
 
           const aircraftArray = parsed?.ac || parsed?.aircraft;
-          const providerTime = typeof parsed?.now === 'number' ? (parsed.now < 1e12 ? parsed.now * 1000 : parsed.now) : null;
-          if (providerTime !== null && (Date.now() - providerTime > 120000 || providerTime > Date.now() + 30000)) continue;
+          const providerTime =
+            typeof parsed?.now === 'number'
+              ? parsed.now < 1e12
+                ? parsed.now * 1000
+                : parsed.now
+              : null;
+          if (
+            providerTime !== null &&
+            (Date.now() - providerTime > 120000 || providerTime > Date.now() + 30000)
+          ) {
+            continue;
+          }
+
           if (Array.isArray(aircraftArray)) {
             feedAvailable = true;
             liveTargets = (aircraftArray as RawAdsbAircraft[])
@@ -495,8 +593,8 @@ export async function fetchHybridRadarTraffic(
   }
 
   // Trigger background route resolution for live ADS-B callsigns
-  if (liveTargets.length > 0) {
-    if (!signal?.aborted) void resolveFlightRoutesBatch(liveTargets);
+  if (liveTargets.length > 0 && !signal?.aborted) {
+    void resolveFlightRoutesBatch(liveTargets);
   }
 
   const seenCallsigns = new Set(liveTargets.map((t) => t.callsign));
@@ -513,10 +611,7 @@ export async function fetchHybridRadarTraffic(
 }
 
 export async function fetchHelideckWeather(
-  facility: InstallationOrAirport,
-  customPitchDeg?: number,
-  customRollDeg?: number,
-  customHeaveMps?: number
+  facility: InstallationOrAirport
 ): Promise<HelideckWeatherState> {
   let windSpeedKts = 22;
   let windGustKts = 29;
@@ -704,4 +799,3 @@ export async function fetchHelideckWeather(
     delayRiskSummary,
   };
 }
-

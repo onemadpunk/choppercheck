@@ -23,7 +23,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// In-memory cache for live ADS-B queries (3.5 seconds TTL)
+// In-memory cache for live ADS-B queries (8 seconds fresh TTL, 60 seconds fallback on rate-limit)
 const flightCache = new Map<string, { timestamp: number; data: unknown }>();
 // Cache for resolved real-world callsign routes
 const routeCache = new Map<
@@ -34,40 +34,42 @@ const routeCache = new Map<
 const metarCache = new Map<string, { timestamp: number; data: unknown }>();
 
 app.get('/api/flights', async (req, res) => {
+  const lat = Number(req.query.lat ?? 57.5);
+  const lon = Number(req.query.lon ?? -1.5);
+  const radius = Math.min(250, Math.max(25, Number(req.query.radius ?? 250)));
+  const cacheKey = `${lat.toFixed(1)}_${lon.toFixed(1)}_${radius}`;
+
+  const cached = flightCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < 8000) {
+    return res.json(cached.data);
+  }
+
   try {
-    const lat = Number(req.query.lat ?? 57.5);
-    const lon = Number(req.query.lon ?? -1.5);
-    const radius = Math.min(250, Math.max(25, Number(req.query.radius ?? 250)));
-    const cacheKey = `${lat.toFixed(1)}_${lon.toFixed(1)}_${radius}`;
-
-    const cached = flightCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < 3500) {
-      return res.json(cached.data);
-    }
-
     const endpoints = [
+      `https://opendata.adsb.fi/api/v2/lat/${lat.toFixed(3)}/lon/${lon.toFixed(3)}/dist/${radius}`,
       `https://api.adsb.lol/v2/point/${lat.toFixed(3)}/${lon.toFixed(3)}/${radius}`,
-      `https://api.airplanes.live/v2/point/${lat.toFixed(3)}/${lon.toFixed(3)}/${radius}`,
     ];
 
     for (const url of endpoints) {
       try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 4500);
+        const timeout = setTimeout(() => controller.abort(), 5000);
         const response = await fetch(url, {
           signal: controller.signal,
           headers: {
             Accept: 'application/json',
-            'User-Agent': 'DeckWatchRadar/1.0',
+            'User-Agent': 'ChopperCheckRadar/1.0',
           },
         });
         clearTimeout(timeout);
 
         if (response.ok) {
           const json = await response.json();
-          if (Array.isArray(json?.ac)) {
-            flightCache.set(cacheKey, { timestamp: Date.now(), data: json });
-            return res.json(json);
+          const acArray = json?.ac || json?.aircraft;
+          if (Array.isArray(acArray)) {
+            const normalized = { ...json, ac: acArray, now: Date.now() };
+            flightCache.set(cacheKey, { timestamp: Date.now(), data: normalized });
+            return res.json(normalized);
           }
         }
       } catch {
@@ -75,8 +77,16 @@ app.get('/api/flights', async (req, res) => {
       }
     }
 
+    // If upstream feeders temporarily rate-limited, return last known good cache (< 60s old) so flights never vanish
+    if (cached && Date.now() - cached.timestamp < 60000) {
+      return res.json(cached.data);
+    }
+
     return res.json({ ac: [], source: 'empty' });
   } catch {
+    if (cached && Date.now() - cached.timestamp < 60000) {
+      return res.json(cached.data);
+    }
     return res.json({ ac: [], source: 'error' });
   }
 });
