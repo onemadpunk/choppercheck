@@ -107,14 +107,8 @@ export default function App() {
     INSTALLATIONS_AND_AIRPORTS
   );
 
-  // Active locked installation or airport (persisted in localStorage so phone always opens on user's rig)
-  const [activeFacilityId, setActiveFacilityId] = useState<string>(() => {
-    try {
-      return localStorage.getItem('choppercheck_home_rig_id') || '';
-    } catch {
-      return '';
-    }
-  });
+  // The current view starts at GPS; favourites are saved separately.
+  const [activeFacilityId, setActiveFacilityId] = useState<string>('');
   const [referenceLocation, setReferenceLocation] = useState({ lat: 57.65, lon: 0.8 });
   const activeFacility = useMemo(
     () => facilities.find((f) => f.id === activeFacilityId) || { id: 'map-reference', code: 'MAP', name: 'North Sea map reference', shortName: 'Map reference', lat: referenceLocation.lat, lon: referenceLocation.lon, assetType: 'UK Airport', fieldOperator: 'UK Airport / Heliport', primaryShoreBase: '', helicopterOperators: [], regionLabel: '', elevationFt: 0, sector: 'uk_north_sea' } as InstallationOrAirport,
@@ -421,6 +415,7 @@ export default function App() {
   }, [alertsEnabled]);
 
   const handleSelectSector = (preset: (typeof SECTOR_PRESETS)[number]) => {
+    gpsRequestRef.current++;
     setActiveSector(preset.id);
     setActiveFacilityId('');
     setReferenceLocation({ lat: preset.lat, lon: preset.lon });
@@ -439,13 +434,9 @@ export default function App() {
   };
 
   const handleSelectFacility = useCallback((fac: InstallationOrAirport) => {
+    gpsRequestRef.current++;
     setActiveFacilityId(fac.id);
     setActiveSector(fac.sector);
-    try {
-      localStorage.setItem('choppercheck_home_rig_id', fac.id);
-    } catch {
-      // ignore storage errors
-    }
     setQueryCenter({ lat: fac.lat, lon: fac.lon });
     setMapViewTarget((prev) => ({
       lat: fac.lat,
@@ -456,6 +447,7 @@ export default function App() {
   }, []);
 
   const handleSelectFlight = useCallback((flight: AircraftTarget) => {
+    gpsRequestRef.current++;
     const rebased = advanceAircraftPositionsSmoothly([flight], 0, activeFacility)[0];
     if (!rebased) return;
     recentAircraftMapRef.current.set(rebased.hex, { flight: rebased, seenAt: rebased.observedAt! });
@@ -471,12 +463,15 @@ export default function App() {
     }));
   }, [activeFacility]);
 
+  const gpsRequestRef = useRef(0);
   const [locationError, setLocationError] = useState('');
   const handleUseMyGps = useCallback(() => {
+    const requestId = ++gpsRequestRef.current;
     if ('geolocation' in navigator) {
       setLocationError('');
       navigator.geolocation.getCurrentPosition(
         (pos) => {
+          if (requestId !== gpsRequestRef.current) return;
           const lat = Number(pos.coords.latitude.toFixed(4));
           const lon = Number(pos.coords.longitude.toFixed(4));
           const customHome: InstallationOrAirport = {
@@ -508,11 +503,15 @@ export default function App() {
           }));
         },
         () => {
-          setLocationError('Location unavailable. Allow location access in your browser or choose a rig/base.');
-        }
+          if (requestId !== gpsRequestRef.current) return;
+          setLocationError('Location unavailable. Showing the regional overview. Tap GPS to retry, or choose a rig/base.');
+        },
+        { enableHighAccuracy: false, timeout: 10000, maximumAge: 30000 }
       );
     } else { setLocationError('GPS is not supported in this browser.'); }
   }, []);
+
+  useEffect(() => { handleUseMyGps(); }, [handleUseMyGps]);
 
   const handleAddCustomCoordinate = (name: string, lat: number, lon: number) => {
     const newId = `custom-${Date.now()}`;
@@ -549,7 +548,7 @@ export default function App() {
             e.preventDefault();
             setActiveTab('radar');
           }}
-          className="text-base sm:text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0 font-display"
+          className="text-sm sm:text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0 font-display"
         >
           ChopperCheck.com
         </a>
@@ -603,10 +602,10 @@ export default function App() {
         </nav>
 
         {/* Zone 3: 1 Primary Action Button */}
-        <div className="flex items-center shrink-0">
+        <div className="flex items-center gap-2 shrink-0"><div className="lg:hidden"><select aria-label="Aircraft filter" value={categoryFilter} onChange={e => { setCategoryFilter(e.target.value as typeof categoryFilter); setHeliOpFilter('all'); }} className="bg-slate-800 rounded p-2 text-xs text-slate-200"><option value="all">All flights</option><option value="offshore_heli">Helicopters</option><option value="commercial_fixed_wing">Fixed wing</option><option value="coastguard_sar">Coastguard</option>{activeFacility.id !== 'map-reference' && <option value="active_facility">Near {activeFacility.code}</option>}</select></div><button onClick={() => setShowInstallModal(true)} aria-label="Help and install" className="lg:hidden w-9 h-10 border border-slate-700 rounded-lg text-cyan-300 font-bold">?</button>
           <button
             onClick={() => setShowInstallModal(true)}
-            className="px-3.5 py-2 text-xs font-semibold text-slate-950 bg-cyan-400 hover:bg-cyan-300 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="hidden lg:block px-3.5 py-2 text-xs font-semibold text-slate-950 bg-cyan-400 hover:bg-cyan-300 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             Install to Phone
           </button>
@@ -701,16 +700,13 @@ export default function App() {
         </div>
       </div>
 
-      <div className="flex items-center gap-2 px-3 py-2 bg-slate-950 border-b border-slate-800 shrink-0 overflow-x-auto">
+      <div className="hidden lg:flex items-center gap-2 px-3 py-2 bg-slate-950 border-b border-slate-800 shrink-0 overflow-x-auto">
         <span className="text-xs text-slate-400 whitespace-nowrap">My rigs</span>
         {favoriteFacilities.length === 0 && <button onClick={() => { setActiveTab('directory'); setDockTab('directory'); }} className="text-xs text-cyan-300 px-3 py-2 bg-slate-900 rounded whitespace-nowrap">Choose & save rigs</button>}
         {favoriteFacilities.map(fac => <button key={fac.id} onClick={() => { handleSelectFacility(fac); setActiveTab('radar'); }} className={'text-xs px-3 py-2 rounded whitespace-nowrap ' + (fac.id === activeFacility.id ? 'bg-cyan-500 text-slate-950 font-semibold' : 'bg-slate-900 text-slate-200')}>{fac.shortName}</button>)}
         <button onClick={() => { setActiveTab('directory'); setDockTab('directory'); }} className="ml-auto text-xs text-cyan-300 px-3 py-2 bg-slate-900 rounded whitespace-nowrap">Choose rig</button>
       </div>
-      <div className="lg:hidden flex items-center justify-between px-3 py-1.5 bg-slate-900 text-[11px] shrink-0">
-        <span className={feedState === 'unavailable' ? 'text-amber-300' : 'text-slate-400'}>{feedState === 'loading' ? 'Connecting…' : feedState === 'unavailable' ? 'Feed unavailable · positions expire' : feedProvider + ' · ' + visibleFlights.length + ' shown' + (heliOpFilter !== 'all' ? ' · ' + heliOpFilter : '')}</span>
-        <select aria-label="Aircraft filter" value={categoryFilter} onChange={e => { setCategoryFilter(e.target.value as typeof categoryFilter); setHeliOpFilter('all'); }} className="bg-slate-800 rounded p-2 text-xs text-slate-200"><option value="all">All flights</option><option value="offshore_heli">Helicopters</option><option value="commercial_fixed_wing">Fixed wing</option><option value="coastguard_sar">Coastguard</option>{activeFacility.id !== 'map-reference' && <option value="active_facility">Near {activeFacility.code}</option>}</select>
-      </div>
+
 
       {/* Live Triggered Flight / Approach Alert Banner */}
       {activeAlertBanner && (
@@ -787,7 +783,7 @@ export default function App() {
         </div>
       )}
 
-      {locationError && <div role="alert" className="px-3 py-2 bg-amber-950 text-amber-200 text-xs flex justify-between">{locationError}<button onClick={() => setLocationError('')} aria-label="Dismiss location message"><X className="w-4 h-4" /></button></div>}
+
       {/* Offline Connectivity Banner */}
       {!isOnline && (
         <div className="bg-rose-950/80 border-b border-rose-500/40 px-4 py-1 text-xs text-rose-200 text-center shrink-0">
@@ -805,6 +801,10 @@ export default function App() {
             activeTab === 'radar' ? 'block' : 'hidden lg:block'
           }`}
         >
+          <button onClick={() => { setActiveTab('flights'); setDockTab('flights'); }} className={'lg:hidden absolute bottom-6 left-2 z-[450] max-w-[calc(100%-76px)] text-left rounded-lg border px-2.5 py-2 text-[11px] shadow-lg ' + (feedState === 'unavailable' ? 'bg-amber-950/95 border-amber-700 text-amber-200' : 'bg-slate-950/95 border-slate-700 text-slate-300')}>
+            {feedState === 'loading' ? 'Connecting to aircraft feed…' : feedState === 'unavailable' ? 'Feed unavailable · retrying' : flights.length + ' aircraft · ' + flights.filter(f => f.category === 'offshore_heli' || f.category === 'coastguard_sar').length + ' helicopters · View list'}
+          </button>
+          {locationError && <div role="alert" className="absolute top-16 left-2 right-2 max-w-sm z-[500] px-3 py-2 rounded-lg border border-amber-700 bg-amber-950/95 text-amber-200 text-xs flex justify-between gap-2">{locationError}<button onClick={() => setLocationError('')} aria-label="Dismiss location message"><X className="w-4 h-4" /></button></div>}
           <RadarMap
             flights={visibleFlights}
             installations={visibleInstallations}
@@ -952,7 +952,7 @@ export default function App() {
 
           {/* Creator Signature Footer */}
           <div className="px-3 py-1.5 bg-slate-950 border-t border-slate-800/90 flex items-center justify-between text-[11px] font-mono text-slate-400 shrink-0">
-            <span>ChopperCheck.com</span>
+            <a href={feedProvider === 'adsb.fi' ? 'https://adsb.fi/' : 'https://www.adsb.lol/'} target="_blank" rel="noopener noreferrer" className="underline">{feedProvider || 'ADS-B sources'}</a>
             <span className="text-cyan-400 font-semibold">Made by onemadpunk</span>
           </div>
         </aside>
