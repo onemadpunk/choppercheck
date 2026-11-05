@@ -249,7 +249,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, [activeFacility]);
 
-  // Poll live 1090MHz ADS-B every 10 seconds without ever wiping the map on map pans or transient relay hiccups
+  // Poll live 1090MHz ADS-B five seconds after each completed request without ever wiping the map on map pans or transient relay hiccups
   useEffect(() => {
     let cancelled = false;
     let nextPollTimeout: ReturnType<typeof setTimeout>;
@@ -298,7 +298,7 @@ export default function App() {
         // Keep existing aircraft on screen if a single network poll times out
       } finally {
         if (!cancelled) {
-          nextPollTimeout = setTimeout(pollLiveRadar, 10000);
+          nextPollTimeout = setTimeout(pollLiveRadar, 5000);
         }
       }
     };
