@@ -88,3 +88,17 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #334155;
 }
+/* Keep the map usable on phones: compact reference card and a small control stack. */
+.app-shell { height: 100dvh; }
+.app-shell main { min-height: 0; }
+button, a { -webkit-tap-highlight-color: transparent; }
+@media (max-width: 1023px) {
+  .map-reference-card { max-width: calc(100% - 76px); width: 240px; padding: 0; }
+  .map-controls { top: auto; bottom: 16px; right: 10px; gap: 6px; }
+  .map-controls > button:nth-child(5), .map-controls > button:nth-child(6), .map-controls > button:nth-child(7) { display: none; }
+  .map-reference-card > div.text-\[11px\] { display: none; }
+}
+@supports(padding: env(safe-area-inset-bottom)) {
+  .app-shell > nav:last-of-type { padding-bottom: env(safe-area-inset-bottom); height: calc(56px + env(safe-area-inset-bottom)); }
+  @media (max-width: 1023px) { .app-shell main { padding-bottom: calc(56px + env(safe-area-inset-bottom)); } }
+}

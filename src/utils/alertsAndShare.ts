@@ -36,6 +36,7 @@ export function playCockpitAlertChime(urgent = false): void {
       playTone(587.33, now, 0.22);
       playTone(493.88, now + 0.24, 0.35);
     }
+    setTimeout(() => { void ctx.close().catch(() => {}); }, 1500);
   } catch {
     // Ignore if audio context is blocked before user gesture
   }
@@ -69,19 +70,17 @@ export function buildFlightShareText(
   flight: AircraftTarget,
   refCode: string
 ): string {
-  const etaPart =
-    flight.etaToRefMinutes !== null
-      ? `ETA ~${flight.etaToRefMinutes} min (${flight.estimatedArrTime})`
-      : `ETA ${flight.estimatedArrTime}`;
-
+  const age = flight.observedAt ? new Date(flight.observedAt).toISOString() : 'Unknown';
   return [
-    `ChopperCheck.com Live Flight Update:`,
-    `Flight: ${flight.callsign} (${flight.typeFullName} · Reg ${flight.registration})`,
-    `Operator: ${flight.operator}`,
-    `Route: ${flight.originCode} (${flight.originName}) → ${flight.destinationCode} (${flight.destinationName})`,
-    `Position: ${flight.distanceFromRefNm} NM (${flight.distanceFromRefMiles} mi) from ${refCode} · Bearing ${flight.bearingFromRefDeg}°`,
-    `Telemetry: Alt ${flight.altitudeFt.toLocaleString()} ft · Speed ${flight.groundSpeedKts} kt (${flight.groundSpeedMph} mph) · ${etaPart}`,
-    `Track live: https://choppercheck.com (Made by onemadpunk)`,
+    'ChopperCheck position update',
+    'Aircraft: ' + flight.callsign + ' (' + flight.typeFullName + ' · Reg ' + flight.registration + ')',
+    'Operator: ' + flight.operator,
+    'Route, departure and arrival times: not reported',
+    'Position: ' + flight.distanceFromRefNm + ' NM from ' + refCode + ' · Bearing ' + flight.bearingFromRefDeg + '°',
+    'Altitude: ' + (flight.altitudeReported === false ? 'unavailable' : flight.altitudeFt + ' ft') + ' · Speed: ' + (flight.speedReported === false ? 'unavailable' : flight.groundSpeedKts + ' kt'),
+    'Position report: ' + age + ' · ' + (flight.source === 'dead_reckoning' ? 'Displayed position is estimated' : 'Reported position'),
+    'Source: ' + (flight.provider || 'ADS-B'),
+    'https://choppercheck.com',
   ].join('\n');
 }
 

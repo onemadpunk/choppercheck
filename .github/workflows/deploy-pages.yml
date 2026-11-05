@@ -32,6 +32,11 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Check aircraft and weather data handling
+        run: |
+          npm run check
+          npm test
+
       - name: Build static web app for GitHub Pages
         run: |
           npm run build

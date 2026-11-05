@@ -763,8 +763,8 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
   {
     id: 'apt-egpk',
     code: 'EGPK',
-    name: 'Glasgow Prestwick Airport & HM Coastguard Rescue 199 (Alloway / Ayr)',
-    shortName: 'Prestwick / Alloway (EGPK)',
+    name: 'Glasgow Prestwick Airport',
+    shortName: 'Prestwick (EGPK)',
     fieldOperator: 'HM Coastguard / SAR',
     assetType: 'SAR Base',
     sector: 'scotland_airports',
@@ -773,7 +773,7 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
     elevationFt: 65,
     primaryShoreBase: 'EGPK',
     helicopterOperators: ['HM Coastguard', 'Commercial Airline', 'Cargo / Military'],
-    regionLabel: 'Ayrshire / Alloway · Rescue 199 (AW189), Cargo 747s, Military & Passenger',
+    regionLabel: 'Ayrshire, Scotland',
     notes: '3 miles north of Alloway/Ayr. Home to HM Coastguard Rescue 199 (AW189), transatlantic military/cargo heavies, and Ryanair.'
   },
   {

@@ -21,10 +21,10 @@ export default defineConfig(() => {
         ],
         manifest: {
           id: '/',
-          name: 'DeckWatch Radar — Offshore & UK Flight Tracker',
-          short_name: 'DeckWatch',
+          name: 'ChopperCheck — Offshore & UK Aircraft Tracker',
+          short_name: 'ChopperCheck',
           description:
-            'Free UK & Offshore Helicopter Flight Radar covering Apache, bp, Shell, Equinor rigs, HM Coastguard SAR, and all UK airports.',
+            'Open aircraft positions, personal rig favourites, nearby-aircraft compass and offshore weather models.',
           theme_color: '#07090e',
           background_color: '#07090e',
           display: 'standalone',
@@ -100,7 +100,7 @@ export default defineConfig(() => {
           ],
         },
         devOptions: {
-          enabled: true,
+          enabled: false,
           type: 'module',
         },
       }),
@@ -111,6 +111,7 @@ export default defineConfig(() => {
       },
     },
     server: {
+      proxy: { '/live-api': { target: 'https://choppercheck-flight-api.ornatehinny4.chatgpt.site', changeOrigin: true, rewrite: path => path.replace(/^\/live-api/, '') } },
       hmr: process.env.DISABLE_HMR !== 'true',
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },

@@ -5,6 +5,8 @@ import {
   InstallationOrAirport,
   TrafficCategory,
 } from '../types/radar';
+import { reported, positionLabel } from '../utils/dataQuality';
+import { OperatorStatusLinks } from './OperatorStatusLinks';
 import { ArrowRight, Pin, Search, ShieldAlert } from 'lucide-react';
 
 interface CrewAndFlightBoardProps {
@@ -35,7 +37,7 @@ export const CrewAndFlightBoard: React.FC<CrewAndFlightBoardProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
 
   const filteredFlights = useMemo(() => {
-    return flights.filter((f) => {
+    return [...flights].sort((a,b) => a.distanceFromRefNm - b.distanceFromRefNm).filter((f) => {
       if (categoryFilter === 'active_facility') {
         const matchesActive =
           f.destinationCode === activeFacility.code ||
@@ -43,7 +45,7 @@ export const CrewAndFlightBoard: React.FC<CrewAndFlightBoardProps> = ({
           f.destinationRigId === activeFacility.id ||
           f.distanceFromRefNm <= 35;
         if (!matchesActive) return false;
-      } else if (categoryFilter !== 'all' && f.category !== categoryFilter) {
+      } else if (categoryFilter !== 'all' && f.category !== categoryFilter && !(categoryFilter === 'offshore_heli' && f.category === 'coastguard_sar')) {
         return false;
       }
 
@@ -68,20 +70,20 @@ export const CrewAndFlightBoard: React.FC<CrewAndFlightBoardProps> = ({
     'NHV',
     'OHS',
     'HM Coastguard',
-    'Commercial Airline',
+    'Unknown',
   ];
 
   return (
     <div className="flex flex-col h-full bg-slate-950 text-slate-100">
       {/* Search & Traffic Filter Controls */}
-      <div className="p-3 border-b border-slate-800 space-y-2.5">
+      <div className="p-3 border-b border-slate-800 space-y-2.5"><OperatorStatusLinks />
         <div className="relative">
           <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search Forties, Beryl, Aberdeen, S92, Rescue 199..."
+            placeholder="Search callsign, registration, aircraft type or operator…"
             className="w-full pl-9 pr-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500"
           />
         </div>
@@ -90,10 +92,10 @@ export const CrewAndFlightBoard: React.FC<CrewAndFlightBoardProps> = ({
         <div className="flex items-center gap-1 overflow-x-auto pb-0.5">
           {[
             { id: 'all', label: 'All Sky' },
-            { id: 'offshore_heli', label: 'Offshore Helis' },
-            { id: 'active_facility', label: `Near ${activeFacility.code}` },
-            { id: 'coastguard_sar', label: 'HM Coastguard SAR' },
-            { id: 'commercial_fixed_wing', label: 'UK Airlines' },
+            { id: 'offshore_heli', label: 'Helicopters' },
+            ...(activeFacility.id !== 'map-reference' ? [{ id: 'active_facility', label: `Near ${activeFacility.code}` }] : []),
+            { id: 'coastguard_sar', label: 'Coastguard' },
+            { id: 'commercial_fixed_wing', label: 'Fixed Wing' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -182,53 +184,18 @@ export const CrewAndFlightBoard: React.FC<CrewAndFlightBoardProps> = ({
                     </span>
                   </div>
 
-                  {/* Middle Line: Explicit FROM -> TO Route */}
-                  <div className="flex items-center gap-1.5 text-xs text-slate-200 mt-1">
-                    <span className="font-mono font-semibold text-cyan-300">
-                      {flight.originCode}
-                    </span>
-                    <span className="text-slate-400 truncate max-w-[105px]">
-                      {flight.originName}
-                    </span>
-                    <ArrowRight className="w-3 h-3 text-slate-500 shrink-0" />
-                    <span className="font-mono font-semibold text-amber-300">
-                      {flight.destinationCode}
-                    </span>
-                    <span className="text-slate-300 truncate max-w-[115px]">
-                      {flight.destinationName}
-                    </span>
-                  </div>
-
-                  {/* Bottom Line: Unboxed Metadata (Operator, Dep/Arr/Return, Telemetry) */}
-                  <div className="flex items-center gap-1.5 text-[11px] text-slate-400 mt-1 font-mono tabular-nums truncate">
-                    <span>{flight.helicopterOperator || flight.operator}</span>
-                    {flight.fieldOperatorServed && (
-                      <>
-                        <span aria-hidden="true">·</span>
-                        <span className="text-amber-400/90">{flight.fieldOperatorServed}</span>
-                      </>
-                    )}
-                    <span aria-hidden="true">·</span>
-                    <span>DEP {flight.scheduledDepTime}</span>
-                    <span aria-hidden="true">·</span>
-                    <span className="text-emerald-400">ETA {flight.estimatedArrTime}</span>
-                    {flight.returnShoreTime && (
-                      <>
-                        <span aria-hidden="true">·</span>
-                        <span>SHORE RET {flight.returnShoreTime}</span>
-                      </>
-                    )}
-                  </div>
+                  <div className="text-xs text-slate-400 mt-1">{flight.operator}</div>
+                  <div className="text-[11px] text-slate-400 mt-1">Route & times not reported · {positionLabel(flight)}</div>
                 </div>
 
                 {/* Right Column: Live Speed/Alt & Pin Button */}
                 <div className="flex items-center gap-2 shrink-0">
                   <div className="text-right font-mono tabular-nums">
                     <div className="text-xs font-semibold text-white">
-                      {flight.altitudeFt.toLocaleString()} ft
+                      {reported(flight.altitudeReported, flight.altitudeFt, ' ft')}
                     </div>
                     <div className="text-[11px] text-slate-400">
-                      {flight.groundSpeedKts} kt · {flight.distanceFromRefNm} NM
+                      {reported(flight.speedReported, flight.groundSpeedKts, ' kt')} · {flight.distanceFromRefNm} NM
                     </div>
                   </div>
                   <button
@@ -236,7 +203,7 @@ export const CrewAndFlightBoard: React.FC<CrewAndFlightBoardProps> = ({
                       e.stopPropagation();
                       onTogglePin(flight.hex);
                     }}
-                    title="Pin Due-Off or Connecting Flight"
+                    title="Pin tracked aircraft"
                     className={`min-w-[38px] min-h-[38px] rounded-md flex items-center justify-center border transition-colors cursor-pointer ${
                       isPinned
                         ? 'bg-amber-500 text-slate-950 border-amber-400'

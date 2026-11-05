@@ -3,7 +3,6 @@ import {
   AircraftTarget,
   FieldOperator,
   FlightAlertEvent,
-  HeliAdminSheetData,
   HelideckWeatherState,
   HelicopterOperator,
   InstallationOrAirport,
@@ -12,9 +11,7 @@ import {
 } from './types/radar';
 import {
   INSTALLATIONS_AND_AIRPORTS,
-  resolveHeliAdminStopCode,
 } from './data/installationsAndAirports';
-import { REAL_HELIADMIN_SHEETS } from './data/heliAdminSheets';
 import {
   advanceAircraftPositionsSmoothly,
   fetchHelideckWeather,
@@ -27,7 +24,7 @@ import { RigsAndAirportsDirectory } from './components/RigsAndAirportsDirectory'
 import { HelideckWeatherPanel } from './components/HelideckWeatherPanel';
 import { InstallAndGitHubModal } from './components/InstallAndGitHubModal';
 import { OverheadSkyCompassModal } from './components/OverheadSkyCompassModal';
-import { HeliAdminSheetModal } from './components/HeliAdminSheetModal';
+import { reported } from './utils/dataQuality';
 import { useOnlineStatus } from './hooks/usePWAInstall';
 import {
   getWhatsAppShareUrl,
@@ -41,7 +38,6 @@ import {
   Building2,
   CloudRainWind,
   Compass,
-  FileSpreadsheet,
   LocateFixed,
   Pin,
   Plane,
@@ -94,16 +90,8 @@ const SECTOR_PRESETS: Array<{
     defaultFacilityId: 'no-johan-sverdrup',
   },
   {
-    id: 'scotland_airports',
-    label: 'Prestwick / Alloway & Scotland',
-    lat: 55.5094,
-    lon: -4.5944,
-    zoom: 9,
-    defaultFacilityId: 'apt-egpk',
-  },
-  {
     id: 'uk_airports',
-    label: 'All UK Airports & Heliports',
+    label: 'UK Overview',
     lat: 54.6,
     lon: -2.2,
     zoom: 6,
@@ -122,14 +110,15 @@ export default function App() {
   // Active locked installation or airport (persisted in localStorage so phone always opens on user's rig)
   const [activeFacilityId, setActiveFacilityId] = useState<string>(() => {
     try {
-      return localStorage.getItem('choppercheck_home_rig_id') || 'apache-forties-charlie';
+      return localStorage.getItem('choppercheck_home_rig_id') || '';
     } catch {
-      return 'apache-forties-charlie';
+      return '';
     }
   });
+  const [referenceLocation, setReferenceLocation] = useState({ lat: 57.65, lon: 0.8 });
   const activeFacility = useMemo(
-    () => facilities.find((f) => f.id === activeFacilityId) || facilities[0],
-    [facilities, activeFacilityId]
+    () => facilities.find((f) => f.id === activeFacilityId) || { id: 'map-reference', code: 'MAP', name: 'North Sea map reference', shortName: 'Map reference', lat: referenceLocation.lat, lon: referenceLocation.lon, assetType: 'UK Airport', fieldOperator: 'UK Airport / Heliport', primaryShoreBase: '', helicopterOperators: [], regionLabel: '', elevationFt: 0, sector: 'uk_north_sea' } as InstallationOrAirport,
+    [facilities, activeFacilityId, referenceLocation]
   );
 
   // Favourite / Starred Rigs (persisted in localStorage for 1-tap mobile switching)
@@ -138,12 +127,12 @@ export default function App() {
       const raw = localStorage.getItem('choppercheck_favorite_rigs');
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed.filter((id): id is string => typeof id === 'string');
       }
     } catch {
       // ignore storage errors
     }
-    return ['apache-forties-charlie', 'wos-glen-lyon-fpso', 'uk-culzean', 'apt-egpd'];
+    return [];
   });
 
   // Single-Rig Focus Mode (hides all other 60+ rigs on the map so phone screen only shows your 1 rig + shore base)
@@ -169,7 +158,7 @@ export default function App() {
   }>(() => ({
     lat: activeFacility.lat,
     lon: activeFacility.lon,
-    zoom: 8,
+    zoom: activeFacilityId ? 8 : 6,
     seq: 1,
   }));
   const [queryCenter, setQueryCenter] = useState<{ lat: number; lon: number }>(() => ({
@@ -185,11 +174,12 @@ export default function App() {
   const [selectedFieldOperator, setSelectedFieldOperator] = useState<'all' | FieldOperator>('all');
   const [showRangeRings, setShowRangeRings] = useState<boolean>(true);
   const [showFacilityLabels, setShowFacilityLabels] = useState<boolean>(true);
-  const [includeScheduleWave] = useState<boolean>(false);
-  const [liveCount, setLiveCount] = useState<number>(0);
+  const [feedState, setFeedState] = useState<'loading' | 'available' | 'unavailable'>('loading');
+  const [feedProvider, setFeedProvider] = useState('');
 
   // Flights & Selection State
   const [flights, setFlights] = useState<AircraftTarget[]>([]);
+  const liveCount = flights.length;
   const [selectedFlightHex, setSelectedFlightHex] = useState<string | null>(null);
   const [pinnedFlightHex, setPinnedFlightHex] = useState<string | null>(() => {
     try {
@@ -198,7 +188,6 @@ export default function App() {
       return null;
     }
   });
-  const [tickSeconds, setTickSeconds] = useState<number>(0);
   const queryCenterRef = useRef<{ lat: number; lon: number }>(queryCenter);
   useEffect(() => {
     queryCenterRef.current = queryCenter;
@@ -210,194 +199,112 @@ export default function App() {
   );
 
   // Due-Off Flight & 25/10 NM Approach Alert State
-  const [alertsEnabled, setAlertsEnabled] = useState<boolean>(true);
+  const [alertsEnabled, setAlertsEnabled] = useState<boolean>(false);
   const [activeAlertBanner, setActiveAlertBanner] = useState<FlightAlertEvent | null>(null);
   const firedAlertKeysRef = useRef<Set<string>>(new Set());
+  const previousAlertPositions = useRef<Map<string, AircraftTarget>>(new Map());
 
   // Weather & METAR State
   const [weather, setWeather] = useState<HelideckWeatherState | null>(null);
   const [weatherLoading, setWeatherLoading] = useState<boolean>(false);
 
-  // Modals: Mobile/GitHub Setup, 360° Overhead Sky Compass & Heli-Admin Noticeboard Sheets
+  // Modals: Install help and GPS aircraft compass
   const [showInstallModal, setShowInstallModal] = useState<boolean>(false);
   const [showSkyCompassModal, setShowSkyCompassModal] = useState<boolean>(false);
-  const [showHeliAdminModal, setShowHeliAdminModal] = useState<boolean>(false);
-  const [heliAdminSheets, setHeliAdminSheets] = useState<HeliAdminSheetData[]>(
-    REAL_HELIADMIN_SHEETS
-  );
-  const [selectedHeliAdminSheet, setSelectedHeliAdminSheet] = useState<HeliAdminSheetData>(
-    REAL_HELIADMIN_SHEETS[0]
-  );
-  const [plottedHeliAdminSheet, setPlottedHeliAdminSheet] =
-    useState<HeliAdminSheetData | null>(null);
-
-  // Smoothly advance airborne aircraft positions every 2 seconds along their real transmitted groundSpeedKts & trackDeg
+  const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
+  // Expiry runs even when every network request fails. Predictions retain the original observation time.
   useEffect(() => {
-    const interval = setInterval(() => {
-      setTickSeconds((prev) => prev + 2);
-      setFlights((prev) => {
-        const next = advanceAircraftPositionsSmoothly(prev, 2, activeFacility);
-        for (const f of next) {
-          const existing = recentAircraftMapRef.current.get(f.hex);
-          if (existing) {
-            existing.flight = f;
-          }
-        }
-        return next;
-      });
+    const timer = setInterval(() => {
+      setFlights(prev => advanceAircraftPositionsSmoothly(prev, 2, activeFacility));
+      const now = Date.now();
+      for (const [hex, entry] of recentAircraftMapRef.current) {
+        if (!entry.flight.observedAt || now - entry.flight.observedAt > 45000) recentAircraftMapRef.current.delete(hex);
+      }
     }, 2000);
-    return () => clearInterval(interval);
+    return () => clearInterval(timer);
   }, [activeFacility]);
 
-  // Poll live 1090MHz ADS-B five seconds after each completed request without ever wiping the map on map pans or transient relay hiccups
   useEffect(() => {
     let cancelled = false;
-    let nextPollTimeout: ReturnType<typeof setTimeout>;
+    let timer: ReturnType<typeof setTimeout>;
     const controller = new AbortController();
-
-    const pollLiveRadar = async () => {
+    recentAircraftMapRef.current.clear();
+    previousAlertPositions.current.clear();
+    firedAlertKeysRef.current.clear();
+    setFlights([]);
+    setFeedState('loading');
+    const poll = async () => {
       try {
         const center = queryCenterRef.current;
-        const { flights: freshFlights, feedAvailable } = await fetchHybridRadarTraffic(
-          center.lat,
-          center.lon,
-          activeFacility,
-          0,
-          includeScheduleWave,
-          controller.signal
-        );
-
+        const result = await fetchHybridRadarTraffic(center.lat, center.lon, activeFacility, 0, false, controller.signal);
         if (cancelled) return;
-
-        if (feedAvailable) {
-          const now = Date.now();
-          for (const f of freshFlights) {
-            recentAircraftMapRef.current.set(f.hex, { flight: f, seenAt: now });
-          }
-          // Prune targets not seen in the last 45 seconds or far outside the current radar sector
-          for (const [hex, entry] of recentAircraftMapRef.current.entries()) {
-            const latDiff = Math.abs(entry.flight.lat - center.lat);
-            const lonDiff = Math.abs(entry.flight.lon - center.lon);
-            if (now - entry.seenAt > 45000 || latDiff > 4.5 || lonDiff > 8.0) {
-              recentAircraftMapRef.current.delete(hex);
-            }
-          }
-
-          const mergedLive = Array.from(recentAircraftMapRef.current.values()).map(
-            (e) => e.flight
-          );
-          if (mergedLive.length > 0 || freshFlights.length === 0) {
-            setFlights(mergedLive);
-            setLiveCount(mergedLive.length);
-            setSelectedFlightHex((prev) =>
-              mergedLive.some((f) => f.hex === prev) ? prev : mergedLive[0]?.hex ?? null
-            );
-          }
+        setFeedState(result.feedAvailable ? 'available' : 'unavailable');
+        if (result.provider) setFeedProvider(result.provider);
+        const now = Date.now();
+        for (const flight of result.flights) {
+          recentAircraftMapRef.current.set(flight.hex, { flight, seenAt: flight.observedAt! });
         }
-      } catch {
-        // Keep existing aircraft on screen if a single network poll times out
+        for (const [hex, entry] of recentAircraftMapRef.current) {
+          if (!entry.flight.observedAt || now - entry.flight.observedAt > 45000 || Math.abs(entry.flight.lat - center.lat) > 4.5 || Math.abs(entry.flight.lon - center.lon) > 8) recentAircraftMapRef.current.delete(hex);
+        }
+        const current = advanceAircraftPositionsSmoothly([...recentAircraftMapRef.current.values()].map(e => e.flight), 0, activeFacility);
+        setFlights(current);
+        setSelectedFlightHex(prev => current.some(f => f.hex === prev) ? prev : null);
       } finally {
-        if (!cancelled) {
-          nextPollTimeout = setTimeout(pollLiveRadar, 5000);
-        }
+        if (!cancelled) timer = setTimeout(poll, 5000);
       }
     };
+    void poll();
+    return () => { cancelled = true; controller.abort(); clearTimeout(timer); };
+  }, [activeFacility]);
 
-    void pollLiveRadar();
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-      clearTimeout(nextPollTimeout);
-    };
-  }, [activeFacility, includeScheduleWave]);
-
-  // Monitor Pinned Due-Off Flight & Active Rig 25 NM / 10 NM Approach Rings for Alerts
+  // Only observed positions trigger alerts. Proximity is not evidence of an approach or destination.
   useEffect(() => {
-    if (!alertsEnabled || flights.length === 0) return;
-
-    const nowTime = new Date().toLocaleTimeString('en-GB', {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-
     for (const f of flights) {
-      const isPinned = pinnedFlightHex === f.hex;
-      const isHeliNearRig =
-        f.category === 'offshore_heli' || f.category === 'coastguard_sar';
-
-      // 1. Pinned Flight Airborne / Liftoff Alert
-      if (isPinned && f.altitudeFt >= 200 && f.groundSpeedKts >= 45) {
-        const key = `${f.hex}_AIRBORNE`;
-        if (!firedAlertKeysRef.current.has(key)) {
-          firedAlertKeysRef.current.add(key);
-          const msg = `YOUR PINNED FLIGHT IS AIRBORNE: ${f.callsign} (${f.typeFullName}) departed ${f.originCode} enroute to ${f.destinationCode} — ETA ${f.estimatedArrTime}. Get ready!`;
-          setActiveAlertBanner({
-            id: key,
-            timestamp: nowTime,
-            callsign: f.callsign,
-            typeFullName: f.typeFullName,
-            triggerType: 'AIRBORNE_LIFTOFF',
-            message: msg,
-          });
-          playCockpitAlertChime(false);
-          triggerBrowserNotification(`Flight Airborne: ${f.callsign}`, msg);
-          break;
+      if (!f.observedAt || Date.now() - f.observedAt > 10000) continue;
+      const prev = previousAlertPositions.current.get(f.hex);
+      if (prev?.observedAt === f.observedAt) continue;
+      previousAlertPositions.current.set(f.hex, f);
+      if (!alertsEnabled) continue;
+      const pinned = pinnedFlightHex === f.hex;
+      const heli = f.category === 'offshore_heli' || f.category === 'coastguard_sar';
+      let key = ''; let message = ''; let type: FlightAlertEvent['triggerType'] = 'AIRBORNE_LIFTOFF';
+      if (pinned && f.altitudeReported && f.speedReported && f.altitudeFt >= 200 && f.groundSpeedKts >= 45 && !firedAlertKeysRef.current.has(f.hex + '_DETECTED')) {
+        key = f.hex + '_DETECTED';
+        message = 'PINNED AIRCRAFT DETECTED AIRBORNE: ' + f.callsign + '. Take-off time and destination are not confirmed.';
+      } else if (activeFacility.id !== 'map-reference' && (pinned || heli) && prev && prev.observedAt && f.observedAt - prev.observedAt <= 15000) {
+        const ring = prev.distanceFromRefNm > 10 && f.distanceFromRefNm <= 10 ? 10 : prev.distanceFromRefNm > 25 && f.distanceFromRefNm <= 25 ? 25 : null;
+        if (ring) {
+          type = ring === 10 ? 'RING_10NM' : 'RING_25NM';
+          key = f.hex + '_' + activeFacility.id + '_' + ring;
+          message = f.callsign + ' entered the ' + ring + ' NM proximity ring around ' + activeFacility.shortName + '. Destination is not confirmed.';
         }
       }
-
-      // 2. 10 NM Final Approach Ring Alert (Pinned Flight OR Helicopter approaching active rig)
-      if ((isPinned || isHeliNearRig) && f.distanceFromRefNm <= 10) {
-        const key = `${f.hex}_${activeFacility.code}_10NM`;
-        if (!firedAlertKeysRef.current.has(key)) {
-          firedAlertKeysRef.current.add(key);
-          const msg = `10 NM FINAL APPROACH ALERT: ${f.callsign} (${f.typeFullName}) is ${f.distanceFromRefNm} NM from ${activeFacility.shortName} (${activeFacility.code}) at ${f.altitudeFt.toLocaleString()} ft!`;
-          setActiveAlertBanner({
-            id: key,
-            timestamp: nowTime,
-            callsign: f.callsign,
-            typeFullName: f.typeFullName,
-            triggerType: 'RING_10NM',
-            message: msg,
-          });
-          playCockpitAlertChime(true);
-          triggerBrowserNotification(`10 NM Approach: ${f.callsign}`, msg);
-          break;
-        }
-      }
-
-      // 3. 25 NM Approach Ring Alert
-      if ((isPinned || isHeliNearRig) && f.distanceFromRefNm <= 25 && f.distanceFromRefNm > 10) {
-        const key = `${f.hex}_${activeFacility.code}_25NM`;
-        if (!firedAlertKeysRef.current.has(key)) {
-          firedAlertKeysRef.current.add(key);
-          const msg = `25 NM APPROACH ZONE: ${f.callsign} (${f.typeFullName}) crossed within 25 NM of ${activeFacility.shortName} (${f.distanceFromRefNm} NM out · ETA ${f.estimatedArrTime}).`;
-          setActiveAlertBanner({
-            id: key,
-            timestamp: nowTime,
-            callsign: f.callsign,
-            typeFullName: f.typeFullName,
-            triggerType: 'RING_25NM',
-            message: msg,
-          });
-          playCockpitAlertChime(false);
-          triggerBrowserNotification(`25 NM Approach: ${f.callsign}`, msg);
-          break;
-        }
-      }
+      if (!key || firedAlertKeysRef.current.has(key)) continue;
+      firedAlertKeysRef.current.add(key);
+      setActiveAlertBanner({ id: key, timestamp: new Date().toLocaleTimeString('en-GB'), callsign: f.callsign, typeFullName: f.typeFullName, triggerType: type, message });
+      playCockpitAlertChime(type === 'RING_10NM');
+      triggerBrowserNotification('ChopperCheck: ' + f.callsign, message);
     }
+    const present = new Set(flights.map(f => f.hex));
+    for (const hex of previousAlertPositions.current.keys()) if (!present.has(hex)) previousAlertPositions.current.delete(hex);
   }, [flights, alertsEnabled, pinnedFlightHex, activeFacility]);
 
-  // Fetch live Open-Meteo marine, aviation & METAR weather for activeFacility
+  const weatherRequestRef = useRef(0);
   const loadWeather = useCallback(async () => {
+    const requestId = ++weatherRequestRef.current;
+    if (activeFacility.id === 'map-reference') { setWeather(null); setWeatherLoading(false); return; }
     setWeatherLoading(true);
     const wx = await fetchHelideckWeather(activeFacility);
+    if (requestId !== weatherRequestRef.current) return;
     setWeather(wx);
     setWeatherLoading(false);
   }, [activeFacility]);
-
   useEffect(() => {
-    loadWeather();
+    setWeather(null);
+    void loadWeather();
+    const timer = setInterval(() => void loadWeather(), 10 * 60 * 1000);
+    return () => { weatherRequestRef.current++; clearInterval(timer); };
   }, [loadWeather]);
 
   // Filter installations shown on map by Single-Rig Focus or selectedFieldOperator
@@ -459,7 +366,7 @@ export default function App() {
           f.destinationRigId === activeFacility.id ||
           f.distanceFromRefNm <= 35;
         if (!matches) return false;
-      } else if (categoryFilter !== 'all' && f.category !== categoryFilter) {
+      } else if (categoryFilter !== 'all' && f.category !== categoryFilter && !(categoryFilter === 'offshore_heli' && f.category === 'coastguard_sar')) {
         return false;
       }
 
@@ -492,7 +399,6 @@ export default function App() {
   );
 
   const handleTogglePin = useCallback((hex: string) => {
-    requestNotificationPermission();
     setPinnedFlightHex((prev) => {
       const next = prev === hex ? null : hex;
       try {
@@ -506,22 +412,18 @@ export default function App() {
   }, []);
 
   const handleToggleAlerts = useCallback(() => {
-    requestNotificationPermission();
+    if (!alertsEnabled) void requestNotificationPermission();
     setAlertsEnabled((prev) => {
       const next = !prev;
       if (next) playCockpitAlertChime(false);
       return next;
     });
-  }, []);
+  }, [alertsEnabled]);
 
   const handleSelectSector = (preset: (typeof SECTOR_PRESETS)[number]) => {
     setActiveSector(preset.id);
-    setActiveFacilityId(preset.defaultFacilityId);
-    try {
-      localStorage.setItem('choppercheck_home_rig_id', preset.defaultFacilityId);
-    } catch {
-      // ignore storage errors
-    }
+    setActiveFacilityId('');
+    setReferenceLocation({ lat: preset.lat, lon: preset.lon });
     if (preset.id === 'apache_north_sea') {
       setSelectedFieldOperator('Apache');
     } else {
@@ -554,6 +456,12 @@ export default function App() {
   }, []);
 
   const handleSelectFlight = useCallback((flight: AircraftTarget) => {
+    const rebased = advanceAircraftPositionsSmoothly([flight], 0, activeFacility)[0];
+    if (!rebased) return;
+    recentAircraftMapRef.current.set(rebased.hex, { flight: rebased, seenAt: rebased.observedAt! });
+    setFlights(prev => [rebased, ...prev.filter(f => f.hex !== rebased.hex)]);
+    setActiveTab('radar');
+    setMobileDetailsOpen(false);
     setSelectedFlightHex(flight.hex);
     setMapViewTarget((prev) => ({
       lat: flight.lat,
@@ -561,28 +469,30 @@ export default function App() {
       zoom: 8,
       seq: prev.seq + 1,
     }));
-  }, []);
+  }, [activeFacility]);
 
+  const [locationError, setLocationError] = useState('');
   const handleUseMyGps = useCallback(() => {
     if ('geolocation' in navigator) {
+      setLocationError('');
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           const lat = Number(pos.coords.latitude.toFixed(4));
           const lon = Number(pos.coords.longitude.toFixed(4));
           const customHome: InstallationOrAirport = {
             id: 'gps-my-location',
-            code: 'HOME',
-            name: 'My GPS Overhead Location',
+            code: 'GPS',
+            name: 'My GPS Location',
             shortName: 'My GPS Location',
             fieldOperator: 'UK Airport / Heliport',
             assetType: 'UK Airport',
-            sector: 'scotland_airports',
+            sector: 'uk_north_sea',
             lat,
             lon,
-            elevationFt: 50,
-            primaryShoreBase: 'EGPK',
+            elevationFt: 0,
+            primaryShoreBase: '',
             helicopterOperators: ['HM Coastguard', 'Commercial Airline'],
-            regionLabel: 'Live GPS Overhead Radar Zone',
+            regionLabel: 'Device GPS reference',
           };
           setFacilities((prev) => [
             customHome,
@@ -598,12 +508,11 @@ export default function App() {
           }));
         },
         () => {
-          const alloway = facilities.find((f) => f.id === 'apt-egpk');
-          if (alloway) handleSelectFacility(alloway);
+          setLocationError('Location unavailable. Allow location access in your browser or choose a rig/base.');
         }
       );
-    }
-  }, [facilities, handleSelectFacility]);
+    } else { setLocationError('GPS is not supported in this browser.'); }
+  }, []);
 
   const handleAddCustomCoordinate = (name: string, lat: number, lon: number) => {
     const newId = `custom-${Date.now()}`;
@@ -617,8 +526,8 @@ export default function App() {
       sector: 'uk_north_sea',
       lat,
       lon,
-      elevationFt: 100,
-      primaryShoreBase: 'EGPD',
+      elevationFt: 0,
+      primaryShoreBase: '',
       helicopterOperators: ['Bristow', 'CHC', 'NHV', 'OHS'],
       regionLabel: 'Custom User Coordinates',
     };
@@ -626,57 +535,13 @@ export default function App() {
     handleSelectFacility(newFac);
   };
 
-  const handlePlotAndFocusSheet = useCallback(
-    (sheet: HeliAdminSheetData) => {
-      setPlottedHeliAdminSheet(sheet);
-      setSelectedHeliAdminSheet(sheet);
-      setActiveTab('radar');
-
-      // Find first offshore platform stop in plannedRouteCodes (or first stop)
-      const resolvedStops = sheet.plannedRouteCodes
-        .map((c) => resolveHeliAdminStopCode(c, facilities))
-        .filter((f): f is InstallationOrAirport => !!f);
-
-      const offshoreStop =
-        resolvedStops.find(
-          (f) => f.assetType === 'Fixed Platform' || f.assetType === 'FPSO'
-        ) || resolvedStops[0];
-
-      if (offshoreStop) {
-        setActiveFacilityId(offshoreStop.id);
-        setQueryCenter({ lat: offshoreStop.lat, lon: offshoreStop.lon });
-        setMapViewTarget((prev) => ({
-          lat: offshoreStop.lat,
-          lon: offshoreStop.lon,
-          zoom: 7,
-          seq: prev.seq + 1,
-        }));
-      }
-
-      // Check if matching flight is currently in flights; if not, enable schedule wave so user can track the sheet flight immediately
-      const match = flights.find(
-        (f) =>
-          (sheet.callsign && f.callsign.toUpperCase() === sheet.callsign.toUpperCase()) ||
-          (sheet.registration &&
-            f.registration.toUpperCase() === sheet.registration.toUpperCase()) ||
-          (sheet.flightName &&
-            f.heliAdminFlightName?.toUpperCase() === sheet.flightName.toUpperCase())
-      );
-
-      if (match) {
-        setSelectedFlightHex(match.hex);
-        setPinnedFlightHex(match.hex);
-      }
-    },
-    [facilities, flights]
-  );
 
   return (
-    <div className="min-h-screen h-screen flex flex-col bg-[#07090e] text-slate-100 overflow-hidden">
+    <div className="app-shell h-dvh flex flex-col bg-[#07090e] text-slate-100 overflow-hidden">
       {/* =====================================================================
           TOP NAVIGATION BAR (Strict 3-Zone Contract: Brand | 4 Nav Links | 1 CTA)
          ===================================================================== */}
-      <header className="flex items-center justify-between gap-8 px-4 sm:px-6 py-3 bg-slate-950 border-b border-slate-800 shrink-0">
+      <header className="flex items-center justify-between gap-3 px-3 sm:px-6 py-3 bg-slate-950 border-b border-slate-800 shrink-0">
         {/* Zone 1: Single text element wordmark */}
         <a
           href="#radar"
@@ -686,11 +551,11 @@ export default function App() {
           }}
           className="text-base sm:text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0 font-display"
         >
-          ChopperCheck.com · Made by onemadpunk
+          ChopperCheck.com
         </a>
 
         {/* Zone 2: 4 clean single-line navigation links */}
-        <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-400">
+        <nav className="hidden lg:flex items-center gap-6 text-sm font-medium text-slate-400">
           <button
             onClick={() => {
               setActiveTab('radar');
@@ -711,7 +576,7 @@ export default function App() {
               dockTab === 'flights' && activeTab === 'flights' ? 'text-cyan-400 font-semibold' : ''
             }`}
           >
-            Crew & SAR Flights
+            Flights
           </button>
           <button
             onClick={() => {
@@ -722,7 +587,7 @@ export default function App() {
               dockTab === 'directory' ? 'text-cyan-400 font-semibold' : ''
             }`}
           >
-            Rigs, UK Airports & Terminals
+            Rigs & Bases
           </button>
           <button
             onClick={() => {
@@ -733,7 +598,7 @@ export default function App() {
               dockTab === 'weather' ? 'text-cyan-400 font-semibold' : ''
             }`}
           >
-            Helideck & METAR Weather
+            Weather & Marine
           </button>
         </nav>
 
@@ -751,7 +616,7 @@ export default function App() {
       {/* =====================================================================
           WORKSPACE SECTOR, SKY COMPASS & ALERT CONTROLS TOOLBAR
          ===================================================================== */}
-      <div className="bg-slate-900/90 border-b border-slate-800 px-3 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-2 shrink-0">
+      <div className="desktop-toolbar hidden lg:flex bg-slate-900/90 border-b border-slate-800 px-3 sm:px-6 py-2 flex-wrap items-center justify-between gap-2 shrink-0">
         {/* Sector & Region Presets + Sky Compass */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 max-w-full">
           {SECTOR_PRESETS.map((preset) => (
@@ -768,22 +633,15 @@ export default function App() {
             </button>
           ))}
 
-          <button
-            onClick={() => setShowHeliAdminModal(true)}
-            title="Open Offshore Heli-Admin Flight Sheets (APFOR2/1 · BP GL3 · TTCULZFR) & Multi-Stop Route Plotter"
-            className="px-2.5 py-1 rounded-md text-xs font-semibold whitespace-nowrap shrink-0 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 flex items-center gap-1 cursor-pointer"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5 text-amber-400" />
-            Heli-Admin Sheets
-          </button>
+
 
           <button
             onClick={() => setShowSkyCompassModal(true)}
-            title="Open 360° Overhead Sky Compass to spot aircraft flying over your head"
+            title="Nearby-aircraft compass using your GPS location"
             className="px-2.5 py-1 rounded-md text-xs font-semibold whitespace-nowrap shrink-0 bg-emerald-950/80 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-500/40 flex items-center gap-1 cursor-pointer"
           >
             <Compass className="w-3.5 h-3.5" />
-            Sky Compass (Overhead)
+            Sky Compass
           </button>
 
           <button
@@ -822,7 +680,7 @@ export default function App() {
 
           <button
             onClick={handleToggleAlerts}
-            title="Arm audio & notification alerts when your pinned flight lifts off or crosses 25 NM / 10 NM rings"
+            title="Alerts while this page runs: airborne detection and 25 / 10 NM proximity rings"
             className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer ${
               alertsEnabled
                 ? 'bg-slate-950 text-cyan-300 border-cyan-500/40'
@@ -834,71 +692,24 @@ export default function App() {
             ) : (
               <Bell className="w-3.5 h-3.5" />
             )}
-            {alertsEnabled ? 'Alerts Armed' : 'Alerts Muted'}
+            {alertsEnabled ? 'Page Alerts On' : 'Page Alerts Off'}
           </button>
 
           <div className="px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium bg-slate-950 text-emerald-400 border border-emerald-500/40 whitespace-nowrap shrink-0">
-            ● LIVE 1090MHz ADS-B ({liveCount} Aircraft)
+            {feedState === 'loading' ? 'Connecting to aircraft feed…' : feedState === 'unavailable' ? 'Feed unavailable · last known positions' : feedProvider + ' · ' + liveCount + ' tracked aircraft'}
           </div>
         </div>
       </div>
 
-      {/* ★ MY FAVOURITE RIGS QUICK-JUMP BAR (Mobile & Desktop 1-Tap Rig Switcher) */}
-      <div className="bg-slate-950/95 border-b border-slate-800/90 px-3 sm:px-6 py-1.5 flex items-center justify-between gap-2 overflow-x-auto shrink-0">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <span className="text-[11px] font-mono uppercase tracking-wider text-amber-400 font-semibold flex items-center gap-1 whitespace-nowrap shrink-0">
-            <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
-            My Rigs:
-          </span>
-          {favoriteFacilities.map((fac) => {
-            const isActive = fac.id === activeFacility.id;
-            return (
-              <button
-                key={fac.id}
-                onClick={() => {
-                  handleSelectFacility(fac);
-                  setActiveTab('radar');
-                }}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                  isActive
-                    ? 'bg-amber-400 text-slate-950 font-bold shadow-sm'
-                    : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
-                }`}
-              >
-                <span>{fac.shortName}</span>
-                <span
-                  className={`font-mono text-[10px] ${
-                    isActive ? 'text-slate-950' : 'text-amber-400'
-                  }`}
-                >
-                  {fac.code}
-                </span>
-              </button>
-            );
-          })}
-          <button
-            onClick={() => {
-              setActiveTab('directory');
-              setDockTab('directory');
-            }}
-            className="px-2 py-1 rounded-md text-[11px] font-medium bg-slate-900/70 hover:bg-slate-800 text-cyan-400 border border-slate-800/80 whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            + Pick / Star Rig
-          </button>
-        </div>
-
-        <button
-          onClick={handleToggleSingleRigFocus}
-          className={`px-2.5 py-1 rounded-md text-[11px] font-semibold whitespace-nowrap shrink-0 border transition-colors cursor-pointer hidden sm:flex items-center gap-1 ${
-            singleRigFocus
-              ? 'bg-cyan-500 text-slate-950 border-cyan-400 font-bold'
-              : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
-          }`}
-        >
-          {singleRigFocus
-            ? `Showing Only ${activeFacility.shortName} (${activeFacility.code})`
-            : 'Focus Only 1 Rig'}
-        </button>
+      <div className="flex items-center gap-2 px-3 py-2 bg-slate-950 border-b border-slate-800 shrink-0 overflow-x-auto">
+        <span className="text-xs text-slate-400 whitespace-nowrap">My rigs</span>
+        {favoriteFacilities.length === 0 && <button onClick={() => { setActiveTab('directory'); setDockTab('directory'); }} className="text-xs text-cyan-300 px-3 py-2 bg-slate-900 rounded whitespace-nowrap">Choose & save rigs</button>}
+        {favoriteFacilities.map(fac => <button key={fac.id} onClick={() => { handleSelectFacility(fac); setActiveTab('radar'); }} className={'text-xs px-3 py-2 rounded whitespace-nowrap ' + (fac.id === activeFacility.id ? 'bg-cyan-500 text-slate-950 font-semibold' : 'bg-slate-900 text-slate-200')}>{fac.shortName}</button>)}
+        <button onClick={() => { setActiveTab('directory'); setDockTab('directory'); }} className="ml-auto text-xs text-cyan-300 px-3 py-2 bg-slate-900 rounded whitespace-nowrap">Choose rig</button>
+      </div>
+      <div className="lg:hidden flex items-center justify-between px-3 py-1.5 bg-slate-900 text-[11px] shrink-0">
+        <span className={feedState === 'unavailable' ? 'text-amber-300' : 'text-slate-400'}>{feedState === 'loading' ? 'Connecting…' : feedState === 'unavailable' ? 'Feed unavailable · positions expire' : feedProvider + ' · ' + visibleFlights.length + ' shown' + (heliOpFilter !== 'all' ? ' · ' + heliOpFilter : '')}</span>
+        <select aria-label="Aircraft filter" value={categoryFilter} onChange={e => { setCategoryFilter(e.target.value as typeof categoryFilter); setHeliOpFilter('all'); }} className="bg-slate-800 rounded p-2 text-xs text-slate-200"><option value="all">All flights</option><option value="offshore_heli">Helicopters</option><option value="commercial_fixed_wing">Fixed wing</option><option value="coastguard_sar">Coastguard</option>{activeFacility.id !== 'map-reference' && <option value="active_facility">Near {activeFacility.code}</option>}</select>
       </div>
 
       {/* Live Triggered Flight / Approach Alert Banner */}
@@ -941,16 +752,16 @@ export default function App() {
             </span>
             <span aria-hidden="true" className="text-slate-500">·</span>
             <span className="font-mono text-cyan-300 whitespace-nowrap">
-              {pinnedFlight.originCode} → {pinnedFlight.destinationCode}
+              Route not reported
             </span>
             <span aria-hidden="true" className="text-slate-500">·</span>
             <span className="font-mono tabular-nums text-emerald-400 whitespace-nowrap">
-              ETA {pinnedFlight.estimatedArrTime}
+              Arrival time unavailable
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0 font-mono tabular-nums">
             <span className="text-slate-300 hidden sm:inline">
-              {pinnedFlight.distanceFromRefNm} NM · {pinnedFlight.altitudeFt.toLocaleString()} ft
+              {pinnedFlight.distanceFromRefNm} NM · {reported(pinnedFlight.altitudeReported, pinnedFlight.altitudeFt, ' ft')}
             </span>
             <a
               href={getWhatsAppShareUrl(pinnedFlight, activeFacility.code)}
@@ -976,57 +787,11 @@ export default function App() {
         </div>
       )}
 
-      {/* Active Plotted Heli-Admin Noticeboard Sheet Strip */}
-      {plottedHeliAdminSheet && (
-        <div className="bg-slate-900/95 border-b border-slate-800 px-3 sm:px-6 py-1.5 flex items-center justify-between gap-3 text-xs shrink-0">
-          <div
-            onClick={() => setShowHeliAdminModal(true)}
-            className="flex items-center gap-2 min-w-0 truncate cursor-pointer"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <span className="font-mono font-bold text-amber-400 whitespace-nowrap">
-              HELI-ADMIN SHEET: {plottedHeliAdminSheet.flightName}
-            </span>
-            {plottedHeliAdminSheet.callsign && (
-              <span className="font-mono text-cyan-300 whitespace-nowrap">
-                ({plottedHeliAdminSheet.callsign} · {plottedHeliAdminSheet.registration || plottedHeliAdminSheet.aircraftType})
-              </span>
-            )}
-            <span aria-hidden="true" className="text-slate-600">·</span>
-            <span className="font-mono text-white whitespace-nowrap">
-              Route: {plottedHeliAdminSheet.plannedRouteCodes.join(' → ')}
-            </span>
-            <span aria-hidden="true" className="text-slate-600 hidden md:inline">·</span>
-            <span className="font-mono tabular-nums text-amber-300 whitespace-nowrap hidden md:inline">
-              Check-In {plottedHeliAdminSheet.heliAdminCheckInTime}
-            </span>
-            <span className="font-mono tabular-nums text-emerald-400 whitespace-nowrap hidden md:inline">
-              STD {plottedHeliAdminSheet.stdTime}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={() => setShowHeliAdminModal(true)}
-              className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 text-[11px] font-medium cursor-pointer whitespace-nowrap"
-            >
-              Sheet & Checklist
-            </button>
-            <button
-              onClick={() => setPlottedHeliAdminSheet(null)}
-              title="Hide Plotted Heli-Admin Loop"
-              className="text-slate-400 hover:text-white p-0.5 cursor-pointer"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
-
+      {locationError && <div role="alert" className="px-3 py-2 bg-amber-950 text-amber-200 text-xs flex justify-between">{locationError}<button onClick={() => setLocationError('')} aria-label="Dismiss location message"><X className="w-4 h-4" /></button></div>}
       {/* Offline Connectivity Banner */}
       {!isOnline && (
         <div className="bg-rose-950/80 border-b border-rose-500/40 px-4 py-1 text-xs text-rose-200 text-center shrink-0">
-          Offline Mode — Displaying cached offshore rig registry and scheduled flight trajectories.
+          Offline — flight updates and page alerts are unavailable. Old aircraft expire automatically.
         </div>
       )}
 
@@ -1048,7 +813,6 @@ export default function App() {
             activeFacility={activeFacility}
             onSelectFacility={handleSelectFacility}
             pinnedFlightHex={pinnedFlightHex}
-            activeHeliAdminSheet={plottedHeliAdminSheet}
             showRangeRings={showRangeRings}
             onToggleRangeRings={() => setShowRangeRings((prev) => !prev)}
             showFacilityLabels={showFacilityLabels}
@@ -1071,19 +835,13 @@ export default function App() {
             }}
           />
 
-          {/* Mobile Bottom Sheet for Selected Flight when viewing Map */}
           {selectedFlight && activeTab === 'radar' && (
-            <div className="lg:hidden absolute bottom-2 left-2 right-2 z-[500] max-h-[58vh] overflow-y-auto shadow-2xl">
-              <FlightDossierPanel
-                flight={selectedFlight}
-                activeFacility={activeFacility}
-                isPinned={pinnedFlightHex === selectedFlight.hex}
-                onTogglePin={handleTogglePin}
-                alertsEnabled={alertsEnabled}
-                onToggleAlerts={handleToggleAlerts}
-                onClose={() => setSelectedFlightHex(null)}
-                onCenterOnFlight={handleSelectFlight}
-              />
+            <div className="lg:hidden absolute bottom-2 left-2 right-2 z-[500] max-h-[55dvh] overflow-y-auto shadow-2xl rounded-xl border border-slate-700 bg-slate-950">
+              <div className="flex items-center justify-between gap-2 p-3">
+                <button onClick={() => setMobileDetailsOpen(prev => !prev)} className="text-left flex-1 min-w-0"><p className="font-semibold text-sm text-white truncate">{selectedFlight.callsign} · {selectedFlight.typeFullName}</p><p className="text-xs text-slate-400 mt-1">{reported(selectedFlight.altitudeReported, selectedFlight.altitudeFt, ' ft')} · {selectedFlight.distanceFromRefNm} NM · {mobileDetailsOpen ? 'Hide details ▾' : 'View details ▴'}</p></button>
+                <button onClick={() => { setSelectedFlightHex(null); setMobileDetailsOpen(false); }} aria-label="Close selected aircraft" className="p-3 rounded-lg bg-slate-800"><X className="w-4 h-4" /></button>
+              </div>
+              {mobileDetailsOpen && <FlightDossierPanel flight={selectedFlight} activeFacility={activeFacility} isPinned={pinnedFlightHex === selectedFlight.hex} onTogglePin={handleTogglePin} alertsEnabled={alertsEnabled} onToggleAlerts={handleToggleAlerts} onCenterOnFlight={handleSelectFlight} />}
             </div>
           )}
         </div>
@@ -1094,9 +852,9 @@ export default function App() {
             activeTab === 'radar' ? 'hidden lg:flex' : 'flex'
           }`}
         >
-          {/* Desktop Selected Aircraft Telemetry Dossier at top of Right Dock */}
-          {selectedFlight && (
-            <div className="hidden lg:block p-3 border-b border-slate-800 bg-slate-950 shrink-0">
+          {/* Selected aircraft details only on the flight view */}
+          {selectedFlight && dockTab === 'flights' && (
+            <div className="hidden lg:block p-3 border-b border-slate-800 bg-slate-950 shrink-0 max-h-[55vh] overflow-y-auto">
               <FlightDossierPanel
                 flight={selectedFlight}
                 activeFacility={activeFacility}
@@ -1104,7 +862,7 @@ export default function App() {
                 onTogglePin={handleTogglePin}
                 alertsEnabled={alertsEnabled}
                 onToggleAlerts={handleToggleAlerts}
-                onClose={() => setSelectedFlightHex(null)}
+                onClose={() => { setSelectedFlightHex(null); setMobileDetailsOpen(false); }}
                 onCenterOnFlight={handleSelectFlight}
               />
             </div>
@@ -1140,7 +898,7 @@ export default function App() {
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              METAR & WX ({weather?.cap437Status || 'GO'})
+              Weather & Marine
             </button>
           </div>
 
@@ -1183,7 +941,7 @@ export default function App() {
             )}
 
             {dockTab === 'weather' && (
-              <HelideckWeatherPanel
+              activeFacility.id === 'map-reference' ? <div className="p-6 text-sm text-slate-400">Choose a rig or base from Rigs to view weather.</div> : <HelideckWeatherPanel
                 facility={activeFacility}
                 weather={weather}
                 loading={weatherLoading}
@@ -1232,7 +990,7 @@ export default function App() {
           className="min-h-[44px] flex flex-col items-center justify-center text-emerald-400 cursor-pointer"
         >
           <Compass className="w-4 h-4" />
-          <span className="text-[10px] font-medium mt-0.5 whitespace-nowrap">Sky Spotter</span>
+          <span className="text-[10px] font-medium mt-0.5 whitespace-nowrap">Compass</span>
         </button>
 
         <button
@@ -1245,7 +1003,7 @@ export default function App() {
           }`}
         >
           <Building2 className="w-4 h-4" />
-          <span className="text-[10px] font-medium mt-0.5 whitespace-nowrap">Rigs/Terms</span>
+          <span className="text-[10px] font-medium mt-0.5 whitespace-nowrap">Rigs</span>
         </button>
 
         <button
@@ -1258,7 +1016,7 @@ export default function App() {
           }`}
         >
           <CloudRainWind className="w-4 h-4" />
-          <span className="text-[10px] font-medium mt-0.5 whitespace-nowrap">METAR/WX</span>
+          <span className="text-[10px] font-medium mt-0.5 whitespace-nowrap">Weather</span>
         </button>
       </nav>
 
@@ -1272,22 +1030,6 @@ export default function App() {
         onUseMyGps={handleUseMyGps}
       />
 
-      {/* Offshore Heli-Admin Flight Sheets & Multi-Stop Route Plotter Modal */}
-      <HeliAdminSheetModal
-        isOpen={showHeliAdminModal}
-        onClose={() => setShowHeliAdminModal(false)}
-        sheets={heliAdminSheets}
-        activeSheet={selectedHeliAdminSheet}
-        onSelectSheet={setSelectedHeliAdminSheet}
-        onAddSheet={(newSheet) =>
-          setHeliAdminSheets((prev) => [newSheet, ...prev])
-        }
-        facilities={facilities}
-        flights={flights}
-        onPlotAndFocusSheet={handlePlotAndFocusSheet}
-        onSelectFacility={handleSelectFacility}
-      />
-
       {/* Mobile & GitHub Pages Installation Modal */}
       <InstallAndGitHubModal
         isOpen={showInstallModal}
@@ -1296,3 +1038,4 @@ export default function App() {
     </div>
   );
 }
+
