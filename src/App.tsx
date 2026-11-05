@@ -24,7 +24,8 @@ import { RigsAndAirportsDirectory } from './components/RigsAndAirportsDirectory'
 import { HelideckWeatherPanel } from './components/HelideckWeatherPanel';
 import { InstallAndGitHubModal } from './components/InstallAndGitHubModal';
 import { OverheadSkyCompassModal } from './components/OverheadSkyCompassModal';
-import { reported } from './utils/dataQuality';
+import { reported, isRotaryAircraft, matchesAircraftCategory } from './utils/dataQuality';
+import { regionsForView, ViewBounds } from './utils/trackingRegions';
 import { startVisiblePolling } from './utils/visiblePolling';
 import { useOnlineStatus } from './hooks/usePWAInstall';
 import {
@@ -156,7 +157,7 @@ export default function App() {
     zoom: activeFacilityId ? 8 : 6,
     seq: 1,
   }));
-  const [queryCenter, setQueryCenter] = useState<{ lat: number; lon: number }>(() => ({
+  const [queryCenter, setQueryCenter] = useState<{ lat: number; lon: number; bounds?: ViewBounds }>(() => ({
     lat: activeFacility.lat,
     lon: activeFacility.lon,
   }));
@@ -169,7 +170,7 @@ export default function App() {
   const [selectedFieldOperator, setSelectedFieldOperator] = useState<'all' | FieldOperator>('all');
   const [showRangeRings, setShowRangeRings] = useState<boolean>(true);
   const [showFacilityLabels, setShowFacilityLabels] = useState<boolean>(true);
-  const [feedState, setFeedState] = useState<'loading' | 'available' | 'unavailable'>('loading');
+  const [feedState, setFeedState] = useState<'loading' | 'available' | 'partial' | 'unavailable'>('loading');
   const [feedProvider, setFeedProvider] = useState('');
 
   // Flights & Selection State
@@ -183,10 +184,12 @@ export default function App() {
       return null;
     }
   });
-  const queryCenterRef = useRef<{ lat: number; lon: number }>(queryCenter);
+  const queryCenterRef = useRef<{ lat: number; lon: number; bounds?: ViewBounds }>(queryCenter);
   useEffect(() => {
     queryCenterRef.current = queryCenter;
   }, [queryCenter]);
+
+  const queryRegionKey = useMemo(() => regionsForView(queryCenter.lat, queryCenter.lon, queryCenter.bounds).join(','), [queryCenter]);
 
   // Persistent memory of recently seen live aircraft (45s retention) so targets never blink/vanish on a missed packet
   const recentAircraftMapRef = useRef<Map<string, { flight: AircraftTarget; seenAt: number }>>(
@@ -227,9 +230,9 @@ export default function App() {
     setFeedState('loading');
     const stop = startVisiblePolling(async signal => {
         const center = queryCenterRef.current;
-        const result = await fetchHybridRadarTraffic(center.lat, center.lon, activeFacility, 0, false, signal);
+        const result = await fetchHybridRadarTraffic(center.lat, center.lon, activeFacility, 0, false, signal, center.bounds);
         if (signal.aborted) return;
-        setFeedState(result.feedAvailable ? 'available' : 'unavailable');
+        setFeedState(result.feedAvailable ? result.partial ? 'partial' : 'available' : 'unavailable');
         if (result.provider) setFeedProvider(result.provider);
         const now = Date.now();
         for (const flight of result.flights) {
@@ -244,7 +247,7 @@ export default function App() {
         return result.retryAfterMs;
     });
     return stop;
-  }, [activeFacility]);
+  }, [activeFacility, queryRegionKey]);
 
   // Only observed positions trigger alerts. Proximity is not evidence of an approach or destination.
   useEffect(() => {
@@ -255,7 +258,7 @@ export default function App() {
       previousAlertPositions.current.set(f.hex, f);
       if (!alertsEnabled) continue;
       const pinned = pinnedFlightHex === f.hex;
-      const heli = f.category === 'offshore_heli' || f.category === 'coastguard_sar';
+      const heli = isRotaryAircraft(f);
       let key = ''; let message = ''; let type: FlightAlertEvent['triggerType'] = 'AIRBORNE_LIFTOFF';
       if (pinned && f.altitudeReported && f.speedReported && f.altitudeFt >= 200 && f.groundSpeedKts >= 45 && !firedAlertKeysRef.current.has(f.hex + '_DETECTED')) {
         key = f.hex + '_DETECTED';
@@ -354,7 +357,7 @@ export default function App() {
           f.destinationRigId === activeFacility.id ||
           f.distanceFromRefNm <= 35;
         if (!matches) return false;
-      } else if (categoryFilter !== 'all' && f.category !== categoryFilter && !(categoryFilter === 'offshore_heli' && f.category === 'coastguard_sar')) {
+      } else if (!matchesAircraftCategory(f, categoryFilter)) {
         return false;
       }
 
@@ -652,7 +655,7 @@ export default function App() {
             {[
               { id: 'all', label: 'All Traffic' },
               { id: 'offshore_heli', label: 'Helicopters Only' },
-              { id: 'coastguard_sar', label: 'HM Coastguard SAR' },
+              { id: 'coastguard_sar', label: 'Coastguard / SAR' },
               { id: 'active_facility', label: `Near ${activeFacility.code}` },
             ].map((item) => (
               <button
@@ -689,7 +692,7 @@ export default function App() {
           </button>
 
           <div className="px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium bg-slate-950 text-emerald-400 border border-emerald-500/40 whitespace-nowrap shrink-0">
-            {feedState === 'loading' ? 'Connecting to aircraft feed…' : feedState === 'unavailable' ? 'Feed unavailable · last known positions' : 'North Sea · ' + feedProvider + ' · ' + liveCount + ' tracked aircraft'}
+            {feedState === 'loading' ? 'Connecting to aircraft feed…' : feedState === 'unavailable' ? 'Feed unavailable · last known positions' : (feedState === 'partial' ? 'Partial feed · ' : 'UK/IRE · ') + feedProvider + ' · ' + liveCount + ' tracked aircraft'}
           </div>
         </div>
       </div>
@@ -796,7 +799,7 @@ export default function App() {
           }`}
         >
           <button onClick={() => { setActiveTab('flights'); setDockTab('flights'); }} className={'lg:hidden absolute bottom-6 left-2 z-[450] max-w-[calc(100%-76px)] text-left rounded-lg border px-2.5 py-2 text-[11px] shadow-lg ' + (feedState === 'unavailable' ? 'bg-amber-950/95 border-amber-700 text-amber-200' : 'bg-slate-950/95 border-slate-700 text-slate-300')}>
-            {feedState === 'loading' ? 'Connecting to aircraft feed…' : feedState === 'unavailable' ? 'Feed unavailable · retrying' : 'North Sea · ' + flights.length + ' aircraft · ' + flights.filter(f => f.category === 'offshore_heli' || f.category === 'coastguard_sar').length + ' helicopters · View list'}
+            {feedState === 'loading' ? 'Connecting to aircraft feed…' : feedState === 'unavailable' ? 'Feed unavailable · retrying' : (feedState === 'partial' ? 'Partial feed · ' : 'UK/IRE · ') + flights.length + ' aircraft · ' + flights.filter(f => isRotaryAircraft(f)).length + ' helicopters · View list'}
           </button>
           {locationError && <div role="alert" className="absolute top-16 left-2 right-2 max-w-sm z-[500] px-3 py-2 rounded-lg border border-amber-700 bg-amber-950/95 text-amber-200 text-xs flex justify-between gap-2">{locationError}<button onClick={() => setLocationError('')} aria-label="Dismiss location message"><X className="w-4 h-4" /></button></div>}
           <RadarMap
@@ -813,7 +816,7 @@ export default function App() {
             onToggleFacilityLabels={() => setShowFacilityLabels((prev) => !prev)}
             onUseMyGps={handleUseMyGps}
             mapViewTarget={mapViewTarget}
-            onMapCenterChanged={(lat, lon) => setQueryCenter({ lat, lon })}
+            onMapCenterChanged={(lat, lon, bounds) => setQueryCenter({ lat, lon, bounds })}
             isFavoriteFacility={favoriteFacilityIds.includes(activeFacility.id)}
             onToggleFavoriteFacility={handleToggleFavoriteFacility}
             singleRigFocus={singleRigFocus}

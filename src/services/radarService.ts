@@ -1,5 +1,6 @@
 import { AircraftTarget, HelideckWeatherState, HelicopterOperator, InstallationOrAirport, TrailPoint } from '../types/radar';
 import { calculateBearingDeg, calculateDistanceNm, decodeAircraftType } from '../data/aircraftDecoder';
+import { regionsForView, ViewBounds } from '../utils/trackingRegions';
 
 export const FLIGHT_API_ORIGIN = import.meta.env?.DEV ? '/live-api' : 'https://choppercheck-flight-api.ornatehinny4.chatgpt.site';
 export const MAX_POSITION_AGE_MS = 45_000;
@@ -29,10 +30,15 @@ export function classifyLiveAircraft(raw: RawAdsbAircraft, facility: Installatio
   const decoded = decodeAircraftType(raw.t, raw.desc);
   const owner = (raw.ownOp || '').trim();
   const upperOwner = owner.toUpperCase();
-  const isCoastguard = /^(SRG|RESCUE)/.test(callsign) || upperOwner.includes('COASTGUARD') || upperOwner.includes('BRISTOW SAR');
+  // CAA SARG Policy 130: SRD = COASTGUARD, SRG = BRITISH RESCUE. FAA designators: CGI = COASTGUARD IRELAND.
+  const identification = callsign.replace(/\s/g, '');
+  const isUkCoastguard = /^(SRD|SRG)\d/.test(identification) || upperOwner.includes('HM COASTGUARD') || upperOwner.includes('MARITIME AND COASTGUARD AGENCY');
+  const isIrishCoastguard = /^CGI\d/.test(identification) || upperOwner.includes('IRISH COAST GUARD') || upperOwner.includes('IRISH COASTGUARD');
+  const isCoastguard = isUkCoastguard || isIrishCoastguard || /^RESCUE\d/.test(identification) || upperOwner.includes('COASTGUARD') || upperOwner.includes('COAST GUARD') || upperOwner.includes('BRISTOW SAR');
   const rotary = decoded.isRotary || raw.category === 'A7';
   let helicopterOperator: HelicopterOperator = 'Unknown';
-  if (isCoastguard) helicopterOperator = 'HM Coastguard';
+  if (isIrishCoastguard) helicopterOperator = 'Irish Coast Guard';
+  else if (isUkCoastguard) helicopterOperator = 'HM Coastguard';
   else if (upperOwner.includes('BRISTOW') || callsign.startsWith('BHL')) helicopterOperator = 'Bristow';
   else if (upperOwner.includes('CHC') || upperOwner.includes('HELIKOPTER SERVICE') || callsign.startsWith('HKS')) helicopterOperator = 'CHC';
   else if (upperOwner.includes('NHV') || callsign.startsWith('NHZ')) helicopterOperator = 'NHV';
@@ -57,7 +63,7 @@ export function classifyLiveAircraft(raw: RawAdsbAircraft, facility: Installatio
   return {
     hex, callsign, flightNumber: callsign, registration, typeCode: decoded.code,
     typeFullName: decoded.fullName, category: isCoastguard ? 'coastguard_sar' : rotary ? 'offshore_heli' : 'commercial_fixed_wing',
-    operator, helicopterOperator, lat: raw.lat, lon: raw.lon, reportedLat: raw.lat, reportedLon: raw.lon,
+    operator, helicopterOperator, isRotary: rotary, lat: raw.lat, lon: raw.lon, reportedLat: raw.lat, reportedLon: raw.lon,
     altitudeFt: Math.round(altitude), groundSpeedKts: Math.round(speed), groundSpeedMph: Math.round(speed * 1.15078),
     verticalRateFpm: Math.round(rate), trackDeg: Math.round(track), squawk: raw.squawk || 'Unknown',
     altitudeReported: finite(raw.alt_baro) || finite(raw.alt_geom), speedReported: finite(raw.gs) && raw.gs >= 0,
@@ -102,17 +108,33 @@ export function normalizeTraffic(data: any, facility: InstallationOrAirport, now
 }
 
 export async function fetchHybridRadarTraffic(lat: number, lon: number, facility: InstallationOrAirport,
-  _tick: number, _includeSchedule: boolean, signal?: AbortSignal): Promise<{ flights: AircraftTarget[]; liveCount: number; feedAvailable: boolean; provider?: string; retryAfterMs?: number }> {
+  _tick: number, _includeSchedule: boolean, signal?: AbortSignal, bounds?: ViewBounds): Promise<{ flights: AircraftTarget[]; liveCount: number; feedAvailable: boolean; provider?: string; retryAfterMs?: number; partial?: boolean; coverageLabel?: string }> {
   try {
-    const url = FLIGHT_API_ORIGIN + '/api/flights';
-    const response = await fetch(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000) });
+    const regions = regionsForView(lat, lon, bounds);
+    if (!regions.length) return { flights: [], liveCount: 0, feedAvailable: true, coverageLabel: 'Outside UK/Ireland tracking coverage' };
+    const response = await fetch(FLIGHT_API_ORIGIN + '/api/flights?regions=' + regions.join(','), { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000) });
     if (!response.ok) {
       const seconds = Number(response.headers.get('Retry-After'));
       return { flights: [], liveCount: 0, feedAvailable: false, retryAfterMs: Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 10000 };
     }
     const data = await response.json();
-    const flights = normalizeTraffic(data, facility);
-    return { flights, liveCount: flights.length, feedAvailable: data.feedAvailable !== false, provider: data.source, retryAfterMs: finite(data.retryAfterMs) ? data.retryAfterMs : undefined };
+    // Each regional snapshot retains its own provider, timestamp and position age.
+    const feeds = Array.isArray(data.feeds) ? data.feeds : [data];
+    const unique = new Map<string, AircraftTarget>(); let invalidFeed = false, validFeeds = 0;
+    for (const feed of feeds) {
+      try {
+        const normalized = normalizeTraffic(feed, facility); validFeeds++;
+        for (const flight of normalized) {
+          const prior = unique.get(flight.hex);
+          if (!prior || (flight.observedAt || 0) > (prior.observedAt || 0)) unique.set(flight.hex, flight);
+        }
+      } catch { invalidFeed = true; }
+    }
+    if (!validFeeds) throw new Error('No fresh regional positions');
+    const flights = [...unique.values()];
+    return { flights, liveCount: flights.length, feedAvailable: data.feedAvailable !== false, provider: data.source,
+      partial: Boolean(data.partial || invalidFeed || data.unavailableRegions?.length), coverageLabel: 'UK / Ireland / North Sea',
+      retryAfterMs: finite(data.retryAfterMs) ? data.retryAfterMs : undefined };
   } catch {
     return { flights: [], liveCount: 0, feedAvailable: false };
   }

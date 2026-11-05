@@ -1,4 +1,11 @@
 import { AircraftTarget } from '../types/radar';
+export const isRotaryAircraft = (flight: AircraftTarget) => flight.isRotary ?? (flight.category === 'offshore_heli' || flight.category === 'coastguard_sar');
+export function matchesAircraftCategory(flight: AircraftTarget, filter: string): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'offshore_heli') return isRotaryAircraft(flight);
+  if (filter === 'commercial_fixed_wing') return !isRotaryAircraft(flight) && (flight.category === 'commercial_fixed_wing' || flight.category === 'coastguard_sar');
+  return flight.category === filter;
+}
 export const reported = (known: boolean | undefined, n: number, suffix = '') => known === false ? 'Unavailable' : n.toLocaleString('en-GB') + suffix;
 export const coordinate = (n: number, latitude: boolean, digits = 4) => Math.abs(n).toFixed(digits) + '°' + (latitude ? n < 0 ? 'S' : 'N' : n < 0 ? 'W' : 'E');
 export function positionLabel(flight: AircraftTarget, now = Date.now()): string {

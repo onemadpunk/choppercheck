@@ -1,3 +1,4 @@
+import { matchesAircraftCategory } from '../utils/dataQuality';
 import React, { useMemo, useState } from 'react';
 import {
   AircraftTarget,
@@ -45,7 +46,7 @@ export const CrewAndFlightBoard: React.FC<CrewAndFlightBoardProps> = ({
           f.destinationRigId === activeFacility.id ||
           f.distanceFromRefNm <= 35;
         if (!matchesActive) return false;
-      } else if (categoryFilter !== 'all' && f.category !== categoryFilter && !(categoryFilter === 'offshore_heli' && f.category === 'coastguard_sar')) {
+      } else if (!matchesAircraftCategory(f, categoryFilter)) {
         return false;
       }
 
@@ -70,6 +71,7 @@ export const CrewAndFlightBoard: React.FC<CrewAndFlightBoardProps> = ({
     'NHV',
     'OHS',
     'HM Coastguard',
+    'Irish Coast Guard',
     'Unknown',
   ];
 

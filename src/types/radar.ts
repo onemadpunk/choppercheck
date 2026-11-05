@@ -45,6 +45,7 @@ export type HelicopterOperator =
   | 'OHS'
   | 'NHV'
   | 'HM Coastguard'
+  | 'Irish Coast Guard'
   | 'Norwegian SAR'
   | 'Commercial Airline'
   | 'Cargo / Military';
@@ -102,6 +103,7 @@ export interface AircraftTarget {
   category: TrafficCategory;
   operator: string;
   helicopterOperator?: HelicopterOperator;
+  isRotary?: boolean;
   fieldOperatorServed?: FieldOperator;
   lat: number;
   lon: number;
@@ -174,4 +176,3 @@ export interface FlightAlertEvent {
   triggerType: 'AIRBORNE_LIFTOFF' | 'RING_25NM' | 'RING_10NM';
   message: string;
 }
-

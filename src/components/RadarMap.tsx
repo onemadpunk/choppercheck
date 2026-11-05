@@ -1,3 +1,4 @@
+import type { ViewBounds } from '../utils/trackingRegions';
 import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import { coordinate, reported, positionLabel } from '../utils/dataQuality';
@@ -38,7 +39,7 @@ interface RadarMapProps {
   onToggleFacilityLabels: () => void;
   onUseMyGps: () => void;
   mapViewTarget: { lat: number; lon: number; zoom: number; seq: number };
-  onMapCenterChanged: (lat: number, lon: number) => void;
+  onMapCenterChanged: (lat: number, lon: number, bounds?: ViewBounds) => void;
   isFavoriteFacility: boolean;
   onToggleFavoriteFacility: (id: string) => void;
   singleRigFocus: boolean;
@@ -60,7 +61,7 @@ function createAircraftIconHtml(
   showAllLabels: boolean
 ): string {
   const isSar = flight.category === 'coastguard_sar';
-  const isHeli = flight.category === 'offshore_heli' || isSar;
+  const isHeli = flight.isRotary ?? (flight.category === 'offshore_heli' || isSar);
 
   const color = isSelected
     ? '#ffffff'
@@ -246,11 +247,14 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       setCurrentZoom(map.getZoom());
     });
 
-    map.on('moveend', () => {
-      const c = map.getCenter();
+    const updateView = () => {
+      const c = map.getCenter(), b = map.getBounds();
       setCurrentZoom(map.getZoom());
-      onMapCenterChanged(c.lat, c.lng);
-    });
+      onMapCenterChanged(c.lat, c.lng, { south: b.getSouth(), north: b.getNorth(), west: b.getWest(), east: b.getEast() });
+    };
+    map.on('moveend', updateView);
+    map.on('resize', updateView);
+    updateView();
 
     mapRef.current = map;
 
@@ -507,12 +511,12 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       {/* Right Map Floating Tactical Controls */}
       <div className="map-controls absolute top-3 right-3 z-[400] flex flex-col gap-1.5 pointer-events-auto">
         <button
-          onClick={() => mapRef.current?.flyTo([58.7, -0.5], 6, { duration: 0.7 })}
-          title="Show North Sea tracking area"
-          aria-label="Show North Sea tracking area"
+          onClick={() => mapRef.current?.fitBounds([[49.6, -11], [61.2, 7.8]], { padding: [20, 20], animate: true })}
+          title="Show UK, Ireland and North Sea tracking area"
+          aria-label="Show UK, Ireland and North Sea tracking area"
           className="min-w-[44px] min-h-[44px] bg-slate-950/90 hover:bg-slate-900 text-cyan-300 border border-slate-800 rounded-lg flex items-center justify-center text-[10px] font-semibold cursor-pointer"
         >
-          N SEA
+          UK/IRE
         </button>
         <button
           onClick={() => mapRef.current?.zoomIn()}
@@ -595,7 +599,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         <span aria-hidden="true">·</span>
         <span className="text-cyan-400 font-medium">Cyan: Offshore Heli</span>
         <span aria-hidden="true">·</span>
-        <span className="text-orange-400 font-medium">Orange: HM Coastguard SAR</span>
+        <span className="text-orange-400 font-medium">Orange: Coastguard / SAR</span>
         <span aria-hidden="true">·</span>
         <span className="text-amber-400 font-medium">Amber: Airline</span>
         <span aria-hidden="true">·</span>
