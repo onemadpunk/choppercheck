@@ -222,12 +222,16 @@ export default function App() {
     return () => clearInterval(timer);
   }, [activeFacility]);
 
+  // Changing the reference location starts afresh; panning or zooming the map keeps the aircraft already shown.
   useEffect(() => {
     recentAircraftMapRef.current.clear();
     previousAlertPositions.current.clear();
     firedAlertKeysRef.current.clear();
     setFlights([]);
     setFeedState('loading');
+  }, [activeFacility]);
+
+  useEffect(() => {
     const stop = startVisiblePolling(async signal => {
         const center = queryCenterRef.current;
         const result = await fetchHybridRadarTraffic(center.lat, center.lon, activeFacility, 0, false, signal, center.bounds);
