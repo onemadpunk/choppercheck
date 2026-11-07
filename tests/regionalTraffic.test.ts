@@ -46,3 +46,19 @@ test('all regions failing reports the feed as unavailable with a retry delay', a
     assert.equal(result.flights.length, 0); assert.equal(result.feedAvailable, false); assert.equal(result.retryAfterMs, 30_000);
   } finally { globalThis.fetch = saved; }
 });
+
+test('regions are requested one at a time, nearest first', async () => {
+  const saved = globalThis.fetch; const now = Date.now();
+  try {
+    const order: string[] = []; let inFlight = 0, maxInFlight = 0;
+    globalThis.fetch = async url => {
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+      order.push(new URL(String(url)).searchParams.get('regions')!);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      inFlight--;
+      return Response.json({ now, source: 'adsb.lol', ac: [] });
+    };
+    await fetchHybridRadarTraffic(51.2,-1.5,facility,0,false,undefined,{south:49.5,north:61.5,west:-11,east:8});
+    assert.equal(maxInFlight, 1); assert.equal(order[0], 'south-uk'); assert.equal(order.length, 3);
+  } finally { globalThis.fetch = saved; }
+});

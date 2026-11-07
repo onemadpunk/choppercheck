@@ -112,17 +112,30 @@ export async function fetchHybridRadarTraffic(lat: number, lon: number, facility
   try {
     const regions = regionsForView(lat, lon, bounds);
     if (!regions.length) return { flights: [], liveCount: 0, feedAvailable: true, coverageLabel: 'Outside UK/Ireland tracking coverage' };
-    // Request each region separately: the backend can fail a combined request when one region's upstream
-    // feed is slow, which previously left the whole map empty (for example the UK/Ireland overview).
-    const timeout = signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000);
-    const results = await Promise.allSettled(regions.map(async region => {
-      const response = await fetch(FLIGHT_API_ORIGIN + '/api/flights?regions=' + region, { signal: timeout });
-      if (!response.ok) {
-        const seconds = Number(response.headers.get('Retry-After'));
-        throw Object.assign(new Error('Region unavailable'), { retryAfterMs: Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 10000 });
+    // Ask for one region at a time, nearest first. The backend answers a single-region request reliably but
+    // fails combined or simultaneous multi-region requests, which emptied the map once it zoomed out.
+    const nearest = regionsForView(lat, lon)[0];
+    const ordered = nearest ? [nearest, ...regions.filter(r => r !== nearest)] : regions;
+    const results: PromiseSettledResult<any>[] = [];
+    let pauseMs = 0;
+    for (const region of ordered) {
+      if (signal?.aborted) break;
+      if (pauseMs) await new Promise(resolve => setTimeout(resolve, pauseMs));
+      try {
+        const timeout = signal ? AbortSignal.any([signal, AbortSignal.timeout(12_000)]) : AbortSignal.timeout(12_000);
+        const response = await fetch(FLIGHT_API_ORIGIN + '/api/flights?regions=' + region, { signal: timeout });
+        if (!response.ok) {
+          const seconds = Number(response.headers.get('Retry-After'));
+          throw Object.assign(new Error('Region unavailable'), { retryAfterMs: Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 10000 });
+        }
+        const data = await response.json();
+        results.push({ status: 'fulfilled', value: data });
+        pauseMs = finite(data?.retryAfterMs) ? Math.min(2000, Math.max(0, data.retryAfterMs)) : 0;
+      } catch (reason) {
+        results.push({ status: 'rejected', reason });
+        pauseMs = 1000;
       }
-      return response.json();
-    }));
+    }
     const responses = results.flatMap(r => r.status === 'fulfilled' ? [r.value] : []);
     if (!responses.length) {
       const retry = results.map(r => r.status === 'rejected' ? (r.reason as any)?.retryAfterMs : undefined).find(finite);
