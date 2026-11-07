@@ -112,14 +112,24 @@ export async function fetchHybridRadarTraffic(lat: number, lon: number, facility
   try {
     const regions = regionsForView(lat, lon, bounds);
     if (!regions.length) return { flights: [], liveCount: 0, feedAvailable: true, coverageLabel: 'Outside UK/Ireland tracking coverage' };
-    const response = await fetch(FLIGHT_API_ORIGIN + '/api/flights?regions=' + regions.join(','), { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000) });
-    if (!response.ok) {
-      const seconds = Number(response.headers.get('Retry-After'));
-      return { flights: [], liveCount: 0, feedAvailable: false, retryAfterMs: Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 10000 };
+    // Request each region separately: the backend can fail a combined request when one region's upstream
+    // feed is slow, which previously left the whole map empty (for example the UK/Ireland overview).
+    const timeout = signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000);
+    const results = await Promise.allSettled(regions.map(async region => {
+      const response = await fetch(FLIGHT_API_ORIGIN + '/api/flights?regions=' + region, { signal: timeout });
+      if (!response.ok) {
+        const seconds = Number(response.headers.get('Retry-After'));
+        throw Object.assign(new Error('Region unavailable'), { retryAfterMs: Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 10000 });
+      }
+      return response.json();
+    }));
+    const responses = results.flatMap(r => r.status === 'fulfilled' ? [r.value] : []);
+    if (!responses.length) {
+      const retry = results.map(r => r.status === 'rejected' ? (r.reason as any)?.retryAfterMs : undefined).find(finite);
+      return { flights: [], liveCount: 0, feedAvailable: false, retryAfterMs: retry ?? 10000 };
     }
-    const data = await response.json();
     // Each regional snapshot retains its own provider, timestamp and position age.
-    const feeds = Array.isArray(data.feeds) ? data.feeds : [data];
+    const feeds = responses.flatMap((data: any) => Array.isArray(data.feeds) ? data.feeds : [data]);
     const unique = new Map<string, AircraftTarget>(); let invalidFeed = false, validFeeds = 0;
     for (const feed of feeds) {
       try {
@@ -132,9 +142,11 @@ export async function fetchHybridRadarTraffic(lat: number, lon: number, facility
     }
     if (!validFeeds) throw new Error('No fresh regional positions');
     const flights = [...unique.values()];
-    return { flights, liveCount: flights.length, feedAvailable: data.feedAvailable !== false, provider: data.source,
-      partial: Boolean(data.partial || invalidFeed || data.unavailableRegions?.length), coverageLabel: 'UK / Ireland / North Sea',
-      retryAfterMs: finite(data.retryAfterMs) ? data.retryAfterMs : undefined };
+    const retries = responses.map((data: any) => data.retryAfterMs).filter(finite);
+    return { flights, liveCount: flights.length, feedAvailable: responses.some((data: any) => data.feedAvailable !== false),
+      provider: [...new Set(responses.map((data: any) => data.source).filter(Boolean))].join(' + ') || undefined,
+      partial: responses.length < regions.length || invalidFeed || responses.some((data: any) => data.partial || data.unavailableRegions?.length),
+      coverageLabel: 'UK / Ireland / North Sea', retryAfterMs: retries.length ? Math.min(...retries) : undefined };
   } catch {
     return { flights: [], liveCount: 0, feedAvailable: false };
   }
