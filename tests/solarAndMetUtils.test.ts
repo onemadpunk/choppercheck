@@ -8,7 +8,7 @@ import {
   evaluateHourWithLimits,
   isCaaNightForHour,
 } from '../src/utils/solarAndMetUtils.ts';
-import { AIRFRAME_PRESETS } from '../src/services/multiModelWeatherService.ts';
+import { AIRFRAME_PRESETS, classifyNorthSeaConvection, computeMinus10IsothermFt } from '../src/services/multiModelWeatherService.ts';
 
 test('Glen Lyon winter daylight window is much shorter than summer daylight', () => {
   const winter = computeSolarTimesUtc(60.3589, -4.0652, new Date('2026-11-14T12:00:00Z'));
@@ -67,4 +67,33 @@ test('computeWindOverDeckSector distinguishes bow wind, beam crosswind, and aft 
   assert.equal(computeWindOverDeckSector(240, 235).severity, 'OPTIMAL');
   assert.equal(computeWindOverDeckSector(320, 235).severity, 'CROSSWIND');
   assert.equal(computeWindOverDeckSector(55, 235).severity, 'AFT_TURBULENCE');
+});
+
+test('North Sea triggered-lightning physics separates winter triggered setup from natural thunderstorms', () => {
+  const minus10 = computeMinus10IsothermFt(-3, 1400, -13, 2900, -28, 5400);
+  assert.ok(minus10 > 6000 && minus10 < 9500);
+
+  const winterTriggered = classifyNorthSeaConvection({
+    cape: 210,
+    wmo: 81,
+    precip: 1.5,
+    showers: 1.2,
+    freezeFt: 2200,
+    minus10Ft: minus10,
+    sstMinus500C: 36,
+  });
+  assert.equal(winterTriggered.risk, 'HIGH');
+  assert.equal(winterTriggered.type, 'TRIGGERED_WINTER');
+
+  const naturalTs = classifyNorthSeaConvection({
+    cape: 650,
+    wmo: 95,
+    precip: 5.0,
+    showers: 5.0,
+    freezeFt: 5500,
+    minus10Ft: 11000,
+    sstMinus500C: 28,
+  });
+  assert.equal(naturalTs.risk, 'HIGH');
+  assert.equal(naturalTs.type, 'NATURAL_TS');
 });

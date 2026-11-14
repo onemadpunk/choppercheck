@@ -341,6 +341,87 @@ function computeNativeFreezingLevelFt(
   return Math.max(0, Math.round(fzMeters * 3.28084));
 }
 
+/**
+ * Computes the -10°C Mixed-Phase Charging Altitude (ft AMSL) from native 850 hPa, 700 hPa, and 500 hPa levels.
+ * In North Sea winter showers, helicopter triggered lightning peaks when convective cells bridge the 0°C to -10°C band.
+ */
+export function computeMinus10IsothermFt(
+  t850: number,
+  z850Meters: number,
+  t700: number,
+  z700Meters: number,
+  t500: number,
+  z500Meters: number
+): number {
+  let m10Meters = z700Meters;
+  if (t850 <= -10) {
+    m10Meters = z850Meters;
+  } else if (t700 <= -10 && t850 > t700) {
+    m10Meters =
+      z850Meters + ((-10 - t850) / (t700 - t850)) * Math.max(200, z700Meters - z850Meters);
+  } else if (t500 <= -10 && t700 > t500) {
+    m10Meters =
+      z700Meters + ((-10 - t700) / (t500 - t700)) * Math.max(200, z500Meters - z700Meters);
+  } else {
+    m10Meters = z500Meters + (Math.max(0, t500 + 10) / 6.5) * 1000;
+  }
+  return Math.max(0, Math.round(m10Meters * 3.28084));
+}
+
+/**
+ * Physics-based North Sea Triggered vs Natural Lightning classifier using:
+ * - Natural TS: WMO 95/96/99 or deep thunderstorm CAPE >= 500 J/kg
+ * - Winter Triggered Lightning: Low 0°C level (<= 3,200 ft) + -10°C charging layer (<= 11,500 ft)
+ *   + active convective showers or maritime cold-air instability (SST - T500 >= 31-34°C)
+ */
+export function classifyNorthSeaConvection(params: {
+  cape: number | null;
+  wmo: number | null;
+  precip: number;
+  showers: number;
+  freezeFt: number;
+  minus10Ft: number;
+  sstMinus500C: number;
+}): {
+  risk: 'LOW' | 'MODERATE' | 'HIGH';
+  type: 'NONE' | 'TRIGGERED_WINTER' | 'CONVECTIVE_SHOWER' | 'NATURAL_TS';
+} {
+  const { cape, wmo, precip, showers, freezeFt, minus10Ft, sstMinus500C } = params;
+  if (wmo !== null && [95, 96, 99].includes(wmo)) {
+    return { risk: 'HIGH', type: 'NATURAL_TS' };
+  }
+  if (cape !== null && cape >= 500) {
+    return { risk: 'HIGH', type: 'NATURAL_TS' };
+  }
+
+  const isShowerWmo = wmo !== null && [80, 81, 82, 85, 86].includes(wmo);
+  const hasActiveShowers = isShowerWmo || showers >= 0.3;
+  const coldTopStrong = sstMinus500C >= 34 && minus10Ft <= 10500;
+  const coldTopMod = sstMinus500C >= 31 && minus10Ft <= 11500;
+
+  if (
+    freezeFt <= 3000 &&
+    minus10Ft <= 10500 &&
+    (hasActiveShowers || precip >= 0.8) &&
+    ((cape !== null && cape >= 180) || coldTopStrong)
+  ) {
+    return { risk: 'HIGH', type: 'TRIGGERED_WINTER' };
+  }
+
+  if (
+    freezeFt <= 3500 &&
+    (hasActiveShowers || (cape !== null && cape >= 120) || coldTopMod)
+  ) {
+    return { risk: 'MODERATE', type: 'TRIGGERED_WINTER' };
+  }
+
+  if (hasActiveShowers || (cape !== null && cape >= 300) || precip >= 4.0) {
+    return { risk: 'MODERATE', type: 'CONVECTIVE_SHOWER' };
+  }
+
+  return { risk: 'LOW', type: 'NONE' };
+}
+
 const SHORT_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const FULL_DAYS = [
   'Sunday',
@@ -391,10 +472,15 @@ export async function fetchMultiModelRigForecast(
     'wind_direction_850hPa',
     'temperature_850hPa',
     'geopotential_height_850hPa',
+    'temperature_700hPa',
+    'geopotential_height_700hPa',
+    'temperature_500hPa',
+    'geopotential_height_500hPa',
     'freezing_level_height',
     'visibility',
     'cloud_cover_low',
     'precipitation',
+    'showers',
     'temperature_2m',
     'dew_point_2m',
     'surface_pressure',
@@ -438,35 +524,6 @@ export async function fetchMultiModelRigForecast(
     const todayDateKey = times[startIdx]?.split('T')[0] || '';
     const entries: MultiModelHourEntry[] = [];
     const solarCache = new Map<string, ReturnType<typeof computeSolarTimesUtc>>();
-
-    const classifyConvection = (
-      cape: number | null,
-      wmo: number | null,
-      precip: number,
-      freezeFt: number
-    ): {
-      risk: 'LOW' | 'MODERATE' | 'HIGH';
-      type: 'NONE' | 'TRIGGERED_WINTER' | 'CONVECTIVE_SHOWER' | 'NATURAL_TS';
-    } => {
-      if (wmo !== null && [95, 96, 99].includes(wmo)) {
-        return { risk: 'HIGH', type: 'NATURAL_TS' };
-      }
-      if (cape !== null && cape >= 500) {
-        return { risk: 'HIGH', type: 'NATURAL_TS' };
-      }
-      const isShowerWmo = wmo !== null && [80, 81, 82, 85, 86].includes(wmo);
-      // Classic North Sea winter triggered-lightning setup: cold unstable air (0°C <= 2800-3200 ft) + convective showers + CAPE
-      if (freezeFt <= 2800 && cape !== null && cape >= 200 && (isShowerWmo || precip >= 1.0)) {
-        return { risk: 'HIGH', type: 'TRIGGERED_WINTER' };
-      }
-      if (freezeFt <= 3200 && (isShowerWmo || (cape !== null && cape >= 150))) {
-        return { risk: 'MODERATE', type: 'TRIGGERED_WINTER' };
-      }
-      if (isShowerWmo || (cape !== null && cape >= 300) || precip >= 4.0) {
-        return { risk: 'MODERATE', type: 'CONVECTIVE_SHOWER' };
-      }
-      return { risk: 'LOW', type: 'NONE' };
-    };
 
     const classifyFogSpread = (
       spreadC: number,
@@ -560,6 +617,10 @@ export async function fetchMultiModelRigForecast(
         const z925 = rawVal('geopotential_height_925hPa') ?? 720;
         const t850 = rawVal('temperature_850hPa') ?? t925 - 4.0;
         const z850 = rawVal('geopotential_height_850hPa') ?? 1420;
+        const t700 = rawVal('temperature_700hPa') ?? t850 - 9.0;
+        const z700 = rawVal('geopotential_height_700hPa') ?? 2950;
+        const t500 = rawVal('temperature_500hPa') ?? t700 - 15.0;
+        const z500 = rawVal('geopotential_height_500hPa') ?? 5450;
 
         const freezingLevelFt = computeNativeFreezingLevelFt(
           rawVal('freezing_level_height'),
@@ -569,9 +630,19 @@ export async function fetchMultiModelRigForecast(
           t850,
           z850
         );
+        const minus10IsothermFt = computeMinus10IsothermFt(
+          t850,
+          z850,
+          t700,
+          z700,
+          t500,
+          z500
+        );
+        const sstMinus500C = Number((seaSurfaceTempC - t500).toFixed(1));
 
         const lowCloudPct = rawVal('cloud_cover_low') ?? 45;
         const precipMmHr = Number((rawVal('precipitation') ?? 0).toFixed(1));
+        const showersMm = Number((rawVal('showers') ?? 0).toFixed(1));
         const qnhHpa = Math.round(rawVal('surface_pressure') ?? 1010);
         const capeVal = rawVal('cape');
         const wmoCode = rawVal('weather_code');
@@ -598,7 +669,15 @@ export async function fetchMultiModelRigForecast(
           visibilityKm
         );
 
-        const conv = classifyConvection(capeVal, wmoCode, precipMmHr, freezingLevelFt);
+        const conv = classifyNorthSeaConvection({
+          cape: capeVal,
+          wmo: wmoCode,
+          precip: precipMmHr,
+          showers: showersMm,
+          freezeFt: freezingLevelFt,
+          minus10Ft: minus10IsothermFt,
+          sstMinus500C,
+        });
         const lightningRisk = conv.risk;
         const lightningType = conv.type;
         const fogSpreadRisk = classifyFogSpread(dewSpreadC, visibilityKm, lowCloudPct);
@@ -636,6 +715,9 @@ export async function fetchMultiModelRigForecast(
           dewSpreadC,
           capeJkg: capeVal !== null ? Math.round(capeVal) : undefined,
           wmoWeatherCode: wmoCode !== null ? Math.round(wmoCode) : undefined,
+          convectiveShowersMm: showersMm,
+          minus10IsothermFt,
+          sstMinus500C,
           lightningRisk,
           lightningType,
           fogSpreadRisk,

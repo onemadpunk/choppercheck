@@ -1182,8 +1182,9 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               <span className="text-xs font-normal text-slate-400">km</span>
             </div>
             <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
-              QNH {activeModelSnapshot?.qnhHpa ?? weather?.pressureMslHpa ?? 1013} hPa · CAPE{' '}
-              {activeModelSnapshot?.capeJkg ?? 0} J/kg
+              QNH {activeModelSnapshot?.qnhHpa ?? weather?.pressureMslHpa ?? 1013} hPa · -10°C{' '}
+              {(activeModelSnapshot?.minus10IsothermFt ?? 8500).toLocaleString()}ft · ΔT{' '}
+              {activeModelSnapshot?.sstMinus500C ?? 25}°C
             </div>
           </div>
         </div>

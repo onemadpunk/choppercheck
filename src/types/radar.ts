@@ -211,6 +211,9 @@ export interface ModelPointSnapshot {
   dewSpreadC?: number;
   capeJkg?: number;
   wmoWeatherCode?: number;
+  convectiveShowersMm?: number;
+  minus10IsothermFt?: number;
+  sstMinus500C?: number;
   lightningRisk?: 'LOW' | 'MODERATE' | 'HIGH';
   lightningType?: 'NONE' | 'TRIGGERED_WINTER' | 'CONVECTIVE_SHOWER' | 'NATURAL_TS';
   fogSpreadRisk?: 'LOW' | 'MODERATE' | 'HIGH';
