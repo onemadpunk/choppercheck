@@ -168,7 +168,7 @@ export type WeatherOverlayMode =
   | 'wave_swell'
   | 'freezing_icing';
 
-export type AirframePresetId = 'S92' | 'H175' | 'AW139' | 'H160';
+export type AirframePresetId = 'S92' | 'AW189' | 'H175' | 'AW139' | 'H160';
 
 export interface AirframeLimitPreset {
   id: AirframePresetId;

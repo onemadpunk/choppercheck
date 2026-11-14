@@ -418,15 +418,28 @@ export default function App() {
     }
     setWeatherLoading(true);
     setEnsembleLoading(true);
-    const [wx, hours] = await Promise.all([
-      fetchHelideckWeather(activeFacility),
-      fetchMultiModelRigForecast(activeFacility, activePreset),
-    ]);
-    if (requestId !== weatherRequestRef.current) return;
-    setWeather(wx);
-    setHourlyForecast(hours);
-    setWeatherLoading(false);
-    setEnsembleLoading(false);
+
+    fetchMultiModelRigForecast(activeFacility, activePreset)
+      .then((hours) => {
+        if (requestId !== weatherRequestRef.current) return;
+        setHourlyForecast(hours);
+        setEnsembleLoading(false);
+      })
+      .catch(() => {
+        if (requestId !== weatherRequestRef.current) return;
+        setEnsembleLoading(false);
+      });
+
+    fetchHelideckWeather(activeFacility)
+      .then((wx) => {
+        if (requestId !== weatherRequestRef.current) return;
+        setWeather(wx);
+        setWeatherLoading(false);
+      })
+      .catch(() => {
+        if (requestId !== weatherRequestRef.current) return;
+        setWeatherLoading(false);
+      });
   }, [activeFacility, activePreset]);
 
   useEffect(() => {
@@ -622,7 +635,9 @@ export default function App() {
     setActiveSector(fac.sector);
     if (fac.maxHeliType?.startsWith('Airbus H175')) {
       setAirframePresetId('H175');
-    } else if (fac.maxHeliType?.startsWith('AW139') || fac.maxHeliType?.startsWith('AW189')) {
+    } else if (fac.maxHeliType?.startsWith('AW189')) {
+      setAirframePresetId('AW189');
+    } else if (fac.maxHeliType?.startsWith('AW139')) {
       setAirframePresetId('AW139');
     } else {
       setAirframePresetId('S92');

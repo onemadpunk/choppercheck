@@ -22,6 +22,16 @@ export const AIRFRAME_PRESETS: Record<AirframePresetId, AirframeLimitPreset> = {
     minIcingFreezingLevelFt: 1800,
     maxFpsoWaveHeightM: 5.8,
   },
+  AW189: {
+    id: 'AW189',
+    name: 'Leonardo AW189 (Bristow / CHC / SAR)',
+    maxHelideckGustKts: 55,
+    cautionGustKts: 43,
+    minCloudCeilingFt: 450,
+    minVisibilityKm: 1.2,
+    minIcingFreezingLevelFt: 2000,
+    maxFpsoWaveHeightM: 5.5,
+  },
   H175: {
     id: 'H175',
     name: 'Airbus H175 (NHV / OHS)',
@@ -34,13 +44,13 @@ export const AIRFRAME_PRESETS: Record<AirframePresetId, AirframeLimitPreset> = {
   },
   AW139: {
     id: 'AW139',
-    name: 'Leonardo AW139 / AW189',
-    maxHelideckGustKts: 55,
+    name: 'Leonardo AW139 (SNS / Irish Sea)',
+    maxHelideckGustKts: 52,
     cautionGustKts: 42,
     minCloudCeilingFt: 500,
     minVisibilityKm: 1.5,
     minIcingFreezingLevelFt: 2500,
-    maxFpsoWaveHeightM: 5.2,
+    maxFpsoWaveHeightM: 5.0,
   },
   H160: {
     id: 'H160',

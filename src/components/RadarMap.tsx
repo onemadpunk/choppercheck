@@ -872,7 +872,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
 
           <div className="flex items-center gap-1 shrink-0">
             <span className="text-slate-400">LIMITS:</span>
-            {(['S92', 'H175', 'AW139', 'H160'] as AirframePresetId[]).map((presetId) => (
+            {(['S92', 'AW189', 'H175', 'AW139', 'H160'] as AirframePresetId[]).map((presetId) => (
               <button
                 key={presetId}
                 onClick={() => onChangeAirframePresetId(presetId)}
