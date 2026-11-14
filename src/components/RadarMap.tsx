@@ -1,19 +1,30 @@
 import type { ViewBounds } from '../utils/trackingRegions';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
-import { coordinate, reported, positionLabel } from '../utils/dataQuality';
-const escapeHtml = (s: string) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+import { reported, positionLabel } from '../utils/dataQuality';
 import {
   AircraftTarget,
+  AirframePresetId,
   FieldOperator,
   HelideckWeatherState,
   InstallationOrAirport,
+  MultiModelHourEntry,
+  SpatialWeatherGridPoint,
+  WeatherModelId,
+  WeatherOverlayMode,
 } from '../types/radar';
+import { FIELD_OPERATOR_COLORS } from '../data/installationsAndAirports';
 import {
-  FIELD_OPERATOR_COLORS,
-} from '../data/installationsAndAirports';
+  AIRFRAME_PRESETS,
+  WEATHER_MODELS_META,
+  buildSevenDayFlightWindowSummaries,
+  interpolateSpotWeatherAtLatLon,
+} from '../services/multiModelWeatherService';
+import { WeatherStreamlineCanvas } from './WeatherStreamlineCanvas';
 import {
   Building2,
+  Calendar,
+  CloudRainWind,
   Compass,
   Crosshair,
   Eye,
@@ -24,6 +35,12 @@ import {
   Plus,
   Star,
 } from 'lucide-react';
+
+const escapeHtml = (s: string) =>
+  String(s).replace(
+    /[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!)
+  );
 
 interface RadarMapProps {
   flights: AircraftTarget[];
@@ -47,6 +64,16 @@ interface RadarMapProps {
   weather: HelideckWeatherState | null;
   onOpenDirectory: () => void;
   onOpenWeather: () => void;
+  weatherOverlayMode: WeatherOverlayMode;
+  onChangeWeatherOverlayMode: (mode: WeatherOverlayMode) => void;
+  weatherModelId: WeatherModelId;
+  onChangeWeatherModelId: (model: WeatherModelId) => void;
+  airframePresetId: AirframePresetId;
+  onChangeAirframePresetId: (preset: AirframePresetId) => void;
+  spatialGrid: SpatialWeatherGridPoint[];
+  hourlyForecast: MultiModelHourEntry[];
+  selectedHourIdx: number;
+  onChangeSelectedHourIdx: (idx: number) => void;
 }
 
 type MapStyleMode = 'dark_radar' | 'daylight_osm' | 'satellite' | 'nautical_ocean';
@@ -94,7 +121,6 @@ function createAircraftIconHtml(
         <path d="M16 3 L18 11 L28 16 L28 18.5 L18 15.5 L17.5 24 L22 27 L22 28.5 L16 27 L10 28.5 L10 27 L14.5 24 L14 15.5 L4 18.5 L4 16 L14 11 Z" fill="${color}" stroke="#07090e" stroke-width="1"/>
       </svg>`;
 
-  // Show permanent badge on Selected, Pinned, SAR, Offshore Helis when zoom >= 7, or when zoomed in >= 9
   const shouldShowLabel =
     isSelected ||
     isPinned ||
@@ -141,15 +167,15 @@ function createFacilityIconHtml(
   const ringBorder = isActive ? '2px solid #ffffff' : `1.5px solid ${color}`;
   const size = isActive ? 15 : 11;
 
-  const shapeHtml = fac.assetType === 'GPS location' || fac.assetType === 'Custom location'
-    ? `<div style="width:14px;height:14px;border-radius:50%;background:#38bdf8;border:3px solid white;box-shadow:0 0 0 6px rgba(56,189,248,0.2);"></div>`
-    : isFpso
-    ? `<div style="width:${size + 6}px;height:${size - 2}px;background:${color};border:${ringBorder};border-radius:6px;box-shadow:0 0 8px rgba(0,0,0,0.9);"></div>`
-    : isAirport
-    ? `<div style="width:${size + 3}px;height:${size + 3}px;background:#0f172a;border:2px solid ${color};border-radius:3px;display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:700;color:${color};">H</div>`
-    : `<div style="width:${size}px;height:${size}px;background:${color};border:${ringBorder};transform:rotate(45deg);box-shadow:0 0 8px rgba(0,0,0,0.9);"></div>`;
+  const shapeHtml =
+    fac.assetType === 'GPS location' || fac.assetType === 'Custom location'
+      ? `<div style="width:14px;height:14px;border-radius:50%;background:#38bdf8;border:3px solid white;box-shadow:0 0 0 6px rgba(56,189,248,0.2);"></div>`
+      : isFpso
+      ? `<div style="width:${size + 6}px;height:${size - 2}px;background:${color};border:${ringBorder};border-radius:6px;box-shadow:0 0 8px rgba(0,0,0,0.9);"></div>`
+      : isAirport
+      ? `<div style="width:${size + 3}px;height:${size + 3}px;background:#0f172a;border:2px solid ${color};border-radius:3px;display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:700;color:${color};">H</div>`
+      : `<div style="width:${size}px;height:${size}px;background:${color};border:${ringBorder};transform:rotate(45deg);box-shadow:0 0 8px rgba(0,0,0,0.9);"></div>`;
 
-  // Avoid label clutter at very wide zoom unless active or user toggled labels at zoom >= 7
   const shouldRenderLabel = isActive || (showLabel && currentZoom >= 7);
 
   const labelHtml = shouldRenderLabel
@@ -194,24 +220,53 @@ export const RadarMap: React.FC<RadarMapProps> = ({
   weather,
   onOpenDirectory,
   onOpenWeather,
+  weatherOverlayMode,
+  onChangeWeatherOverlayMode,
+  weatherModelId,
+  onChangeWeatherModelId,
+  airframePresetId,
+  onChangeAirframePresetId,
+  spatialGrid,
+  hourlyForecast,
+  selectedHourIdx,
+  onChangeSelectedHourIdx,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
+  const [mapInstance, setMapInstance] = useState<L.Map | null>(null);
   const baseTileLayerRef = useRef<L.TileLayer | null>(null);
+  const aircraftAttributionRef = useRef<string>('');
   const aircraftLayerRef = useRef<L.LayerGroup | null>(null);
   const facilityLayerRef = useRef<L.LayerGroup | null>(null);
   const ringsLayerRef = useRef<L.LayerGroup | null>(null);
   const trailLayerRef = useRef<L.LayerGroup | null>(null);
-  const aircraftAttributionRef = useRef('');
 
   const [mapStyle, setMapStyle] = useState<MapStyleMode>('dark_radar');
-  const [referenceCardExpanded, setReferenceCardExpanded] = useState(false);
-  useEffect(() => setReferenceCardExpanded(false), [activeFacility.id]);
   const [currentZoom, setCurrentZoom] = useState<number>(mapViewTarget.zoom);
   const [cursorCoords, setCursorCoords] = useState<{ lat: number; lon: number }>({
     lat: activeFacility.lat,
     lon: activeFacility.lon,
   });
+
+  const activePreset = AIRFRAME_PRESETS[airframePresetId];
+  const daySummaries = useMemo(
+    () => buildSevenDayFlightWindowSummaries(hourlyForecast, weatherModelId),
+    [hourlyForecast, weatherModelId]
+  );
+  const activeHour = hourlyForecast[selectedHourIdx] || hourlyForecast[0];
+  const activeHourSnap = activeHour?.models[weatherModelId];
+
+  // Live Ventusky-style spot-check readout at cursor / tap coordinate
+  const spotWeather = useMemo(
+    () =>
+      interpolateSpotWeatherAtLatLon(
+        cursorCoords.lat,
+        cursorCoords.lon,
+        spatialGrid,
+        activePreset
+      ),
+    [cursorCoords.lat, cursorCoords.lon, spatialGrid, activePreset]
+  );
 
   // Initialize Leaflet Map once with key-free OpenStreetMap / Esri tiles
   useEffect(() => {
@@ -243,24 +298,40 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       });
     });
 
+    map.on('click', (e: L.LeafletMouseEvent) => {
+      setCursorCoords({
+        lat: Number(e.latlng.lat.toFixed(4)),
+        lon: Number(e.latlng.lng.toFixed(4)),
+      });
+    });
+
     map.on('zoomend', () => {
       setCurrentZoom(map.getZoom());
     });
 
     const updateView = () => {
-      const c = map.getCenter(), b = map.getBounds();
+      const c = map.getCenter();
+      const b = map.getBounds();
       setCurrentZoom(map.getZoom());
-      onMapCenterChanged(c.lat, c.lng, { south: b.getSouth(), north: b.getNorth(), west: b.getWest(), east: b.getEast() });
+      onMapCenterChanged(c.lat, c.lng, {
+        south: b.getSouth(),
+        north: b.getNorth(),
+        west: b.getWest(),
+        east: b.getEast(),
+      });
     };
+
     map.on('moveend', updateView);
     map.on('resize', updateView);
     updateView();
 
     mapRef.current = map;
+    setMapInstance(map);
 
     return () => {
       map.remove();
       mapRef.current = null;
+      setMapInstance(null);
     };
   }, []);
 
@@ -268,17 +339,20 @@ export const RadarMap: React.FC<RadarMapProps> = ({
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const sources = new Set(flights.map(f => f.provider));
+    const sources = new Set(flights.map((f) => f.provider));
     const notice = sources.has('adsb.lol')
       ? 'Aircraft: <a href="https://www.adsb.lol/" target="_blank" rel="noopener">adsb.lol</a> · <a href="https://opendatacommons.org/licenses/odbl/1-0/" target="_blank" rel="noopener">ODbL</a>'
-      : sources.has('adsb.fi') ? 'Aircraft: <a href="https://adsb.fi/" target="_blank" rel="noopener">adsb.fi</a>' : '';
+      : sources.has('adsb.fi')
+      ? 'Aircraft: <a href="https://adsb.fi/" target="_blank" rel="noopener">adsb.fi</a>'
+      : '';
     if (notice === aircraftAttributionRef.current) return;
-    if (aircraftAttributionRef.current) map.attributionControl.removeAttribution(aircraftAttributionRef.current);
+    if (aircraftAttributionRef.current)
+      map.attributionControl.removeAttribution(aircraftAttributionRef.current);
     if (notice) map.attributionControl.addAttribution(notice);
     aircraftAttributionRef.current = notice;
   }, [flights]);
 
-  // Switch Map Tile Layer (All 4 options are 100% free & require NO API Key)
+  // Switch Map Tile Layer
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -324,9 +398,11 @@ export const RadarMap: React.FC<RadarMapProps> = ({
 
   // Pan/zoom when mapViewTarget.seq updates
   useEffect(() => {
-    if (!mapRef.current) return;
-    mapRef.current.flyTo([mapViewTarget.lat, mapViewTarget.lon], mapViewTarget.zoom, {
-      duration: 0.85,
+    const map = mapRef.current;
+    if (!map) return;
+    if (mapViewTarget.seq <= 1) return;
+    map.flyTo([mapViewTarget.lat, mapViewTarget.lon], mapViewTarget.zoom, {
+      duration: 0.7,
     });
   }, [mapViewTarget.seq]);
 
@@ -336,8 +412,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
     if (!group) return;
     group.clearLayers();
 
-    if (activeFacility.id === 'map-reference') return;
-    if (!showRangeRings) return;
+    if (!showRangeRings || activeFacility.id === 'map-reference') return;
 
     const rings = [
       { nm: 5, color: '#10b981', dash: '4 4', label: '5 NM' },
@@ -373,10 +448,10 @@ export const RadarMap: React.FC<RadarMapProps> = ({
     if (!group) return;
     group.clearLayers();
 
-    installations.filter(fac => currentZoom >= 7 || fac.id === activeFacility.id || !['UK Airport', 'Shore Heliport', 'Hospital Helipad', 'SAR Base'].includes(fac.assetType) || ['EGPD','EGPB','EGSH','EGNJ'].includes(fac.code)).forEach((fac) => {
+    installations.forEach((fac) => {
       const isActive = fac.id === activeFacility.id;
       const marker = L.marker([fac.lat, fac.lon], {
-        title: fac.shortName,
+        title: fac.shortName + ' · ' + fac.assetType,
         icon: L.divIcon({
           className: '',
           html: createFacilityIconHtml(fac, isActive, showFacilityLabels, currentZoom),
@@ -386,7 +461,9 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       });
 
       marker.bindTooltip(
-        `${escapeHtml(fac.shortName)} (${fac.code}) · ${fac.fieldOperator} · ${fac.assetType}`,
+        escapeHtml(
+          fac.shortName + ' (' + fac.code + ') · ' + fac.fieldOperator + ' · ' + fac.assetType
+        ),
         {
           direction: 'top',
           offset: [0, -8],
@@ -402,7 +479,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
     });
   }, [installations, activeFacility, showFacilityLabels, currentZoom, onSelectFacility]);
 
-  // Render Selected Flight Trail & Multi-Stop Heli-Admin Planned Route Loop
+  // Render Selected Flight Trail
   useEffect(() => {
     const group = trailLayerRef.current;
     if (!group) return;
@@ -418,27 +495,9 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         opacity: 0.95,
       }).addTo(group);
     }
+  }, [selectedFlight]);
 
-    const destFac = installations.find(
-      (i) => i.code === selectedFlight.destinationCode || i.id === selectedFlight.destinationRigId
-    );
-    if (destFac) {
-      L.polyline(
-        [
-          [selectedFlight.lat, selectedFlight.lon],
-          [destFac.lat, destFac.lon],
-        ],
-        {
-          color: '#f59e0b',
-          weight: 2,
-          dashArray: '6 6',
-          opacity: 0.9,
-        }
-      ).addTo(group);
-    }
-  }, [selectedFlight, installations]);
-
-  // Render Live & Scheduled Helicopters and Aircraft
+  // Render Live Helicopters and Aircraft
   useEffect(() => {
     const group = aircraftLayerRef.current;
     if (!group) return;
@@ -465,7 +524,15 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       });
 
       marker.bindTooltip(
-        escapeHtml(flight.callsign + ' · ' + flight.typeFullName + ' · ' + reported(flight.altitudeReported, flight.altitudeFt, ' ft') + ' · ' + positionLabel(flight)),
+        escapeHtml(
+          flight.callsign +
+            ' · ' +
+            flight.typeFullName +
+            ' · ' +
+            reported(flight.altitudeReported, flight.altitudeFt, ' ft') +
+            ' · ' +
+            positionLabel(flight)
+        ),
         {
           direction: 'top',
           offset: [0, -10],
@@ -496,22 +563,131 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       ? 'Satellite'
       : 'Daylight Map';
 
+  const hudStatus =
+    activeHourSnap?.status ||
+    (weather?.cap437Status && weather.cap437Status !== 'UNAVAILABLE'
+      ? weather.cap437Status
+      : 'GO');
+  const hudWindSpd = activeHourSnap?.windSpeed10mKts ?? weather?.windSpeedKts ?? 20;
+  const hudWindGust = activeHourSnap?.windGust10mKts ?? weather?.windGustKts ?? 26;
+  const hudWave = activeHour?.waveHeightM ?? weather?.significantWaveHeightM ?? 2.1;
+
   return (
     <div className="relative w-full h-full bg-[#07090e] overflow-hidden select-none">
       {/* Main Leaflet Canvas */}
       <div ref={containerRef} className="w-full h-full z-0" />
 
-      <div className="map-reference-card absolute top-2.5 left-2.5 z-[400] bg-slate-950/95 border border-slate-700 rounded-xl w-[240px] max-w-[calc(100%-76px)] shadow-lg">
-        {activeFacility.id === 'map-reference' ? <button onClick={onOpenDirectory} className="w-full p-3 text-left text-sm text-cyan-300">Choose your rig or base</button> : <>
-          <button onClick={() => setReferenceCardExpanded(prev => !prev)} aria-expanded={referenceCardExpanded} aria-label="Toggle selected rig details" className="flex items-center justify-between gap-2 w-full p-3 text-left"><span className="font-semibold text-sm text-white truncate">{activeFacility.shortName}</span><span className="text-slate-400 text-xs">{referenceCardExpanded ? '▴' : '▾'}</span></button>
-          {referenceCardExpanded && <div className="px-3 pb-3 space-y-2 text-xs border-t border-slate-800 pt-2"><p className="text-slate-400">{activeFacility.assetType} · Reference location</p><div className="grid grid-cols-2 gap-2"><button onClick={() => onToggleFavoriteFacility(activeFacility.id)} className="p-2 rounded bg-slate-800 text-amber-300">{isFavoriteFacility ? '★ Saved' : '☆ Save rig'}</button><button onClick={onOpenDirectory} className="p-2 rounded bg-slate-800 text-cyan-300">Change rig</button><button onClick={onOpenWeather} className="p-2 rounded bg-slate-800 text-cyan-300">Weather</button><button onClick={onToggleSingleRigFocus} className="p-2 rounded bg-slate-800">{singleRigFocus ? 'Show all rigs' : 'Only this rig'}</button></div></div>}
-        </>}
+      {/* Custom HTML5 Canvas Vector-Field Streamlines & Go/No-Go Threshold Heatmap */}
+      <WeatherStreamlineCanvas
+        map={mapInstance}
+        gridPoints={spatialGrid}
+        overlayMode={weatherOverlayMode}
+        preset={activePreset}
+      />
+
+      {/* Top-Left Active Helideck / Airport Lock HUD */}
+      <div className="map-reference-card absolute top-2.5 left-2.5 z-[400] bg-slate-950/92 backdrop-blur-md border border-slate-800 rounded-xl p-2.5 w-[calc(100vw-72px)] max-w-[325px] sm:max-w-xs pointer-events-auto shadow-xl">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] font-mono text-cyan-400 tracking-tight truncate font-semibold">
+            {isFavoriteFacility ? '★ MY FAVOURITE RIG' : 'LOCKED RIG / BASE'} · {activeFacility.code}
+          </span>
+          <span className="text-[10px] font-mono tabular-nums text-slate-400 shrink-0">
+            {activeFacility.elevationFt} FT
+          </span>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 mt-0.5">
+          <div className="text-sm font-bold text-white truncate">
+            {activeFacility.shortName}
+          </div>
+          <button
+            onClick={() => onToggleFavoriteFacility(activeFacility.id)}
+            title={
+              isFavoriteFacility
+                ? 'Saved as Favourite Rig (Tap to remove)'
+                : 'Save as My Favourite Rig on this phone'
+            }
+            className={`px-2 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1 border shrink-0 transition-colors cursor-pointer ${
+              isFavoriteFacility
+                ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
+                : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-700'
+            }`}
+          >
+            <Star
+              className={`w-3.5 h-3.5 ${
+                isFavoriteFacility ? 'fill-amber-400 text-amber-400' : 'text-slate-400'
+              }`}
+            />
+            {isFavoriteFacility ? 'Saved' : 'Save Rig'}
+          </button>
+        </div>
+
+        <div className="text-[11px] text-slate-400 truncate mt-0.5">
+          {activeFacility.fieldOperator} · {activeFacility.assetType} · Base {activeFacility.primaryShoreBase}
+        </div>
+
+        {/* Live / Selected Day Weather & Limits Mini-Bar (tappable to open 7-Day Planner) */}
+        <button
+          onClick={onOpenWeather}
+          className="mt-2 w-full px-2 py-1.5 rounded-md bg-slate-900/95 hover:bg-slate-900 border border-cyan-500/35 flex items-center justify-between gap-1.5 text-[11px] font-mono cursor-pointer transition-colors"
+        >
+          <span
+            className={`font-bold ${
+              hudStatus === 'GO'
+                ? 'text-emerald-400'
+                : hudStatus === 'CAUTION'
+                ? 'text-amber-400'
+                : 'text-rose-400'
+            }`}
+          >
+            ● {activePreset.id} {hudStatus}
+          </span>
+          <span className="text-slate-200 tabular-nums">
+            {hudWindSpd}G{hudWindGust}kt · {hudWave}m
+          </span>
+          <span className="text-cyan-400 font-sans font-semibold text-[10px]">
+            7-Day Limits →
+          </span>
+        </button>
+
+        {/* Quick Mobile Action Row: Focus Only 1 Rig + Change Rig */}
+        <div className="mt-2 grid grid-cols-2 gap-1.5">
+          <button
+            onClick={onToggleSingleRigFocus}
+            className={`px-2 py-1.5 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 border transition-colors cursor-pointer ${
+              singleRigFocus
+                ? 'bg-cyan-500 text-slate-950 border-cyan-400 font-bold'
+                : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-800'
+            }`}
+          >
+            <Eye className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">
+              {singleRigFocus ? `Only ${activeFacility.code} (ON)` : `Only ${activeFacility.code}`}
+            </span>
+          </button>
+
+          <button
+            onClick={onOpenDirectory}
+            className="px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-800 flex items-center justify-center gap-1 transition-colors cursor-pointer"
+          >
+            <Building2 className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Change Rig</span>
+          </button>
+        </div>
       </div>
 
       {/* Right Map Floating Tactical Controls */}
       <div className="map-controls absolute top-3 right-3 z-[400] flex flex-col gap-1.5 pointer-events-auto">
         <button
-          onClick={() => mapRef.current?.fitBounds([[49.6, -11], [61.2, 2]], { padding: [20, 20], animate: true })}
+          onClick={() =>
+            mapRef.current?.fitBounds(
+              [
+                [49.6, -11],
+                [61.2, 2],
+              ],
+              { padding: [20, 20], animate: true }
+            )
+          }
           title="Show UK, Ireland and North Sea tracking area"
           aria-label="Show UK, Ireland and North Sea tracking area"
           className="min-w-[44px] min-h-[44px] bg-slate-950/90 hover:bg-slate-900 text-cyan-300 border border-slate-800 rounded-lg flex items-center justify-center text-[10px] font-semibold cursor-pointer"
@@ -537,7 +713,6 @@ export const RadarMap: React.FC<RadarMapProps> = ({
             mapRef.current?.flyTo([activeFacility.lat, activeFacility.lon], 8, { duration: 0.7 })
           }
           title="Center on Active Rig / Airport"
-          data-secondary-control="true"
           className="min-w-[44px] min-h-[44px] bg-slate-950/90 hover:bg-slate-900 text-cyan-400 border border-slate-800 rounded-lg flex items-center justify-center transition-colors cursor-pointer"
         >
           <Crosshair className="w-4 h-4" />
@@ -550,9 +725,24 @@ export const RadarMap: React.FC<RadarMapProps> = ({
           <LocateFixed className="w-4 h-4" />
         </button>
         <button
+          onClick={() =>
+            onChangeWeatherOverlayMode(
+              weatherOverlayMode === 'off' ? 'go_nogo_matrix' : 'off'
+            )
+          }
+          title="Toggle Animated Wind Streamlines & Go/No-Go Weather Heatmap"
+          className={`min-w-[44px] min-h-[44px] border rounded-lg flex flex-col items-center justify-center transition-colors cursor-pointer px-1 ${
+            weatherOverlayMode !== 'off'
+              ? 'bg-cyan-500 text-slate-950 border-cyan-300 font-bold'
+              : 'bg-slate-950/90 hover:bg-slate-900 text-cyan-400 border-slate-800'
+          }`}
+        >
+          <CloudRainWind className="w-4 h-4" />
+          <span className="text-[8px] font-mono mt-0.5 leading-none">WX MAP</span>
+        </button>
+        <button
           onClick={cycleMapStyle}
           title={`Switch Map Layer (Current: ${mapStyleLabel})`}
-          data-secondary-control="true"
           className="min-w-[44px] min-h-[44px] bg-slate-950/90 hover:bg-slate-900 text-emerald-400 border border-slate-800 rounded-lg flex flex-col items-center justify-center transition-colors cursor-pointer px-1"
         >
           <Globe className="w-4 h-4" />
@@ -561,7 +751,6 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         <button
           onClick={onToggleRangeRings}
           title="Toggle distance rings"
-          data-secondary-control="true"
           className={`min-w-[44px] min-h-[44px] border rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
             showRangeRings
               ? 'bg-cyan-950/90 text-cyan-300 border-cyan-500/60'
@@ -573,7 +762,6 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         <button
           onClick={onToggleFacilityLabels}
           title="Toggle Rig & Aircraft Labels"
-          data-secondary-control="true"
           className={`min-w-[44px] min-h-[44px] border rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
             showFacilityLabels
               ? 'bg-cyan-950/90 text-cyan-300 border-cyan-500/60'
@@ -584,29 +772,158 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         </button>
       </div>
 
-      {/* Bottom-Left Legend, Map Mode & Live Coordinate Readout */}
-      <div className="hidden sm:flex absolute bottom-3 left-3 z-[400] items-center gap-3 bg-slate-950/90 backdrop-blur-md border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-300 pointer-events-auto">
-        <button
-          onClick={cycleMapStyle}
-          className="font-mono text-emerald-400 hover:underline cursor-pointer"
-        >
-          LAYER: {mapStyleLabel.toUpperCase()}
-        </button>
-        <span aria-hidden="true">·</span>
-        <span className="font-mono tabular-nums text-slate-400">
-          {cursorCoords.lat.toFixed(3)}°N, {cursorCoords.lon.toFixed(3)}°E
+      {/* Floating Multi-Model Offshore Weather, 7-Day Time Machine & Go/No-Go Control Dock */}
+      <div className="absolute bottom-2.5 right-2.5 left-2.5 sm:left-auto z-[400] bg-slate-950/94 backdrop-blur-md border border-slate-800 rounded-xl p-2.5 pointer-events-auto shadow-2xl max-w-full sm:max-w-[580px] space-y-1.5">
+        {/* Row 1: 7-Day Forecast Day Picker (Tap Mon, Tue, etc. to preview future flight limits on map) */}
+        {daySummaries.length > 0 && (
+          <div className="flex items-center justify-between gap-1.5 pb-1.5 border-b border-slate-800/80 overflow-x-auto">
+            <div className="flex items-center gap-1 shrink-0">
+              <Calendar className="w-3 h-3 text-cyan-400" />
+              <span className="text-[10px] font-mono text-cyan-400 font-semibold uppercase">
+                DAY:
+              </span>
+              {daySummaries.slice(0, 7).map((d) => {
+                const isDayActive = activeHour?.dayKey === d.dayKey;
+                const dotColor =
+                  d.overallStatus === 'HOLD'
+                    ? 'text-rose-400'
+                    : d.overallStatus === 'CAUTION'
+                    ? 'text-amber-400'
+                    : 'text-emerald-400';
+                return (
+                  <button
+                    key={d.dayKey}
+                    onClick={() => onChangeSelectedHourIdx(d.representativeHourIndex)}
+                    className={`px-2 py-0.5 rounded text-[10px] font-mono whitespace-nowrap flex items-center gap-1 transition-colors cursor-pointer ${
+                      isDayActive
+                        ? 'bg-cyan-500 text-slate-950 font-bold'
+                        : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
+                    }`}
+                  >
+                    <span className={isDayActive ? 'text-slate-950' : dotColor}>●</span>
+                    <span>{d.dayNameShort}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <button
+              onClick={onOpenWeather}
+              className="px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10px] font-mono whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              {activeHour
+                ? `${activeHour.dayNameShort} ${activeHour.hourLabel} UTC`
+                : '7-Day Details'}
+            </button>
+          </div>
+        )}
+
+        {/* Row 2: Weather Overlay Streamline Mode Selector */}
+        <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-slate-800/80 overflow-x-auto">
+          <div className="flex items-center gap-1 shrink-0">
+            <span className="text-[10px] font-mono text-cyan-400 font-semibold uppercase">
+              LAYER:
+            </span>
+            {(
+              [
+                { id: 'off', label: 'Off' },
+                { id: 'go_nogo_matrix', label: 'Go/No-Go Matrix' },
+                { id: 'wind_surface', label: '10m Wind' },
+                { id: 'wind_950hpa', label: '950hPa (1,800ft)' },
+                { id: 'wind_850hpa', label: '850hPa (5,000ft)' },
+                { id: 'wave_swell', label: 'Waves (Hs)' },
+                { id: 'freezing_icing', label: '0°C Icing' },
+              ] as Array<{ id: WeatherOverlayMode; label: string }>
+            ).map((m) => (
+              <button
+                key={m.id}
+                onClick={() => onChangeWeatherOverlayMode(m.id)}
+                className={`px-2 py-0.5 rounded text-[10px] font-mono whitespace-nowrap transition-colors cursor-pointer ${
+                  weatherOverlayMode === m.id
+                    ? 'bg-cyan-500 text-slate-950 font-bold'
+                    : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800'
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Row 3: Model Source & Airframe Limit Preset Row */}
+        <div className="flex items-center justify-between gap-2 overflow-x-auto text-[10px] font-mono">
+          <div className="flex items-center gap-1 shrink-0">
+            <span className="text-slate-400">MODEL:</span>
+            {WEATHER_MODELS_META.map((mod) => (
+              <button
+                key={mod.id}
+                onClick={() => onChangeWeatherModelId(mod.id)}
+                title={`${mod.shortName} (${mod.agency} · ${mod.resolution})`}
+                className={`px-1.5 py-0.5 rounded whitespace-nowrap cursor-pointer ${
+                  weatherModelId === mod.id
+                    ? 'bg-amber-400 text-slate-950 font-bold'
+                    : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
+                }`}
+              >
+                {mod.shortName}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-1 shrink-0">
+            <span className="text-slate-400">LIMITS:</span>
+            {(['S92', 'H175', 'AW139', 'H160'] as AirframePresetId[]).map((presetId) => (
+              <button
+                key={presetId}
+                onClick={() => onChangeAirframePresetId(presetId)}
+                className={`px-1.5 py-0.5 rounded whitespace-nowrap cursor-pointer ${
+                  airframePresetId === presetId
+                    ? 'bg-emerald-400 text-slate-950 font-bold'
+                    : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
+                }`}
+              >
+                {AIRFRAME_PRESETS[presetId].id}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom-Left Live Ventusky-Style Spot-Check Cursor / Tap Weather Readout */}
+      <div className="hidden xl:flex absolute bottom-3 left-3 z-[400] items-center gap-2.5 bg-slate-950/92 backdrop-blur-md border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] font-mono text-slate-300 pointer-events-auto">
+        <span className="text-slate-400 tabular-nums">
+          SPOT ({cursorCoords.lat.toFixed(2)}°N, {cursorCoords.lon.toFixed(2)}°E):
         </span>
-        <span aria-hidden="true">·</span>
-        <span className="text-cyan-400 font-medium">Cyan: Offshore Heli</span>
-        <span aria-hidden="true">·</span>
-        <span className="text-orange-400 font-medium">Orange: Coastguard / SAR</span>
-        <span aria-hidden="true">·</span>
-        <span className="text-amber-400 font-medium">Amber: Airline</span>
-        <span aria-hidden="true">·</span>
-        <span className="font-mono text-slate-300 font-semibold">Made by onemadpunk</span>
+        {spotWeather ? (
+          <>
+            <span
+              className={`font-bold ${
+                spotWeather.status === 'GO'
+                  ? 'text-emerald-400'
+                  : spotWeather.status === 'CAUTION'
+                  ? 'text-amber-400'
+                  : 'text-rose-400'
+              }`}
+            >
+              ● {spotWeather.status}
+            </span>
+            <span className="text-white tabular-nums">
+              10m {spotWeather.windSpeed10mKts}G{spotWeather.windGust10mKts}kt
+            </span>
+            <span className="text-cyan-300 tabular-nums">
+              950hPa {spotWeather.windSpeed950hPaKts}kt
+            </span>
+            <span className="text-sky-300 tabular-nums">
+              Wave {spotWeather.waveHeightM}m
+            </span>
+            <span className="text-purple-300 tabular-nums">
+              0°C {spotWeather.freezingLevelFt.toLocaleString()}ft
+            </span>
+          </>
+        ) : (
+          <span className="text-slate-400">Move cursor over North Sea</span>
+        )}
       </div>
     </div>
   );
 };
-
-
