@@ -1,7 +1,9 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   AirframePresetId,
   CorridorWaypointProfile,
+  CustomRigOverride,
+  FlightOpsMode,
   HelideckWeatherState,
   InstallationOrAirport,
   MultiModelHourEntry,
@@ -11,29 +13,44 @@ import {
 import {
   AIRFRAME_PRESETS,
   WEATHER_MODELS_META,
-  buildSevenDayFlightWindowSummaries,
 } from '../services/multiModelWeatherService';
+import {
+  buildContextAwareSevenDaySummaries,
+  computeSolarTimesUtc,
+  computeWindOverDeckSector,
+  decodeRawTafHighlights,
+  evaluateHourWithLimits,
+  formatCrewOutlookSummary,
+} from '../utils/solarAndMetUtils';
 import {
   AlertTriangle,
   Calendar,
+  Check,
   CheckCircle2,
   CloudFog,
+  CloudLightning,
   CloudRainWind,
   Compass,
+  Copy,
   Layers,
+  Maximize2,
+  Minimize2,
+  Moon,
   Navigation,
   RefreshCw,
   ShieldAlert,
+  SlidersHorizontal,
   Snowflake,
+  Sun,
   Waves,
   Wind,
-  Maximize2,
-  Minimize2,
 } from 'lucide-react';
 
 interface HelideckWeatherPanelProps {
   facility: InstallationOrAirport;
   shoreBaseFacility: InstallationOrAirport;
+  availableShoreBases: InstallationOrAirport[];
+  onChangeShoreBaseCode: (code: string) => void;
   weather: HelideckWeatherState | null;
   loading: boolean;
   onRefresh: () => void;
@@ -49,6 +66,10 @@ interface HelideckWeatherPanelProps {
   onChangeSelectedHourIdx: (idx: number) => void;
   corridorWaypoints: CorridorWaypointProfile[];
   ensembleLoading: boolean;
+  flightOpsMode: FlightOpsMode;
+  onChangeFlightOpsMode: (mode: FlightOpsMode) => void;
+  customOverride?: CustomRigOverride | null;
+  onChangeCustomOverride: (override: CustomRigOverride | null) => void;
   isFullScreen?: boolean;
   onToggleFullScreen?: () => void;
 }
@@ -56,6 +77,8 @@ interface HelideckWeatherPanelProps {
 export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   facility,
   shoreBaseFacility,
+  availableShoreBases,
+  onChangeShoreBaseCode,
   weather,
   loading,
   onRefresh,
@@ -71,22 +94,36 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   onChangeSelectedHourIdx,
   corridorWaypoints,
   ensembleLoading,
+  flightOpsMode,
+  onChangeFlightOpsMode,
+  customOverride,
+  onChangeCustomOverride,
   isFullScreen = false,
   onToggleFullScreen,
 }) => {
+  const [copiedOutlook, setCopiedOutlook] = useState(false);
+  const [showRestrictionsEditor, setShowRestrictionsEditor] = useState(false);
+
   const preset = AIRFRAME_PRESETS[airframePresetId];
   const isFpso = facility.assetType === 'FPSO' || facility.assetType === 'Semi-Sub';
 
-  // Compute 7-Day Crew-Change Flight Window Summaries (Today through +6 Days, e.g. Monday)
+  // Compute 7-Day Crew-Change Flight Window Summaries using dynamic Day/Night limits & overrides
   const daySummaries = useMemo(
-    () => buildSevenDayFlightWindowSummaries(hourlyForecast, weatherModelId),
-    [hourlyForecast, weatherModelId]
+    () =>
+      buildContextAwareSevenDaySummaries(
+        hourlyForecast,
+        weatherModelId,
+        preset,
+        isFpso,
+        flightOpsMode,
+        customOverride
+      ),
+    [hourlyForecast, weatherModelId, preset, isFpso, flightOpsMode, customOverride]
   );
 
   const activeHour = hourlyForecast[selectedHourIdx] || hourlyForecast[0];
   const activeDayKey = activeHour?.dayKey || daySummaries[0]?.dayKey || '';
 
-  // All hours belonging to the currently selected day (e.g. all 24 hours of Monday)
   const activeDayHours = useMemo(
     () => hourlyForecast.filter((h) => h.dayKey === activeDayKey),
     [hourlyForecast, activeDayKey]
@@ -97,20 +134,58 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     [daySummaries, activeDayKey]
   );
 
+  // Astronomical daylight window at this rig's lat/lon for the selected day
+  const solarWindow = useMemo(() => {
+    const refDate = activeHour ? new Date(activeHour.hourIso + 'Z') : new Date();
+    return computeSolarTimesUtc(facility.lat, facility.lon, refDate);
+  }, [facility.lat, facility.lon, activeHour]);
+
+  const activeModelSnapshot = activeHour?.models[weatherModelId];
+  const isNightHour = Boolean(activeHour?.isNight);
+
+  const evaluatedActive = useMemo(() => {
+    if (!activeModelSnapshot || !activeHour) return null;
+    return evaluateHourWithLimits(
+      activeModelSnapshot,
+      activeHour.waveHeightM,
+      activeHour.swellPeriodSec,
+      isNightHour,
+      isFpso,
+      preset,
+      flightOpsMode,
+      customOverride
+    );
+  }, [
+    activeModelSnapshot,
+    activeHour,
+    isNightHour,
+    isFpso,
+    preset,
+    flightOpsMode,
+    customOverride,
+  ]);
+
+  const tafHighlights = useMemo(
+    () => decodeRawTafHighlights(weather?.rawTaf),
+    [weather?.rawTaf]
+  );
+
   if (!weather && hourlyForecast.length === 0) {
     return (
       <div className="p-6 text-center text-slate-400 text-sm">
-        Loading 7-day multi-model (ICON · ECMWF · GFS · GEM), marine & METAR telemetry for{' '}
+        Loading 7-day multi-model (ICON · ECMWF · GFS · GEM), marine & METAR/TAF telemetry for{' '}
         {facility.name}...
       </div>
     );
   }
 
-  const activeModelSnapshot = activeHour?.models[weatherModelId];
+  const effLimits = evaluatedActive?.limits;
   const currentStatus =
+    evaluatedActive?.status ||
     activeModelSnapshot?.status ||
     (!weather || weather.cap437Status === 'UNAVAILABLE' ? 'GO' : weather.cap437Status);
   const currentReason =
+    evaluatedActive?.reason ||
     activeModelSnapshot?.statusReason ||
     weather?.cap437Reason ||
     '7-Day Multi-Model Offshore Operating Limits Active';
@@ -129,43 +204,38 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
       ? 'border-amber-500/50 bg-amber-950/25 text-amber-300'
       : 'border-cyan-500/30 bg-slate-900/90 text-slate-200';
 
-  // Individual limit check items for the "Is Location Within Limits?" matrix
+  const maxGustLimit = effLimits?.maxHelideckGustKts ?? preset.maxHelideckGustKts;
+  const cautionGustLimit = effLimits?.cautionGustKts ?? preset.cautionGustKts;
+  const minCeilLimit = effLimits?.minCloudCeilingFt ?? preset.minCloudCeilingFt;
+  const minVisLimit = effLimits?.minVisibilityKm ?? preset.minVisibilityKm;
+  const maxWaveLimit = effLimits?.maxFpsoWaveHeightM ?? preset.maxFpsoWaveHeightM;
+
   const gustVal = activeModelSnapshot?.windGust10mKts ?? weather?.windGustKts ?? 0;
   const gustStatus =
-    gustVal >= preset.maxHelideckGustKts
-      ? 'HOLD'
-      : gustVal >= preset.cautionGustKts
-      ? 'CAUTION'
-      : 'GO';
+    gustVal >= maxGustLimit ? 'HOLD' : gustVal >= cautionGustLimit ? 'CAUTION' : 'GO';
 
   const waveVal = activeHour?.waveHeightM ?? weather?.significantWaveHeightM ?? 0;
+  const wavePeriodVal = activeHour?.swellPeriodSec ?? weather?.swellPeriodSec ?? 7;
+  const longSwellRisk = isFpso && wavePeriodVal >= 11.0 && waveVal >= 3.2;
   const waveStatus = isFpso
-    ? waveVal >= preset.maxFpsoWaveHeightM
+    ? waveVal >= maxWaveLimit
       ? 'HOLD'
-      : waveVal >= preset.maxFpsoWaveHeightM - 1.3
+      : waveVal >= maxWaveLimit - 1.2 || longSwellRisk
       ? 'CAUTION'
       : 'GO'
     : waveVal >= 6.5
     ? 'HOLD'
-    : waveVal >= 5.0
+    : waveVal >= 5.2
     ? 'CAUTION'
     : 'GO';
 
   const ceilVal = activeModelSnapshot?.cloudCeilingFt ?? 2200;
   const ceilStatus =
-    ceilVal < preset.minCloudCeilingFt
-      ? 'HOLD'
-      : ceilVal < preset.minCloudCeilingFt + 350
-      ? 'CAUTION'
-      : 'GO';
+    ceilVal < minCeilLimit ? 'HOLD' : ceilVal < minCeilLimit + 350 ? 'CAUTION' : 'GO';
 
   const visVal = activeModelSnapshot?.visibilityKm ?? weather?.visibilityKm ?? 10;
   const visStatus =
-    visVal < preset.minVisibilityKm
-      ? 'HOLD'
-      : visVal < preset.minVisibilityKm + 2.0
-      ? 'CAUTION'
-      : 'GO';
+    visVal < minVisLimit ? 'HOLD' : visVal < minVisLimit + 2.0 ? 'CAUTION' : 'GO';
 
   const freezeVal = activeModelSnapshot?.freezingLevelFt ?? 4000;
   const precipVal = activeModelSnapshot?.precipMmHr ?? 0;
@@ -176,10 +246,88 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   const iceStatus =
     icingActive && freezeVal < 1000 ? 'HOLD' : icingActive ? 'CAUTION' : 'GO';
 
+  const lightningRisk = activeModelSnapshot?.lightningRisk ?? 'LOW';
+  const lightningType = activeModelSnapshot?.lightningType ?? 'NONE';
+  const lightningTypeLabel =
+    lightningType === 'NATURAL_TS'
+      ? 'Natural TS'
+      : lightningType === 'TRIGGERED_WINTER'
+      ? 'Winter Triggered'
+      : lightningType === 'CONVECTIVE_SHOWER'
+      ? 'Squall/Showers'
+      : 'None';
+  const lightningStatus =
+    lightningRisk === 'HIGH' ? 'HOLD' : lightningRisk === 'MODERATE' ? 'CAUTION' : 'GO';
+
+  const dewSpreadVal = activeModelSnapshot?.dewSpreadC ?? 2.5;
+  const fogSpreadRisk = activeModelSnapshot?.fogSpreadRisk ?? 'LOW';
+  const fogStatus =
+    fogSpreadRisk === 'HIGH' ? 'CAUTION' : fogSpreadRisk === 'MODERATE' ? 'CAUTION' : 'GO';
+
+  // Combined Shore-to-Deck route verdict (Shore Base + Mid-Route + Rig/FPSO)
+  const routeCombinedStatus: 'GO' | 'CAUTION' | 'HOLD' = useMemo(() => {
+    const statuses: Array<'GO' | 'CAUTION' | 'HOLD'> = [
+      currentStatus === 'HOLD' || currentStatus === 'CAUTION' ? currentStatus : 'GO',
+      ...corridorWaypoints.map((w) => w.status),
+    ];
+    if (statuses.includes('HOLD')) return 'HOLD';
+    if (statuses.includes('CAUTION')) return 'CAUTION';
+    return 'GO';
+  }, [currentStatus, corridorWaypoints]);
+
+  const limitingLeg = useMemo(() => {
+    if (corridorWaypoints.length < 3) return null;
+    if (corridorWaypoints[0].status === 'HOLD') return `${shoreBaseFacility.code} Shore Base`;
+    if (corridorWaypoints[1].status === 'HOLD') return 'Mid-Route Corridor';
+    if (currentStatus === 'HOLD') return `${facility.code} Helideck`;
+    if (corridorWaypoints[0].status === 'CAUTION') return `${shoreBaseFacility.code} Shore Base`;
+    if (corridorWaypoints[1].status === 'CAUTION') return 'Mid-Route Corridor';
+    if (currentStatus === 'CAUTION') return `${facility.code} Helideck`;
+    return 'All 3 Route Legs Clear';
+  }, [corridorWaypoints, shoreBaseFacility.code, facility.code, currentStatus]);
+
+  // FPSO Wind-Over-Deck Sector if heading saved
+  const windDirNow = activeModelSnapshot?.windDir10mDeg ?? weather?.windDirectionDeg ?? 230;
+  const windOverDeck =
+    isFpso && typeof customOverride?.vesselHeadingDeg === 'number'
+      ? computeWindOverDeckSector(windDirNow, customOverride.vesselHeadingDeg)
+      : null;
+
+  const handleCopyOutlook = async () => {
+    const modelName =
+      WEATHER_MODELS_META.find((m) => m.id === weatherModelId)?.shortName || weatherModelId;
+    const text = formatCrewOutlookSummary({
+      facility,
+      shoreBase: shoreBaseFacility,
+      preset,
+      modelName,
+      flightOpsMode,
+      solarWindow,
+      daySummaries,
+      corridorWaypoints,
+      customOverride,
+    });
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedOutlook(true);
+      setTimeout(() => setCopiedOutlook(false), 2500);
+    } catch {
+      setCopiedOutlook(false);
+    }
+  };
+
+  const hasCustomOverride = Boolean(
+    customOverride &&
+      (customOverride.maxGustKts ||
+        customOverride.maxWaveM ||
+        customOverride.daylightOnlyDeck ||
+        typeof customOverride.vesselHeadingDeg === 'number')
+  );
+
   return (
     <div className="flex flex-col h-full bg-slate-950 text-slate-100 overflow-y-auto p-4 sm:p-5 space-y-4">
       <div className={isFullScreen ? 'max-w-6xl mx-auto w-full space-y-4' : 'space-y-4'}>
-        {/* Header, Full-Screen Expand Toggle & Refresh */}
+        {/* Header, Copy Outlook, Full-Screen Expand Toggle & Refresh */}
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="text-[11px] font-mono text-cyan-400">
@@ -193,6 +341,27 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             </div>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              onClick={handleCopyOutlook}
+              title="Copy 7-day crew-change weather outlook for WhatsApp / Signal"
+              className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg border text-xs font-semibold cursor-pointer transition-colors ${
+                copiedOutlook
+                  ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
+                  : 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-200'
+              }`}
+            >
+              {copiedOutlook ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="hidden sm:inline">Copied</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5 text-cyan-400" />
+                  <span className="hidden sm:inline">Copy Outlook</span>
+                </>
+              )}
+            </button>
             {onToggleFullScreen && (
               <button
                 onClick={onToggleFullScreen}
@@ -230,572 +399,890 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
           </div>
         </div>
 
-      {/* 1. 7-DAY CREW-CHANGE FLIGHT DELAY PLANNER (Click Monday, Tuesday, etc.) */}
-      {daySummaries.length > 0 && (
-        <div className="p-3 bg-slate-900/95 border border-cyan-500/35 rounded-lg space-y-2.5">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-xs font-bold text-white flex items-center gap-1.5">
-              <Calendar className="w-3.5 h-3.5 text-cyan-400" />
-              7-Day Crew-Change Outlook (Tap Any Day, e.g. Mon)
+        {/* 0. Astronomical Daylight Window & Auto Day/Night Flight Mode Selector */}
+        <div className="p-2.5 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono">
+            <div className="flex items-center gap-2 text-amber-300">
+              <Sun className="w-3.5 h-3.5 shrink-0" />
+              <span>
+                DAYLIGHT ({activeDaySummary?.dayNameShort || 'TODAY'}):{' '}
+                <strong className="text-white">
+                  {solarWindow.sunriseLabel}–{solarWindow.sunsetLabel} UTC
+                </strong>{' '}
+                <span className="text-slate-400">({solarWindow.daylightDurationLabel})</span>
+              </span>
+            </div>
+            <span className="text-[10px] text-cyan-300">
+              CAA Day: {solarWindow.caaDayWindowLabel}
             </span>
-            {selectedHourIdx > 0 && (
-              <button
-                onClick={() => onChangeSelectedHourIdx(0)}
-                className="text-[10px] font-mono text-cyan-400 hover:underline cursor-pointer"
-              >
-                Back to Live NOW
-              </button>
-            )}
           </div>
 
-          <div className="grid grid-cols-7 gap-1">
-            {daySummaries.slice(0, 7).map((day) => {
-              const isSelectedDay = day.dayKey === activeDayKey;
-              const pillClr =
-                day.overallStatus === 'HOLD'
-                  ? 'border-rose-500/60 bg-rose-950/40 text-rose-300'
-                  : day.overallStatus === 'CAUTION'
-                  ? 'border-amber-500/60 bg-amber-950/40 text-amber-300'
-                  : 'border-emerald-500/50 bg-emerald-950/30 text-emerald-300';
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-slate-800/80">
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => onChangeFlightOpsMode('24h_ops')}
+                className={`px-2 py-1 rounded text-[11px] font-mono cursor-pointer flex items-center gap-1 ${
+                  flightOpsMode === '24h_ops'
+                    ? 'bg-cyan-500 text-slate-950 font-bold'
+                    : 'bg-slate-950 text-slate-300 border border-slate-800 hover:bg-slate-800'
+                }`}
+              >
+                <Moon className="w-3 h-3" />
+                24h Auto Day/Night Limits
+              </button>
+              <button
+                onClick={() => onChangeFlightOpsMode('daylight_only')}
+                className={`px-2 py-1 rounded text-[11px] font-mono cursor-pointer flex items-center gap-1 ${
+                  flightOpsMode === 'daylight_only'
+                    ? 'bg-amber-400 text-slate-950 font-bold'
+                    : 'bg-slate-950 text-slate-300 border border-slate-800 hover:bg-slate-800'
+                }`}
+              >
+                <Sun className="w-3 h-3" />
+                Daylight Crew-Change Only
+              </button>
+            </div>
 
-              return (
+            <button
+              onClick={() => setShowRestrictionsEditor((p) => !p)}
+              className={`px-2 py-1 rounded text-[11px] font-mono cursor-pointer flex items-center gap-1 border ${
+                hasCustomOverride
+                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 font-bold'
+                  : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
+              }`}
+            >
+              <SlidersHorizontal className="w-3 h-3" />
+              {hasCustomOverride ? 'Local Deck Limits Active' : 'Deck Restrictions / Hdg'}
+            </button>
+          </div>
+
+          {/* Collapsible Local Deck Restrictions & FPSO Heading Editor */}
+          {showRestrictionsEditor && (
+            <div className="p-2.5 mt-1.5 rounded bg-slate-950 border border-slate-800 space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-[11px] text-amber-300 font-semibold">
+                  LOCAL HELIDECK RESTRICTIONS (SAVED ON THIS DEVICE FOR {facility.code})
+                </span>
+                {hasCustomOverride && (
+                  <button
+                    onClick={() => onChangeCustomOverride(null)}
+                    className="text-[10px] font-mono text-rose-400 hover:underline cursor-pointer"
+                  >
+                    Reset All
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-[11px]">
+                <label className="space-y-1">
+                  <span className="text-slate-400 block text-[10px]">Max Gust Override (kt)</span>
+                  <input
+                    type="number"
+                    min={20}
+                    max={65}
+                    placeholder={`${preset.maxHelideckGustKts}`}
+                    value={customOverride?.maxGustKts ?? ''}
+                    onChange={(e) => {
+                      const val = e.target.value ? Number(e.target.value) : undefined;
+                      onChangeCustomOverride({ ...customOverride, maxGustKts: val });
+                    }}
+                    className="w-full px-2 py-1 rounded bg-slate-900 border border-slate-700 text-white"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-slate-400 block text-[10px]">Max Wave Override (m)</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min={1.5}
+                    max={8}
+                    placeholder={`${preset.maxFpsoWaveHeightM}`}
+                    value={customOverride?.maxWaveM ?? ''}
+                    onChange={(e) => {
+                      const val = e.target.value ? Number(e.target.value) : undefined;
+                      onChangeCustomOverride({ ...customOverride, maxWaveM: val });
+                    }}
+                    className="w-full px-2 py-1 rounded bg-slate-900 border border-slate-700 text-white"
+                  />
+                </label>
+                {isFpso && (
+                  <label className="space-y-1">
+                    <span className="text-slate-400 block text-[10px]">FPSO Heading (°T)</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={359}
+                      placeholder="e.g. 240"
+                      value={customOverride?.vesselHeadingDeg ?? ''}
+                      onChange={(e) => {
+                        const val =
+                          e.target.value !== ''
+                            ? ((Number(e.target.value) % 360) + 360) % 360
+                            : undefined;
+                        onChangeCustomOverride({ ...customOverride, vesselHeadingDeg: val });
+                      }}
+                      className="w-full px-2 py-1 rounded bg-slate-900 border border-slate-700 text-white"
+                    />
+                  </label>
+                )}
+                <label className="flex items-center gap-2 pt-4 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(customOverride?.daylightOnlyDeck)}
+                    onChange={(e) =>
+                      onChangeCustomOverride({
+                        ...customOverride,
+                        daylightOnlyDeck: e.target.checked,
+                      })
+                    }
+                    className="accent-amber-400 w-4 h-4"
+                  />
+                  <span className="text-[11px] text-slate-200">Daylight-Only Deck</span>
+                </label>
+              </div>
+              <p className="text-[10px] text-slate-500">
+                Use this for temporary HCA HLL restrictions (lighting unserviceable, crane sector,
+                or vessel heading). Stored locally in your browser.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* 1. 7-DAY CREW-CHANGE FLIGHT DELAY PLANNER */}
+        {daySummaries.length > 0 && (
+          <div className="p-3 bg-slate-900/95 border border-cyan-500/35 rounded-lg space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-cyan-400" />
+                7-Day Crew-Change Outlook (Tap Any Day)
+              </span>
+              {selectedHourIdx > 0 && (
                 <button
-                  key={day.dayKey}
-                  onClick={() => onChangeSelectedHourIdx(day.representativeHourIndex)}
-                  className={`p-1.5 rounded-lg border flex flex-col items-center justify-between text-center transition-all cursor-pointer ${
-                    isSelectedDay
-                      ? 'ring-2 ring-cyan-400 bg-slate-800 border-cyan-400'
-                      : pillClr
-                  }`}
+                  onClick={() => onChangeSelectedHourIdx(0)}
+                  className="text-[10px] font-mono text-cyan-400 hover:underline cursor-pointer"
                 >
-                  <span className="text-[10px] font-bold text-white leading-tight">
-                    {day.dayNameShort}
-                  </span>
-                  <span className="text-[8px] font-mono text-slate-400 leading-tight">
-                    {day.dateShort}
-                  </span>
-                  <span
-                    className={`mt-1 px-1 py-0.2 rounded text-[8px] font-mono font-bold ${
-                      day.overallStatus === 'HOLD'
-                        ? 'bg-rose-500 text-white'
-                        : day.overallStatus === 'CAUTION'
-                        ? 'bg-amber-400 text-slate-950'
-                        : 'bg-emerald-500 text-slate-950'
+                  Back to Live NOW
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-7 gap-1">
+              {daySummaries.slice(0, 7).map((day) => {
+                const isSelectedDay = day.dayKey === activeDayKey;
+                const pillClr =
+                  day.overallStatus === 'HOLD'
+                    ? 'border-rose-500/60 bg-rose-950/40 text-rose-300'
+                    : day.overallStatus === 'CAUTION'
+                    ? 'border-amber-500/60 bg-amber-950/40 text-amber-300'
+                    : 'border-emerald-500/50 bg-emerald-950/30 text-emerald-300';
+
+                return (
+                  <button
+                    key={day.dayKey}
+                    onClick={() => onChangeSelectedHourIdx(day.representativeHourIndex)}
+                    className={`p-1.5 rounded-lg border flex flex-col items-center justify-between text-center transition-all cursor-pointer ${
+                      isSelectedDay
+                        ? 'ring-2 ring-cyan-400 bg-slate-800 border-cyan-400'
+                        : pillClr
                     }`}
                   >
-                    {day.overallStatus}
+                    <span className="text-[10px] font-bold text-white leading-tight flex items-center gap-0.5">
+                      {day.dayNameShort}
+                      {day.hasLightningRisk && (
+                        <span title={`${day.lightningHoursCount}h triggered lightning / squall risk`}>
+                          ⚡
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-[8px] font-mono text-slate-400 leading-tight">
+                      {day.dateShort}
+                    </span>
+                    <span
+                      className={`mt-1 px-1 py-0.2 rounded text-[8px] font-mono font-bold ${
+                        day.overallStatus === 'HOLD'
+                          ? 'bg-rose-500 text-white'
+                          : day.overallStatus === 'CAUTION'
+                          ? 'bg-amber-400 text-slate-950'
+                          : 'bg-emerald-500 text-slate-950'
+                      }`}
+                    >
+                      {day.overallStatus}
+                    </span>
+                    <span className="text-[8px] font-mono text-slate-300 mt-0.5 tabular-nums">
+                      {day.maxGustKts}kt
+                    </span>
+                    <span className="text-[8px] font-mono text-cyan-300 tabular-nums">
+                      {day.maxWaveM}m
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Selected Day Summary & Hour-by-Hour Scrubber with Day/Night & Lightning Indicators */}
+            {activeDaySummary && (
+              <div className="pt-2 border-t border-slate-800 space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-cyan-300">
+                    {activeDaySummary.dayNameFull} ({activeDaySummary.dateShort}) ·{' '}
+                    <span className="font-mono text-white">
+                      {activeHour?.hourLabel} UTC ({isNightHour ? 'NIGHT' : 'DAY'})
+                    </span>
                   </span>
-                  <span className="text-[8px] font-mono text-slate-300 mt-0.5 tabular-nums">
-                    {day.maxGustKts}kt
+                  <span className="text-[10px] font-mono text-slate-400">
+                    {activeDaySummary.goHoursCount}h GO · {activeDaySummary.cautionHoursCount}h
+                    CAUT · {activeDaySummary.holdHoursCount}h HOLD
+                    {activeDaySummary.hasLightningRisk
+                      ? ` · ⚡${activeDaySummary.lightningHoursCount}h`
+                      : ''}
                   </span>
-                  <span className="text-[8px] font-mono text-cyan-300 tabular-nums">
-                    {day.maxWaveM}m
-                  </span>
+                </div>
+
+                {activeDaySummary.overallStatus !== 'GO' && (
+                  <div className="px-2 py-1 rounded bg-slate-950/80 border border-slate-800 text-[10px] font-mono text-amber-200 truncate">
+                    Day Limit Driver: {activeDaySummary.primaryRiskReason}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-8 sm:grid-cols-12 gap-1">
+                  {activeDayHours.map((hr) => {
+                    const snap = hr.models[weatherModelId];
+                    const hrNight = Boolean(hr.isNight);
+                    const hrLightning =
+                      snap?.lightningRisk === 'HIGH' || snap?.lightningRisk === 'MODERATE';
+                    const hrEval = snap
+                      ? evaluateHourWithLimits(
+                          snap,
+                          hr.waveHeightM,
+                          hr.swellPeriodSec,
+                          hrNight,
+                          isFpso,
+                          preset,
+                          flightOpsMode,
+                          customOverride
+                        )
+                      : null;
+                    const st = hrEval?.status || snap?.status || 'GO';
+                    const isSelHr = hr.hourIndex === selectedHourIdx;
+                    const badgeClr =
+                      st === 'HOLD'
+                        ? 'bg-rose-500/85 text-white'
+                        : st === 'CAUTION'
+                        ? 'bg-amber-400 text-slate-950'
+                        : 'bg-emerald-500/80 text-slate-950';
+                    return (
+                      <button
+                        key={hr.hourIso}
+                        onClick={() => onChangeSelectedHourIdx(hr.hourIndex)}
+                        title={`${hr.hourLabel} UTC (${hrNight ? 'CAA Night' : 'Daylight'})${
+                          hrLightning ? ' · ⚡ Triggered Lightning Risk' : ''
+                        } — ${hrEval?.reason || ''}`}
+                        className={`py-1 rounded text-[9px] font-mono font-bold flex flex-col items-center cursor-pointer border ${
+                          isSelHr
+                            ? 'border-white ring-2 ring-cyan-300 scale-105'
+                            : 'border-transparent opacity-85 hover:opacity-100'
+                        } ${badgeClr}`}
+                      >
+                        <span className="flex items-center gap-0.5">
+                          {hr.hourLabel.slice(0, 2)}
+                          <span className="text-[7px] opacity-85">
+                            {hrLightning ? '⚡' : hrNight ? '☾' : '☀'}
+                          </span>
+                        </span>
+                        <span className="text-[8px]">{snap?.windGust10mKts}k</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 2. Airframe Operating Limit Preset Selector */}
+        <div className="p-2.5 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2">
+          <div className="flex items-center justify-between text-[11px] font-mono">
+            <span className="text-cyan-400 font-semibold">
+              HELICOPTER OPERATING LIMITS PRESET:
+            </span>
+            <span className="text-slate-400">
+              {isNightHour ? 'NIGHT' : 'DAY'}: Gust {maxGustLimit}kt ·{' '}
+              {isFpso ? `FPSO ${maxWaveLimit}m` : `Ceil ${minCeilLimit}ft`}
+            </span>
+          </div>
+          <div className="grid grid-cols-5 gap-1.5">
+            {(['S92', 'AW189', 'H175', 'AW139', 'H160'] as AirframePresetId[]).map((id) => {
+              const p = AIRFRAME_PRESETS[id];
+              const isSel = airframePresetId === id;
+              return (
+                <button
+                  key={id}
+                  onClick={() => onChangeAirframePresetId(id)}
+                  className={`py-1.5 px-1 rounded text-xs font-mono font-semibold transition-colors cursor-pointer ${
+                    isSel
+                      ? 'bg-cyan-500 text-slate-950 font-bold'
+                      : 'bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800'
+                  }`}
+                >
+                  {p.id}
                 </button>
               );
             })}
           </div>
+        </div>
 
-          {/* Selected Day Summary & Hour-by-Hour Scrubber for that Day */}
-          {activeDaySummary && (
-            <div className="pt-2 border-t border-slate-800 space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-semibold text-cyan-300">
-                  {activeDaySummary.dayNameFull} ({activeDaySummary.dateShort}) ·{' '}
-                  <span className="font-mono text-white">{activeHour?.hourLabel} UTC</span>
-                </span>
-                <span className="text-[10px] font-mono text-slate-400">
-                  Daytime: {activeDaySummary.goHoursCount}h GO ·{' '}
-                  {activeDaySummary.cautionHoursCount}h CAUT ·{' '}
-                  {activeDaySummary.holdHoursCount}h HOLD
-                </span>
-              </div>
-
-              {/* Clickable Hour Strip for Selected Day (e.g. Monday 00:00 -> 23:00) */}
-              <div className="grid grid-cols-8 sm:grid-cols-12 gap-1">
-                {activeDayHours.map((hr) => {
-                  const snap = hr.models[weatherModelId];
-                  const isSelHr = hr.hourIndex === selectedHourIdx;
-                  const badgeClr =
-                    snap?.status === 'HOLD'
-                      ? 'bg-rose-500/85 text-white'
-                      : snap?.status === 'CAUTION'
-                      ? 'bg-amber-400 text-slate-950'
-                      : 'bg-emerald-500/80 text-slate-950';
-                  return (
-                    <button
-                      key={hr.hourIso}
-                      onClick={() => onChangeSelectedHourIdx(hr.hourIndex)}
-                      className={`py-1 rounded text-[9px] font-mono font-bold flex flex-col items-center cursor-pointer border ${
-                        isSelHr
-                          ? 'border-white ring-2 ring-cyan-300 scale-105'
-                          : 'border-transparent opacity-80 hover:opacity-100'
-                      } ${badgeClr}`}
-                    >
-                      <span>{hr.hourLabel.slice(0, 2)}h</span>
-                      <span className="text-[8px]">{snap?.windGust10mKts}k</span>
-                    </button>
-                  );
-                })}
-              </div>
+        {/* 3. Dynamic Go / No-Go Verdict & 7-Point Operating Limits Checklist */}
+        <div className={`p-3 rounded-lg border ${statusColor} space-y-2.5`}>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 font-semibold text-sm">
+              {currentStatus === 'GO' && <CheckCircle2 className="w-4 h-4 shrink-0" />}
+              {currentStatus === 'CAUTION' && <AlertTriangle className="w-4 h-4 shrink-0" />}
+              {currentStatus === 'HOLD' && <ShieldAlert className="w-4 h-4 shrink-0" />}
+              <span>
+                {facility.shortName} ({activeHour?.dayNameShort || 'NOW'}{' '}
+                {activeHour?.hourLabel || ''}):{' '}
+                {currentStatus === 'GO'
+                  ? 'WITHIN LIMITS (GO)'
+                  : currentStatus === 'CAUTION'
+                  ? 'MARGINAL (DELAY RISK)'
+                  : 'OUT OF LIMITS (NO-GO / HOLD)'}
+              </span>
             </div>
-          )}
-        </div>
-      )}
-
-      {/* 2. Airframe Operating Limit Preset Selector (S-92A | AW189 | H175 | AW139 | H160) */}
-      <div className="p-2.5 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2">
-        <div className="flex items-center justify-between text-[11px] font-mono">
-          <span className="text-cyan-400 font-semibold">
-            HELICOPTER OPERATING LIMITS PRESET:
-          </span>
-          <span className="text-slate-400">
-            Gust {preset.maxHelideckGustKts}kt · FPSO Hs {preset.maxFpsoWaveHeightM}m
-          </span>
-        </div>
-        <div className="grid grid-cols-5 gap-1.5">
-          {(['S92', 'AW189', 'H175', 'AW139', 'H160'] as AirframePresetId[]).map((id) => {
-            const p = AIRFRAME_PRESETS[id];
-            const isSel = airframePresetId === id;
-            return (
-              <button
-                key={id}
-                onClick={() => onChangeAirframePresetId(id)}
-                className={`py-1.5 px-2 rounded text-xs font-mono font-semibold transition-colors cursor-pointer ${
-                  isSel
-                    ? 'bg-cyan-500 text-slate-950 font-bold'
-                    : 'bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800'
+            <div className="flex items-center gap-1 shrink-0">
+              <span
+                className={`text-[10px] font-mono uppercase px-1.5 py-0.5 rounded ${
+                  isNightHour
+                    ? 'bg-indigo-950/90 text-indigo-300 border border-indigo-500/40'
+                    : 'bg-amber-500/20 text-amber-200 border border-amber-400/40'
                 }`}
               >
-                {p.id}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* 3. Dynamic Go / No-Go Verdict & 5-Point Operating Limits Checklist */}
-      <div className={`p-3 rounded-lg border ${statusColor} space-y-2.5`}>
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 font-semibold text-sm">
-            {currentStatus === 'GO' && <CheckCircle2 className="w-4 h-4 shrink-0" />}
-            {currentStatus === 'CAUTION' && (
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-            )}
-            {currentStatus === 'HOLD' && <ShieldAlert className="w-4 h-4 shrink-0" />}
-            <span>
-              {facility.shortName} ({activeHour?.dayNameShort || 'NOW'}{' '}
-              {activeHour?.hourLabel || ''}):{' '}
-              {currentStatus === 'GO'
-                ? 'WITHIN LIMITS (GO)'
-                : currentStatus === 'CAUTION'
-                ? 'MARGINAL (DELAY RISK)'
-                : 'OUT OF LIMITS (NO-GO / HOLD)'}
-            </span>
-          </div>
-          <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-black/30">
-            {WEATHER_MODELS_META.find((m) => m.id === weatherModelId)?.shortName}
-          </span>
-        </div>
-        <p className="text-xs opacity-95">{currentReason}</p>
-
-        {/* 5-Row Operating Limits Pass/Fail Breakdown */}
-        <div className="grid grid-cols-1 gap-1 pt-1.5 border-t border-white/10 font-mono text-[11px]">
-          {[
-            {
-              label: '1. Helideck Wind & Gusts',
-              actual: `${activeModelSnapshot?.windSpeed10mKts ?? weather?.windSpeedKts ?? 0}G${gustVal} kt`,
-              limit: `Max ${preset.maxHelideckGustKts} kt`,
-              st: gustStatus,
-            },
-            {
-              label: isFpso
-                ? '2. FPSO Sea State / Pitch-Roll (Hs)'
-                : '2. Significant Wave Height (Hs)',
-              actual: `${waveVal} m (${activeHour?.swellPeriodSec ?? weather?.swellPeriodSec ?? 7}s)`,
-              limit: isFpso ? `Max ${preset.maxFpsoWaveHeightM} m` : 'Max 6.5 m',
-              st: waveStatus,
-            },
-            {
-              label: '3. Cloud Ceiling (ARA Minima)',
-              actual: `${ceilVal.toLocaleString()} ft`,
-              limit: `Min ${preset.minCloudCeilingFt} ft`,
-              st: ceilStatus,
-            },
-            {
-              label: '4. Horizontal Visibility',
-              actual: `${visVal} km`,
-              limit: `Min ${preset.minVisibilityKm} km`,
-              st: visStatus,
-            },
-            {
-              label: '5. 0°C Rotor Icing Altitude',
-              actual: `${freezeVal.toLocaleString()} ft`,
-              limit: `Safe > ${preset.minIcingFreezingLevelFt} ft`,
-              st: iceStatus,
-            },
-          ].map((item, idx) => (
-            <div
-              key={idx}
-              className="flex items-center justify-between px-2 py-1 rounded bg-slate-950/75 text-slate-200"
-            >
-              <span className="truncate pr-2">{item.label}</span>
-              <div className="flex items-center gap-2 shrink-0 tabular-nums">
-                <span className="text-white font-bold">{item.actual}</span>
-                <span className="text-slate-400 text-[10px]">({item.limit})</span>
-                <span
-                  className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
-                    item.st === 'GO'
-                      ? 'bg-emerald-500/25 text-emerald-300'
-                      : item.st === 'CAUTION'
-                      ? 'bg-amber-500/25 text-amber-300'
-                      : 'bg-rose-500/30 text-rose-300'
-                  }`}
-                >
-                  {item.st === 'GO' ? 'PASS' : item.st}
-                </span>
-              </div>
+                {isNightHour ? 'NIGHT LIMITS' : 'DAY LIMITS'}
+              </span>
+              <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-black/30">
+                {WEATHER_MODELS_META.find((m) => m.id === weatherModelId)?.shortName}
+              </span>
             </div>
-          ))}
-        </div>
+          </div>
+          <p className="text-xs opacity-95">{currentReason}</p>
 
-        {/* 1-Tap Launch Animated Streamlines on Radar Map */}
-        <div className="pt-1.5 border-t border-white/10 flex flex-wrap items-center gap-1.5">
-          <span className="text-[10px] font-mono uppercase opacity-80 flex items-center gap-1">
-            <CloudRainWind className="w-3 h-3" /> Map Streamlines:
-          </span>
-          {(
-            [
-              { id: 'go_nogo_matrix', label: 'Go/No-Go Matrix' },
-              { id: 'wind_950hpa', label: '950hPa (1,800ft) Wind' },
-              { id: 'wave_swell', label: 'Waves (Hs)' },
-              { id: 'freezing_icing', label: '0°C Icing' },
-            ] as Array<{ id: WeatherOverlayMode; label: string }>
-          ).map((btn) => (
-            <button
-              key={btn.id}
-              onClick={() => {
-                onChangeWeatherOverlayMode(btn.id);
-                onSwitchToMapWithOverlay(btn.id);
-              }}
-              className={`px-2 py-0.5 rounded text-[10px] font-mono transition-colors cursor-pointer ${
-                weatherOverlayMode === btn.id
-                  ? 'bg-cyan-400 text-slate-950 font-bold'
-                  : 'bg-slate-950/80 hover:bg-slate-900 text-cyan-300 border border-slate-700'
+          {/* FPSO Wind-Over-Deck Relative Sector Banner when vessel heading is entered */}
+          {windOverDeck && (
+            <div
+              className={`px-2.5 py-1.5 rounded text-[11px] font-mono flex items-center justify-between ${
+                windOverDeck.severity === 'AFT_TURBULENCE'
+                  ? 'bg-rose-950/70 text-rose-200 border border-rose-500/40'
+                  : windOverDeck.severity === 'CROSSWIND'
+                  ? 'bg-amber-950/60 text-amber-200 border border-amber-500/40'
+                  : 'bg-emerald-950/60 text-emerald-200 border border-emerald-500/40'
               }`}
             >
-              {btn.label}
-            </button>
-          ))}
-        </div>
-      </div>
+              <span>
+                FPSO Heading {String(customOverride?.vesselHeadingDeg).padStart(3, '0')}° · Wind{' '}
+                {String(windDirNow).padStart(3, '0')}°:
+              </span>
+              <strong>{windOverDeck.sectorLabel}</strong>
+            </div>
+          )}
 
-      {/* 4. 4-Model Ensemble Cross-Reference Table (Do ICON, ECMWF, GFS & GEM Agree?) */}
-      {activeHour && (
-        <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-white flex items-center gap-1.5">
-              <Layers className="w-3.5 h-3.5 text-amber-400" />
-              4-Model Agreement ({activeHour.dayNameShort} {activeHour.dateShort} ·{' '}
-              {activeHour.hourLabel} UTC)
-            </span>
-            <span className="text-[10px] font-mono text-emerald-400">
-              TAP MODEL TO SWITCH
-            </span>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse font-mono text-[11px]">
-              <thead>
-                <tr className="border-b border-slate-800 text-slate-400 text-[10px]">
-                  <th className="py-1.5 pr-2">Model</th>
-                  <th className="py-1.5 pr-2">10m Wind</th>
-                  <th className="py-1.5 pr-2">950hPa (1.8k ft)</th>
-                  <th className="py-1.5 pr-2">0°C Ice</th>
-                  <th className="py-1.5 text-right">{preset.id}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/70">
-                {WEATHER_MODELS_META.map((mod) => {
-                  const snap = activeHour.models[mod.id];
-                  const isActiveMod = weatherModelId === mod.id;
-                  return (
-                    <tr
-                      key={mod.id}
-                      onClick={() => onChangeWeatherModelId(mod.id)}
-                      className={`cursor-pointer transition-colors ${
-                        isActiveMod ? 'bg-slate-800/90' : 'hover:bg-slate-950/60'
-                      }`}
-                    >
-                      <td className="py-1.5 pr-2">
-                        <div className="font-bold text-white flex items-center gap-1">
-                          {isActiveMod && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                          )}
-                          {mod.shortName}
-                        </div>
-                        <div className="text-[9px] text-slate-400">{mod.resolution}</div>
-                      </td>
-                      <td className="py-1.5 pr-2 tabular-nums text-slate-200">
-                        {snap.windSpeed10mKts}G
-                        <span
-                          className={
-                            snap.windGust10mKts >= preset.cautionGustKts
-                              ? 'text-amber-400 font-bold'
-                              : 'text-white'
-                          }
-                        >
-                          {snap.windGust10mKts}
-                        </span>
-                        kt
-                      </td>
-                      <td className="py-1.5 pr-2 tabular-nums text-cyan-300">
-                        {snap.windSpeed950hPaKts}kt @ {snap.windDir950hPaDeg}°
-                      </td>
-                      <td className="py-1.5 pr-2 tabular-nums">
-                        <span
-                          className={
-                            snap.freezingLevelFt <= 3000
-                              ? 'text-purple-300 font-bold'
-                              : 'text-slate-300'
-                          }
-                        >
-                          {snap.freezingLevelFt.toLocaleString()}ft
-                        </span>
-                      </td>
-                      <td className="py-1.5 text-right">
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                            snap.status === 'GO'
-                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                              : snap.status === 'CAUTION'
-                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                              : 'bg-rose-500/25 text-rose-300 border border-rose-500/50'
-                          }`}
-                        >
-                          {snap.status}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* 5. Shore-to-Rig Flight Corridor Altitude Profile (10m | 950hPa | 850hPa + Headwind/Icing) */}
-      {corridorWaypoints.length > 0 && (
-        <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-white flex items-center gap-1.5">
-              <Navigation className="w-3.5 h-3.5 text-cyan-400" />
-              Route Corridor ({shoreBaseFacility.code} → {facility.code} ·{' '}
-              {activeHour?.dayNameShort} {activeHour?.hourLabel})
-            </span>
-            <span className="text-[10px] font-mono text-slate-400">
-              10m · 950hPa · 850hPa
-            </span>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2 font-mono text-[11px]">
-            {corridorWaypoints.map((wp, idx) => (
+          {/* 7-Row Operating Limits Pass/Fail Breakdown */}
+          <div className="grid grid-cols-1 gap-1 pt-1.5 border-t border-white/10 font-mono text-[11px]">
+            {[
+              {
+                label: '1. Helideck Wind & Gusts',
+                actual: `${activeModelSnapshot?.windSpeed10mKts ?? weather?.windSpeedKts ?? 0}G${gustVal} kt`,
+                limit: `Max ${maxGustLimit} kt`,
+                st: gustStatus,
+              },
+              {
+                label: isFpso
+                  ? '2. FPSO Sea State & Swell Period'
+                  : '2. Significant Wave Height (Hs)',
+                actual: `${waveVal} m (${wavePeriodVal}s${
+                  activeHour?.swellWaveHeightM ? ` · Swell ${activeHour.swellWaveHeightM}m` : ''
+                })`,
+                limit: isFpso ? `Max ${maxWaveLimit} m (<11s)` : 'Max 6.5 m',
+                st: waveStatus,
+              },
+              {
+                label: `3. Cloud Ceiling (${isNightHour ? 'Night' : 'Day'} ARA)`,
+                actual: `${ceilVal.toLocaleString()} ft`,
+                limit: `Min ${minCeilLimit} ft`,
+                st: ceilStatus,
+              },
+              {
+                label: `4. Horizontal Visibility (${isNightHour ? 'Night' : 'Day'})`,
+                actual: `${visVal} km`,
+                limit: `Min ${minVisLimit} km`,
+                st: visStatus,
+              },
+              {
+                label: '5. 0°C Rotor Icing Altitude',
+                actual: `${freezeVal.toLocaleString()} ft`,
+                limit: `Safe > ${preset.minIcingFreezingLevelFt} ft`,
+                st: iceStatus,
+              },
+              {
+                label: '6. Triggered & Natural Lightning',
+                actual: `${lightningRisk}${
+                  lightningType !== 'NONE' ? ` · ${lightningTypeLabel}` : ''
+                }${
+                  typeof activeModelSnapshot?.capeJkg === 'number'
+                    ? ` (${activeModelSnapshot.capeJkg} J/kg)`
+                    : ''
+                }`,
+                limit: 'No TS / Low-0°C CAPE',
+                st: lightningStatus,
+              },
+              {
+                label: '7. Sea Haar / Fog Dewpoint Spread',
+                actual: `T-Td ${dewSpreadVal}°C (${fogSpreadRisk})`,
+                limit: 'Safe > 2.2°C',
+                st: fogStatus,
+              },
+            ].map((item, idx) => (
               <div
                 key={idx}
-                className="p-2 rounded bg-slate-950 border border-slate-800 space-y-1"
+                className="flex items-center justify-between px-2 py-1 rounded bg-slate-950/75 text-slate-200"
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] text-cyan-400 font-bold truncate">
-                    {idx + 1}. {wp.distanceFromShoreNm} NM
-                  </span>
+                <span className="truncate pr-2">{item.label}</span>
+                <div className="flex items-center gap-2 shrink-0 tabular-nums">
+                  <span className="text-white font-bold">{item.actual}</span>
+                  <span className="text-slate-400 text-[10px]">({item.limit})</span>
                   <span
-                    className={`text-[9px] px-1 rounded font-bold ${
-                      wp.status === 'GO'
-                        ? 'text-emerald-400 bg-emerald-950'
-                        : wp.status === 'CAUTION'
-                        ? 'text-amber-400 bg-amber-950'
-                        : 'text-rose-400 bg-rose-950'
+                    className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                      item.st === 'GO'
+                        ? 'bg-emerald-500/25 text-emerald-300'
+                        : item.st === 'CAUTION'
+                        ? 'bg-amber-500/25 text-amber-300'
+                        : 'bg-rose-500/30 text-rose-300'
                     }`}
                   >
-                    {wp.status}
-                  </span>
-                </div>
-                <div className="text-[10px] text-white font-sans font-semibold truncate">
-                  {wp.label}
-                </div>
-                <div className="text-[10px] text-slate-300 tabular-nums">
-                  10m:{' '}
-                  <strong className="text-white">
-                    {wp.windSpeed10mKts}G{wp.windGust10mKts}kt
-                  </strong>
-                </div>
-                <div className="text-[10px] text-cyan-300 tabular-nums">
-                  950hPa: <strong>{wp.windSpeed950hPaKts}kt</strong> ({wp.windDir950hPaDeg}°)
-                </div>
-                <div className="text-[10px] text-slate-400 tabular-nums">
-                  850hPa: {wp.windSpeed850hPaKts}kt
-                </div>
-                <div className="text-[10px] pt-0.5 border-t border-slate-800/80 flex items-center justify-between">
-                  <span
-                    className={
-                      wp.headwind950Kts > 0 ? 'text-amber-300' : 'text-emerald-300'
-                    }
-                  >
-                    {wp.headwind950Kts >= 0
-                      ? `HW +${wp.headwind950Kts}kt`
-                      : `TW ${Math.abs(wp.headwind950Kts)}kt`}
-                  </span>
-                  <span
-                    className={
-                      wp.freezingLevelFt <= 2200
-                        ? 'text-rose-400 font-bold'
-                        : wp.freezingLevelFt <= 3200
-                        ? 'text-purple-300'
-                        : 'text-slate-400'
-                    }
-                  >
-                    0°C {wp.freezingLevelFt}ft
+                    {item.st === 'GO' ? 'PASS' : item.st}
                   </span>
                 </div>
               </div>
             ))}
           </div>
-        </div>
-      )}
 
-      {/* 6. Ventusky-Level Atmospheric & Marine Telemetry Grid */}
-      <div className="grid grid-cols-2 gap-2.5">
-        <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>10m Surface Wind</span>
-            <Wind className="w-3.5 h-3.5 text-cyan-400" />
-          </div>
-          <div className="text-xl font-mono font-bold tabular-nums text-white mt-1">
-            {activeModelSnapshot?.windSpeed10mKts ?? weather?.windSpeedKts ?? 0}{' '}
-            <span className="text-xs font-normal text-slate-400">G</span>{' '}
-            <span
-              className={
-                gustVal >= preset.cautionGustKts ? 'text-amber-400' : 'text-white'
-              }
-            >
-              {gustVal}
-            </span>{' '}
-            <span className="text-xs font-normal text-slate-400">KT</span>
-          </div>
-          <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
-            Dir{' '}
-            {String(
-              activeModelSnapshot?.windDir10mDeg ?? weather?.windDirectionDeg ?? 0
-            ).padStart(3, '0')}
-            ° · 950hPa {activeModelSnapshot?.windSpeed950hPaKts ?? 25}kt
-          </div>
-        </div>
-
-        <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>Significant Wave (Hs)</span>
-            <Waves className="w-3.5 h-3.5 text-cyan-400" />
-          </div>
-          <div className="text-xl font-mono font-bold tabular-nums text-white mt-1">
-            {waveVal} <span className="text-xs font-normal text-slate-400">m</span>
-          </div>
-          <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
-            Period {activeHour?.swellPeriodSec ?? weather?.swellPeriodSec ?? 7}s · SST{' '}
-            {activeHour?.seaSurfaceTempC ?? weather?.temperatureC ?? 9}°C
+          {/* 1-Tap Launch Animated Streamlines on Radar Map */}
+          <div className="pt-1.5 border-t border-white/10 flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] font-mono uppercase opacity-80 flex items-center gap-1">
+              <CloudRainWind className="w-3 h-3" /> Map Streamlines:
+            </span>
+            {(
+              [
+                { id: 'go_nogo_matrix', label: 'Go/No-Go Matrix' },
+                { id: 'wind_950hpa', label: '950hPa (1,800ft) Wind' },
+                { id: 'wave_swell', label: 'Waves (Hs)' },
+                { id: 'freezing_icing', label: '0°C Icing' },
+              ] as Array<{ id: WeatherOverlayMode; label: string }>
+            ).map((btn) => (
+              <button
+                key={btn.id}
+                onClick={() => {
+                  onChangeWeatherOverlayMode(btn.id);
+                  onSwitchToMapWithOverlay(btn.id);
+                }}
+                className={`px-2 py-0.5 rounded text-[10px] font-mono transition-colors cursor-pointer ${
+                  weatherOverlayMode === btn.id
+                    ? 'bg-cyan-400 text-slate-950 font-bold'
+                    : 'bg-slate-950/80 hover:bg-slate-900 text-cyan-300 border border-slate-700'
+                }`}
+              >
+                {btn.label}
+              </button>
+            ))}
           </div>
         </div>
 
-        <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>0°C Freezing & Temp</span>
-            <Snowflake className="w-3.5 h-3.5 text-purple-400" />
-          </div>
-          <div className="text-lg font-mono font-bold tabular-nums text-white mt-1">
-            {freezeVal.toLocaleString()}{' '}
-            <span className="text-xs font-normal text-slate-400">ft</span> ·{' '}
-            {activeModelSnapshot?.temp2mC ?? weather?.temperatureC ?? 8}°C
-          </div>
-          <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
-            950hPa Temp {activeModelSnapshot?.temp950hPaC ?? 4.0}°C · Precip{' '}
-            {precipVal}mm/h
-          </div>
-        </div>
-
-        <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
-          <div className="text-xs text-slate-400">Ceiling, Vis & QNH</div>
-          <div className="text-lg font-mono font-bold tabular-nums text-white mt-1">
-            {ceilVal.toLocaleString()}{' '}
-            <span className="text-xs font-normal text-slate-400">ft</span> · {visVal}{' '}
-            <span className="text-xs font-normal text-slate-400">km</span>
-          </div>
-          <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
-            QNH {activeModelSnapshot?.qnhHpa ?? weather?.pressureMslHpa ?? 1013} hPa · Elev{' '}
-            {facility.elevationFt}ft
-          </div>
-        </div>
-      </div>
-
-      {/* 7. Live Shore Base METAR / TAF & Fog / Haar Delay Predictor */}
-      {weather && (
-        <div className={`p-3 rounded-lg border ${delayColor} space-y-2`}>
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5 text-xs font-semibold">
-              <CloudFog className="w-4 h-4 text-cyan-400 shrink-0" />
-              <span>
-                SHORE BASE ({weather.shoreBaseIcao}) LIVE METAR:{' '}
-                <span
-                  className={
-                    weather.delayRiskLevel === 'HIGH'
-                      ? 'text-rose-400'
-                      : weather.delayRiskLevel === 'MODERATE'
-                      ? 'text-amber-400'
-                      : 'text-emerald-400'
-                  }
-                >
-                  {weather.delayRiskLevel} RISK
-                </span>
+        {/* 4. 4-Model Ensemble Cross-Reference Table */}
+        {activeHour && (
+          <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-white flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5 text-amber-400" />
+                4-Model Agreement ({activeHour.dayNameShort} {activeHour.dateShort} ·{' '}
+                {activeHour.hourLabel} UTC)
+              </span>
+              <span className="text-[10px] font-mono text-emerald-400">
+                TAP MODEL TO SWITCH
               </span>
             </div>
-            <span className="text-[11px] font-mono text-cyan-300">
-              CAT: {weather.flightCategory || 'VFR'}
-            </span>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse font-mono text-[11px]">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400 text-[10px]">
+                    <th className="py-1.5 pr-2">Model</th>
+                    <th className="py-1.5 pr-2">10m Wind</th>
+                    <th className="py-1.5 pr-2">950hPa (1.8k ft)</th>
+                    <th className="py-1.5 pr-2">0°C Ice</th>
+                    <th className="py-1.5 text-right">{preset.id}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/70">
+                  {WEATHER_MODELS_META.map((mod) => {
+                    const snap = activeHour.models[mod.id];
+                    const isActiveMod = weatherModelId === mod.id;
+                    const modEval = evaluateHourWithLimits(
+                      snap,
+                      activeHour.waveHeightM,
+                      activeHour.swellPeriodSec,
+                      isNightHour,
+                      isFpso,
+                      preset,
+                      flightOpsMode,
+                      customOverride
+                    );
+                    return (
+                      <tr
+                        key={mod.id}
+                        onClick={() => onChangeWeatherModelId(mod.id)}
+                        className={`cursor-pointer transition-colors ${
+                          isActiveMod ? 'bg-slate-800/90' : 'hover:bg-slate-950/60'
+                        }`}
+                      >
+                        <td className="py-1.5 pr-2">
+                          <div className="font-bold text-white flex items-center gap-1">
+                            {isActiveMod && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                            )}
+                            {mod.shortName}
+                          </div>
+                          <div className="text-[9px] text-slate-400">{mod.resolution}</div>
+                        </td>
+                        <td className="py-1.5 pr-2 tabular-nums text-slate-200">
+                          {snap.windSpeed10mKts}G
+                          <span
+                            className={
+                              snap.windGust10mKts >= cautionGustLimit
+                                ? 'text-amber-400 font-bold'
+                                : 'text-white'
+                            }
+                          >
+                            {snap.windGust10mKts}
+                          </span>
+                          kt
+                        </td>
+                        <td className="py-1.5 pr-2 tabular-nums text-cyan-300">
+                          {snap.windSpeed950hPaKts}kt @ {snap.windDir950hPaDeg}°
+                        </td>
+                        <td className="py-1.5 pr-2 tabular-nums">
+                          <span
+                            className={
+                              snap.freezingLevelFt <= 3000
+                                ? 'text-purple-300 font-bold'
+                                : 'text-slate-300'
+                            }
+                          >
+                            {snap.freezingLevelFt.toLocaleString()}ft
+                          </span>
+                        </td>
+                        <td className="py-1.5 text-right">
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                              modEval.status === 'GO'
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                                : modEval.status === 'CAUTION'
+                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                                : 'bg-rose-500/25 text-rose-300 border border-rose-500/50'
+                            }`}
+                          >
+                            {modEval.status}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
+        )}
 
-          <p className="text-xs text-slate-300 leading-relaxed">
-            {weather.delayRiskSummary}
-          </p>
-
-          {weather.rawMetar && (
-            <div className="pt-2 border-t border-slate-800/80 space-y-1">
-              <div className="text-[10px] font-mono text-slate-400">
-                OFFICIAL AIRPORT METAR ({weather.shoreBaseIcao}):
-              </div>
-              <div className="p-2 bg-slate-950 rounded border border-slate-800 font-mono text-[11px] text-cyan-300 break-words">
-                {weather.rawMetar}
+        {/* 5. Shore-to-Deck Combined Route Weather (Shore Base + En-Route + Rig) */}
+        {corridorWaypoints.length > 0 && (
+          <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-white flex items-center gap-1.5">
+                <Navigation className="w-3.5 h-3.5 text-cyan-400" />
+                Shore-to-Deck Route ({shoreBaseFacility.code} → {facility.code})
+              </span>
+              <div className="flex items-center gap-1.5">
+                <select
+                  aria-label="Select departure shore heliport for route check"
+                  value={shoreBaseFacility.code}
+                  onChange={(e) => onChangeShoreBaseCode(e.target.value)}
+                  className="bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-[10px] font-mono text-cyan-300 focus:outline-none focus:border-cyan-500"
+                >
+                  {availableShoreBases.map((base) => (
+                    <option key={base.id} value={base.code}>
+                      Base: {base.code} ({base.shortName.replace(/\s*\([^)]*\)/, '')})
+                    </option>
+                  ))}
+                </select>
+                <span
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold ${
+                    routeCombinedStatus === 'GO'
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      : routeCombinedStatus === 'CAUTION'
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                      : 'bg-rose-500/25 text-rose-300 border border-rose-500/50'
+                  }`}
+                >
+                  ROUTE: {routeCombinedStatus}
+                </span>
               </div>
             </div>
-          )}
-        </div>
-      )}
 
-      {/* Helideck Hardware Specs & Live Data Source Verification */}
-      <div className="p-3.5 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2 text-xs">
-        <div className="flex items-center justify-between">
-          <span className="font-semibold text-white flex items-center gap-1.5">
-            <Compass className="w-3.5 h-3.5 text-cyan-400" />
-            Meteorological Models & Helideck Specs
-          </span>
-          <span className="font-mono text-[10px] text-emerald-400">7-DAY GRIB FEEDS</span>
+            {limitingLeg && (
+              <div className="text-[11px] font-mono text-slate-300 bg-slate-950/70 px-2.5 py-1 rounded border border-slate-800/80 flex items-center justify-between">
+                <span>Limiting Route Leg ({activeHour?.dayNameShort} {activeHour?.hourLabel}):</span>
+                <strong
+                  className={
+                    routeCombinedStatus === 'HOLD'
+                      ? 'text-rose-300'
+                      : routeCombinedStatus === 'CAUTION'
+                      ? 'text-amber-300'
+                      : 'text-emerald-300'
+                  }
+                >
+                  {limitingLeg}
+                </strong>
+              </div>
+            )}
+
+            <div className="grid grid-cols-3 gap-2 font-mono text-[11px]">
+              {corridorWaypoints.map((wp, idx) => (
+                <div
+                  key={idx}
+                  className="p-2 rounded bg-slate-950 border border-slate-800 space-y-1"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-cyan-400 font-bold truncate">
+                      {idx + 1}. {wp.distanceFromShoreNm} NM
+                    </span>
+                    <span
+                      className={`text-[9px] px-1 rounded font-bold ${
+                        wp.status === 'GO'
+                          ? 'text-emerald-400 bg-emerald-950'
+                          : wp.status === 'CAUTION'
+                          ? 'text-amber-400 bg-amber-950'
+                          : 'text-rose-400 bg-rose-950'
+                      }`}
+                    >
+                      {wp.status}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-white font-sans font-semibold truncate">
+                    {wp.label}
+                  </div>
+                  <div className="text-[10px] text-slate-300 tabular-nums">
+                    10m:{' '}
+                    <strong className="text-white">
+                      {wp.windSpeed10mKts}G{wp.windGust10mKts}kt
+                    </strong>
+                  </div>
+                  <div className="text-[10px] text-cyan-300 tabular-nums">
+                    Ceil {wp.cloudCeilingFt}ft · Vis {wp.visibilityKm}km
+                  </div>
+                  <div className="text-[10px] text-slate-400 tabular-nums">
+                    950hPa {wp.windSpeed950hPaKts}kt ({wp.windDir950hPaDeg}°)
+                  </div>
+                  <div className="text-[10px] pt-0.5 border-t border-slate-800/80 flex items-center justify-between">
+                    <span
+                      className={
+                        wp.headwind950Kts > 0 ? 'text-amber-300' : 'text-emerald-300'
+                      }
+                    >
+                      {wp.headwind950Kts >= 0
+                        ? `HW +${wp.headwind950Kts}kt`
+                        : `TW ${Math.abs(wp.headwind950Kts)}kt`}
+                    </span>
+                    <span
+                      className={
+                        wp.freezingLevelFt <= 2200
+                          ? 'text-rose-400 font-bold'
+                          : wp.freezingLevelFt <= 3200
+                          ? 'text-purple-300'
+                          : 'text-slate-400'
+                      }
+                    >
+                      0°C {wp.freezingLevelFt}ft
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 6. Ventusky-Level Atmospheric & Marine Telemetry Grid */}
+        <div className="grid grid-cols-2 gap-2.5">
+          <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span>10m Surface Wind</span>
+              <Wind className="w-3.5 h-3.5 text-cyan-400" />
+            </div>
+            <div className="text-xl font-mono font-bold tabular-nums text-white mt-1">
+              {activeModelSnapshot?.windSpeed10mKts ?? weather?.windSpeedKts ?? 0}{' '}
+              <span className="text-xs font-normal text-slate-400">G</span>{' '}
+              <span
+                className={
+                  gustVal >= cautionGustLimit ? 'text-amber-400' : 'text-white'
+                }
+              >
+                {gustVal}
+              </span>{' '}
+              <span className="text-xs font-normal text-slate-400">KT</span>
+            </div>
+            <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
+              Dir {String(windDirNow).padStart(3, '0')}° · 950hPa{' '}
+              {activeModelSnapshot?.windSpeed950hPaKts ?? 25}kt
+            </div>
+          </div>
+
+          <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span>Significant Wave & Swell</span>
+              <Waves className="w-3.5 h-3.5 text-cyan-400" />
+            </div>
+            <div className="text-xl font-mono font-bold tabular-nums text-white mt-1">
+              {waveVal} <span className="text-xs font-normal text-slate-400">m</span>
+            </div>
+            <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
+              Period {wavePeriodVal}s ({activeHour?.swellDirDeg ?? 240}°) · SST{' '}
+              {activeHour?.seaSurfaceTempC ?? weather?.temperatureC ?? 9}°C
+            </div>
+          </div>
+
+          <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span>0°C Freezing & Temp/Dew</span>
+              <Snowflake className="w-3.5 h-3.5 text-purple-400" />
+            </div>
+            <div className="text-lg font-mono font-bold tabular-nums text-white mt-1">
+              {freezeVal.toLocaleString()}{' '}
+              <span className="text-xs font-normal text-slate-400">ft</span> ·{' '}
+              {activeModelSnapshot?.temp2mC ?? weather?.temperatureC ?? 8}°C
+            </div>
+            <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
+              Td {activeModelSnapshot?.dewPoint2mC ?? 5.5}°C (Spread {dewSpreadVal}°C) ·{' '}
+              {precipVal}mm/h
+            </div>
+          </div>
+
+          <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span>Ceiling, Vis & Convection</span>
+              <CloudLightning className="w-3.5 h-3.5 text-amber-400" />
+            </div>
+            <div className="text-lg font-mono font-bold tabular-nums text-white mt-1">
+              {ceilVal.toLocaleString()}{' '}
+              <span className="text-xs font-normal text-slate-400">ft</span> · {visVal}{' '}
+              <span className="text-xs font-normal text-slate-400">km</span>
+            </div>
+            <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
+              QNH {activeModelSnapshot?.qnhHpa ?? weather?.pressureMslHpa ?? 1013} hPa · CAPE{' '}
+              {activeModelSnapshot?.capeJkg ?? 0} J/kg
+            </div>
+          </div>
         </div>
 
-        <p className="text-[11px] text-slate-400 leading-relaxed">
-          <strong>Live Meteorological Sources:</strong> DWD <strong>ICON-EU</strong> (6.5 km),{' '}
-          <strong>ECMWF IFS</strong> (9 km Open Data), NOAA <strong>GFS</strong> (0.25°), ECCC{' '}
-          <strong>GEM</strong> (15 km), and WaveWatch III / Copernicus Marine queried live at{' '}
-          {facility.lat.toFixed(2)}°N, {facility.lon.toFixed(2)}°E.
-        </p>
-      </div>
+        {/* 7. Live Shore Base METAR & Official Airport TAF (24–30h Aviation Forecast) */}
+        {weather && (weather.rawMetar || weather.rawTaf || weather.delayRiskSummary) && (
+          <div className={`p-3 rounded-lg border ${delayColor} space-y-2.5`}>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs font-semibold">
+                <CloudFog className="w-4 h-4 text-cyan-400 shrink-0" />
+                <span>
+                  SHORE BASE ({weather.shoreBaseIcao}) METAR & TAF
+                  {weather.delayRiskLevel ? (
+                    <>
+                      :{' '}
+                      <span
+                        className={
+                          weather.delayRiskLevel === 'HIGH'
+                            ? 'text-rose-400'
+                            : weather.delayRiskLevel === 'MODERATE'
+                            ? 'text-amber-400'
+                            : 'text-emerald-400'
+                        }
+                      >
+                        {weather.delayRiskLevel} RISK
+                      </span>
+                    </>
+                  ) : null}
+                </span>
+              </div>
+              {weather.flightCategory && (
+                <span className="text-[11px] font-mono text-cyan-300">
+                  CAT: {weather.flightCategory}
+                </span>
+              )}
+            </div>
+
+            {weather.delayRiskSummary && (
+              <p className="text-xs text-slate-300 leading-relaxed">
+                {weather.delayRiskSummary}
+              </p>
+            )}
+
+            {weather.rawMetar && (
+              <div className="pt-2 border-t border-slate-800/80 space-y-1">
+                <div className="text-[10px] font-mono text-slate-400">
+                  OFFICIAL AIRPORT METAR ({weather.shoreBaseIcao}):
+                </div>
+                <div className="p-2 bg-slate-950 rounded border border-slate-800 font-mono text-[11px] text-cyan-300 break-words">
+                  {weather.rawMetar}
+                </div>
+              </div>
+            )}
+
+            {weather.rawTaf && (
+              <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-mono text-amber-300 font-semibold">
+                    OFFICIAL AIRPORT TAF — 24–30H AVIATION FORECAST ({weather.shoreBaseIcao}):
+                  </span>
+                </div>
+                {tafHighlights.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {tafHighlights.map((hl, i) => (
+                      <span
+                        key={i}
+                        className="px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/40 text-amber-200 font-mono text-[10px]"
+                      >
+                        {hl}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="p-2 bg-slate-950 rounded border border-slate-800 font-mono text-[11px] text-amber-200 break-words leading-relaxed">
+                  {weather.rawTaf}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Helideck Hardware Specs & Live Data Source Verification */}
+        <div className="p-3.5 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="font-semibold text-white flex items-center gap-1.5">
+              <Compass className="w-3.5 h-3.5 text-cyan-400" />
+              Meteorological Models & Helideck Specs
+            </span>
+            <span className="font-mono text-[10px] text-emerald-400">7-DAY GRIB FEEDS</span>
+          </div>
+
+          <p className="text-[11px] text-slate-400 leading-relaxed">
+            <strong>Live Sources:</strong> DWD <strong>ICON-EU</strong> (6.5 km),{' '}
+            <strong>ECMWF IFS</strong> (9 km Open Data), NOAA <strong>GFS</strong> (0.25°), ECCC{' '}
+            <strong>GEM</strong> (15 km), Copernicus Marine / WaveWatch III, and NOAA Aviation
+            Weather METAR/TAF queried live at {facility.lat.toFixed(2)}°N,{' '}
+            {facility.lon.toFixed(2)}°E. Always confirm with official HLO & pilot brief.
+          </p>
+        </div>
       </div>
     </div>
   );

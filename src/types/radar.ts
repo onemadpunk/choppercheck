@@ -181,6 +181,15 @@ export interface AirframeLimitPreset {
   maxFpsoWaveHeightM: number;
 }
 
+export type FlightOpsMode = '24h_ops' | 'daylight_only';
+
+export interface CustomRigOverride {
+  maxGustKts?: number;
+  maxWaveM?: number;
+  daylightOnlyDeck?: boolean;
+  vesselHeadingDeg?: number;
+}
+
 export interface ModelPointSnapshot {
   modelId: WeatherModelId;
   modelShortName: string;
@@ -198,6 +207,13 @@ export interface ModelPointSnapshot {
   visibilityKm: number;
   precipMmHr: number;
   temp2mC: number;
+  dewPoint2mC?: number;
+  dewSpreadC?: number;
+  capeJkg?: number;
+  wmoWeatherCode?: number;
+  lightningRisk?: 'LOW' | 'MODERATE' | 'HIGH';
+  lightningType?: 'NONE' | 'TRIGGERED_WINTER' | 'CONVECTIVE_SHOWER' | 'NATURAL_TS';
+  fogSpreadRisk?: 'LOW' | 'MODERATE' | 'HIGH';
   qnhHpa: number;
   status: 'GO' | 'CAUTION' | 'HOLD';
   statusReason: string;
@@ -211,9 +227,13 @@ export interface MultiModelHourEntry {
   dayNameShort: string;
   dayNameFull: string;
   dateShort: string;
+  isNight?: boolean;
   waveHeightM: number;
   swellPeriodSec: number;
   swellDirDeg: number;
+  swellWaveHeightM?: number;
+  swellWavePeriodSec?: number;
+  swellWaveDirDeg?: number;
   seaSurfaceTempC: number;
   models: Record<WeatherModelId, ModelPointSnapshot>;
 }
@@ -232,6 +252,8 @@ export interface DayFlightWindowSummary {
   goHoursCount: number;
   cautionHoursCount: number;
   holdHoursCount: number;
+  lightningHoursCount?: number;
+  hasLightningRisk?: boolean;
   primaryRiskReason: string;
 }
 
@@ -253,6 +275,9 @@ export interface CorridorWaypointProfile {
   cloudCeilingFt: number;
   visibilityKm: number;
   waveHeightM: number;
+  dewSpreadC?: number;
+  capeJkg?: number;
+  lightningRisk?: 'LOW' | 'MODERATE' | 'HIGH';
   status: 'GO' | 'CAUTION' | 'HOLD';
 }
 
@@ -295,6 +320,6 @@ export interface FlightAlertEvent {
   timestamp: string;
   callsign: string;
   typeFullName: string;
-  triggerType: 'AIRBORNE_LIFTOFF' | 'RING_25NM' | 'RING_10NM';
+  triggerType: 'AIRBORNE_LIFTOFF' | 'RING_25NM' | 'RING_10NM' | 'SAR_OR_7700';
   message: string;
 }

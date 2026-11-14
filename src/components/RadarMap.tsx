@@ -5,7 +5,9 @@ import { reported, positionLabel } from '../utils/dataQuality';
 import {
   AircraftTarget,
   AirframePresetId,
+  CustomRigOverride,
   FieldOperator,
+  FlightOpsMode,
   HelideckWeatherState,
   InstallationOrAirport,
   MultiModelHourEntry,
@@ -16,10 +18,15 @@ import {
 import { FIELD_OPERATOR_COLORS } from '../data/installationsAndAirports';
 import {
   AIRFRAME_PRESETS,
+  RainViewerRadarFrame,
   WEATHER_MODELS_META,
-  buildSevenDayFlightWindowSummaries,
+  fetchRainViewerRadarFrame,
   interpolateSpotWeatherAtLatLon,
 } from '../services/multiModelWeatherService';
+import {
+  buildContextAwareSevenDaySummaries,
+  evaluateHourWithLimits,
+} from '../utils/solarAndMetUtils';
 import { WeatherStreamlineCanvas } from './WeatherStreamlineCanvas';
 import {
   Building2,
@@ -74,6 +81,8 @@ interface RadarMapProps {
   hourlyForecast: MultiModelHourEntry[];
   selectedHourIdx: number;
   onChangeSelectedHourIdx: (idx: number) => void;
+  flightOpsMode: FlightOpsMode;
+  customOverride?: CustomRigOverride | null;
 }
 
 type MapStyleMode = 'dark_radar' | 'daylight_osm' | 'satellite' | 'nautical_ocean';
@@ -230,11 +239,14 @@ export const RadarMap: React.FC<RadarMapProps> = ({
   hourlyForecast,
   selectedHourIdx,
   onChangeSelectedHourIdx,
+  flightOpsMode,
+  customOverride,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const [mapInstance, setMapInstance] = useState<L.Map | null>(null);
   const baseTileLayerRef = useRef<L.TileLayer | null>(null);
+  const rainTileLayerRef = useRef<L.TileLayer | null>(null);
   const aircraftAttributionRef = useRef<string>('');
   const aircraftLayerRef = useRef<L.LayerGroup | null>(null);
   const facilityLayerRef = useRef<L.LayerGroup | null>(null);
@@ -242,19 +254,43 @@ export const RadarMap: React.FC<RadarMapProps> = ({
   const trailLayerRef = useRef<L.LayerGroup | null>(null);
 
   const [mapStyle, setMapStyle] = useState<MapStyleMode>('dark_radar');
+  const [showRainRadar, setShowRainRadar] = useState<boolean>(false);
+  const [rainFrame, setRainFrame] = useState<RainViewerRadarFrame | null>(null);
   const [currentZoom, setCurrentZoom] = useState<number>(mapViewTarget.zoom);
   const [cursorCoords, setCursorCoords] = useState<{ lat: number; lon: number }>({
     lat: activeFacility.lat,
     lon: activeFacility.lon,
   });
 
+  const isFpso = activeFacility.assetType === 'FPSO' || activeFacility.assetType === 'Semi-Sub';
   const activePreset = AIRFRAME_PRESETS[airframePresetId];
   const daySummaries = useMemo(
-    () => buildSevenDayFlightWindowSummaries(hourlyForecast, weatherModelId),
-    [hourlyForecast, weatherModelId]
+    () =>
+      buildContextAwareSevenDaySummaries(
+        hourlyForecast,
+        weatherModelId,
+        activePreset,
+        isFpso,
+        flightOpsMode,
+        customOverride
+      ),
+    [hourlyForecast, weatherModelId, activePreset, isFpso, flightOpsMode, customOverride]
   );
   const activeHour = hourlyForecast[selectedHourIdx] || hourlyForecast[0];
   const activeHourSnap = activeHour?.models[weatherModelId];
+  const activeHourEval = useMemo(() => {
+    if (!activeHour || !activeHourSnap) return null;
+    return evaluateHourWithLimits(
+      activeHourSnap,
+      activeHour.waveHeightM,
+      activeHour.swellPeriodSec,
+      Boolean(activeHour.isNight),
+      isFpso,
+      activePreset,
+      flightOpsMode,
+      customOverride
+    );
+  }, [activeHour, activeHourSnap, isFpso, activePreset, flightOpsMode, customOverride]);
 
   // Live Ventusky-style spot-check readout at cursor / tap coordinate
   const spotWeather = useMemo(
@@ -395,6 +431,48 @@ export const RadarMap: React.FC<RadarMapProps> = ({
     newTileLayer.bringToBack();
     baseTileLayerRef.current = newTileLayer;
   }, [mapStyle]);
+
+  // Fetch & Render Live RainViewer Precipitation Radar Overlay when enabled
+  useEffect(() => {
+    if (!showRainRadar) {
+      if (rainTileLayerRef.current && mapRef.current) {
+        mapRef.current.removeLayer(rainTileLayerRef.current);
+        rainTileLayerRef.current = null;
+      }
+      return;
+    }
+
+    let cancelled = false;
+    const loadFrame = async () => {
+      const frame = await fetchRainViewerRadarFrame();
+      if (!cancelled) setRainFrame(frame);
+    };
+    void loadFrame();
+    const timer = setInterval(() => void loadFrame(), 5 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [showRainRadar]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (rainTileLayerRef.current) {
+      map.removeLayer(rainTileLayerRef.current);
+      rainTileLayerRef.current = null;
+    }
+    if (!showRainRadar || !rainFrame) return;
+    const layer = L.tileLayer(rainFrame.tileUrlTemplate, {
+      attribution: 'Rain: <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a>',
+      maxNativeZoom: 7,
+      maxZoom: 18,
+      opacity: 0.65,
+      zIndex: 250,
+    });
+    layer.addTo(map);
+    rainTileLayerRef.current = layer;
+  }, [showRainRadar, rainFrame, mapInstance]);
 
   // Pan/zoom when mapViewTarget.seq updates
   useEffect(() => {
@@ -564,6 +642,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       : 'Daylight Map';
 
   const hudStatus =
+    activeHourEval?.status ||
     activeHourSnap?.status ||
     (weather?.cap437Status && weather.cap437Status !== 'UNAVAILABLE'
       ? weather.cap437Status
@@ -847,6 +926,17 @@ export const RadarMap: React.FC<RadarMapProps> = ({
                 {m.label}
               </button>
             ))}
+            <button
+              onClick={() => setShowRainRadar((prev) => !prev)}
+              title="Toggle live RainViewer precipitation & squall radar tiles"
+              className={`px-2 py-0.5 rounded text-[10px] font-mono whitespace-nowrap transition-colors cursor-pointer ${
+                showRainRadar
+                  ? 'bg-sky-400 text-slate-950 font-bold'
+                  : 'bg-slate-900 hover:bg-slate-800 text-sky-300 border border-sky-500/40'
+              }`}
+            >
+              {showRainRadar && rainFrame ? `Rain Radar (${rainFrame.frameTimeIso}Z)` : 'Rain Radar'}
+            </button>
           </div>
         </div>
 

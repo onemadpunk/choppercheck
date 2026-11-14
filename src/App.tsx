@@ -3,8 +3,10 @@ import {
   AircraftTarget,
   AirframePresetId,
   CorridorWaypointProfile,
+  CustomRigOverride,
   FieldOperator,
   FlightAlertEvent,
+  FlightOpsMode,
   HelideckWeatherState,
   HelicopterOperator,
   InstallationOrAirport,
@@ -258,6 +260,32 @@ export default function App() {
   const [selectedHourIdx, setSelectedHourIdx] = useState<number>(0);
   const [corridorWaypoints, setCorridorWaypoints] = useState<CorridorWaypointProfile[]>([]);
   const [ensembleLoading, setEnsembleLoading] = useState<boolean>(false);
+  const [flightOpsMode, setFlightOpsMode] = useState<FlightOpsMode>(() => {
+    try {
+      const saved = localStorage.getItem('choppercheck_flight_ops_mode');
+      return saved === 'daylight_only' ? 'daylight_only' : '24h_ops';
+    } catch {
+      return '24h_ops';
+    }
+  });
+  const [customRigOverrides, setCustomRigOverrides] = useState<
+    Record<string, CustomRigOverride>
+  >(() => {
+    try {
+      const raw = localStorage.getItem('choppercheck_rig_overrides');
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
+  const [shoreBaseOverrides, setShoreBaseOverrides] = useState<Record<string, string>>(() => {
+    try {
+      const raw = localStorage.getItem('choppercheck_shore_base_overrides');
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
 
   // Modals: Install help and GPS aircraft compass
   const [showInstallModal, setShowInstallModal] = useState<boolean>(false);
@@ -374,6 +402,21 @@ export default function App() {
             ' NM proximity ring around ' +
             activeFacility.shortName +
             '. Destination is not confirmed.';
+        } else if (
+          (f.squawk === '7700' || f.category === 'coastguard_sar') &&
+          f.distanceFromRefNm <= 40 &&
+          !firedAlertKeysRef.current.has(f.hex + '_' + activeFacility.id + '_SAR7700')
+        ) {
+          type = 'SAR_OR_7700';
+          key = f.hex + '_' + activeFacility.id + '_SAR7700';
+          message =
+            (f.squawk === '7700' ? 'EMERGENCY SQUAWK 7700: ' : 'COASTGUARD SAR IN SECTOR: ') +
+            f.callsign +
+            ' (' +
+            f.distanceFromRefNm +
+            ' NM from ' +
+            activeFacility.code +
+            ').';
         }
       }
       if (!key || firedAlertKeysRef.current.has(key)) continue;
@@ -386,7 +429,7 @@ export default function App() {
         triggerType: type,
         message,
       });
-      playCockpitAlertChime(type === 'RING_10NM');
+      playCockpitAlertChime(type === 'RING_10NM' || type === 'SAR_OR_7700');
       triggerBrowserNotification('ChopperCheck: ' + f.callsign, message);
     }
     const present = new Set(flights.map((f) => f.hex));
@@ -395,14 +438,79 @@ export default function App() {
     }
   }, [flights, alertsEnabled, pinnedFlightHex, activeFacility]);
 
+  const availableShoreBases = useMemo(
+    () =>
+      facilities.filter(
+        (f) =>
+          f.assetType === 'UK Airport' ||
+          f.assetType === 'Shore Heliport' ||
+          f.assetType === 'SAR Base' ||
+          f.assetType === 'Norwegian Hub'
+      ),
+    [facilities]
+  );
+
   const shoreBaseFacility = useMemo(() => {
-    const baseCode = activeFacility.primaryShoreBase || 'EGPD';
+    const baseCode =
+      shoreBaseOverrides[activeFacility.id] || activeFacility.primaryShoreBase || 'EGPD';
     return (
       facilities.find((f) => f.code.toUpperCase() === baseCode.toUpperCase()) ||
       facilities.find((f) => f.code === 'EGPD') ||
       facilities[0]
     );
-  }, [facilities, activeFacility.primaryShoreBase]);
+  }, [facilities, activeFacility.id, activeFacility.primaryShoreBase, shoreBaseOverrides]);
+
+  const activeRigOverride = customRigOverrides[activeFacility.id] || null;
+
+  const handleChangeFlightOpsMode = useCallback((mode: FlightOpsMode) => {
+    setFlightOpsMode(mode);
+    try {
+      localStorage.setItem('choppercheck_flight_ops_mode', mode);
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  const handleChangeActiveRigOverride = useCallback(
+    (override: CustomRigOverride | null) => {
+      setCustomRigOverrides((prev) => {
+        const next = { ...prev };
+        if (
+          !override ||
+          (!override.maxGustKts &&
+            !override.maxWaveM &&
+            !override.daylightOnlyDeck &&
+            typeof override.vesselHeadingDeg !== 'number')
+        ) {
+          delete next[activeFacility.id];
+        } else {
+          next[activeFacility.id] = override;
+        }
+        try {
+          localStorage.setItem('choppercheck_rig_overrides', JSON.stringify(next));
+        } catch {
+          // ignore storage errors
+        }
+        return next;
+      });
+    },
+    [activeFacility.id]
+  );
+
+  const handleChangeShoreBaseCode = useCallback(
+    (code: string) => {
+      setShoreBaseOverrides((prev) => {
+        const next = { ...prev, [activeFacility.id]: code };
+        try {
+          localStorage.setItem('choppercheck_shore_base_overrides', JSON.stringify(next));
+        } catch {
+          // ignore storage errors
+        }
+        return next;
+      });
+    },
+    [activeFacility.id]
+  );
 
   const activePreset = useMemo(() => AIRFRAME_PRESETS[airframePresetId], [airframePresetId]);
   const selectedHourIso = hourlyForecast[selectedHourIdx]?.hourIso;
@@ -1111,6 +1219,8 @@ export default function App() {
             hourlyForecast={hourlyForecast}
             selectedHourIdx={selectedHourIdx}
             onChangeSelectedHourIdx={setSelectedHourIdx}
+            flightOpsMode={flightOpsMode}
+            customOverride={activeRigOverride}
           />
 
           {/* Floating Selected Aircraft Card on Desktop/Mobile so it never crushes the Weather Dock */}
@@ -1230,6 +1340,8 @@ export default function App() {
                 <HelideckWeatherPanel
                   facility={activeFacility}
                   shoreBaseFacility={shoreBaseFacility}
+                  availableShoreBases={availableShoreBases}
+                  onChangeShoreBaseCode={handleChangeShoreBaseCode}
                   weather={weather}
                   loading={weatherLoading}
                   onRefresh={loadWeather}
@@ -1248,6 +1360,10 @@ export default function App() {
                   onChangeSelectedHourIdx={setSelectedHourIdx}
                   corridorWaypoints={corridorWaypoints}
                   ensembleLoading={ensembleLoading}
+                  flightOpsMode={flightOpsMode}
+                  onChangeFlightOpsMode={handleChangeFlightOpsMode}
+                  customOverride={activeRigOverride}
+                  onChangeCustomOverride={handleChangeActiveRigOverride}
                   isFullScreen={activeTab === 'weather'}
                   onToggleFullScreen={() =>
                     setActiveTab((prev) => (prev === 'weather' ? 'radar' : 'weather'))

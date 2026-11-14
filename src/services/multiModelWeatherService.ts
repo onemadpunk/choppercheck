@@ -10,6 +10,7 @@ import {
   WeatherModelId,
 } from '../types/radar';
 import { calculateBearingDeg, calculateDistanceNm } from '../data/aircraftDecoder';
+import { computeSolarTimesUtc, isCaaNightForHour } from '../utils/solarAndMetUtils';
 
 export const AIRFRAME_PRESETS: Record<AirframePresetId, AirframeLimitPreset> = {
   S92: {
@@ -397,6 +398,8 @@ export async function fetchMultiModelRigForecast(
     'temperature_2m',
     'dew_point_2m',
     'surface_pressure',
+    'cape',
+    'weather_code',
   ].join(',');
 
   const modelsParam = 'icon_seamless,gfs_seamless,ecmwf_ifs025,gem_seamless';
@@ -410,7 +413,7 @@ export async function fetchMultiModelRigForecast(
     3
   )}&longitude=${facility.lon.toFixed(
     3
-  )}&hourly=wave_height,wave_period,wave_direction,sea_surface_temperature&forecast_days=7`;
+  )}&hourly=wave_height,wave_period,wave_direction,swell_wave_height,swell_wave_period,swell_wave_direction,sea_surface_temperature&forecast_days=7`;
 
   try {
     const [wxRes, marRes] = await Promise.allSettled([fetch(wxUrl), fetch(marineUrl)]);
@@ -434,6 +437,46 @@ export async function fetchMultiModelRigForecast(
 
     const todayDateKey = times[startIdx]?.split('T')[0] || '';
     const entries: MultiModelHourEntry[] = [];
+    const solarCache = new Map<string, ReturnType<typeof computeSolarTimesUtc>>();
+
+    const classifyConvection = (
+      cape: number | null,
+      wmo: number | null,
+      precip: number,
+      freezeFt: number
+    ): {
+      risk: 'LOW' | 'MODERATE' | 'HIGH';
+      type: 'NONE' | 'TRIGGERED_WINTER' | 'CONVECTIVE_SHOWER' | 'NATURAL_TS';
+    } => {
+      if (wmo !== null && [95, 96, 99].includes(wmo)) {
+        return { risk: 'HIGH', type: 'NATURAL_TS' };
+      }
+      if (cape !== null && cape >= 500) {
+        return { risk: 'HIGH', type: 'NATURAL_TS' };
+      }
+      const isShowerWmo = wmo !== null && [80, 81, 82, 85, 86].includes(wmo);
+      // Classic North Sea winter triggered-lightning setup: cold unstable air (0°C <= 2800-3200 ft) + convective showers + CAPE
+      if (freezeFt <= 2800 && cape !== null && cape >= 200 && (isShowerWmo || precip >= 1.0)) {
+        return { risk: 'HIGH', type: 'TRIGGERED_WINTER' };
+      }
+      if (freezeFt <= 3200 && (isShowerWmo || (cape !== null && cape >= 150))) {
+        return { risk: 'MODERATE', type: 'TRIGGERED_WINTER' };
+      }
+      if (isShowerWmo || (cape !== null && cape >= 300) || precip >= 4.0) {
+        return { risk: 'MODERATE', type: 'CONVECTIVE_SHOWER' };
+      }
+      return { risk: 'LOW', type: 'NONE' };
+    };
+
+    const classifyFogSpread = (
+      spreadC: number,
+      visKm: number,
+      lowCloudPct: number
+    ): 'LOW' | 'MODERATE' | 'HIGH' => {
+      if (visKm < 1.5 || (spreadC <= 1.2 && lowCloudPct >= 65)) return 'HIGH';
+      if (visKm < 4.0 || spreadC <= 2.2) return 'MODERATE';
+      return 'LOW';
+    };
 
     for (let idx = startIdx; idx < times.length; idx++) {
       const iso = times[idx];
@@ -441,6 +484,13 @@ export async function fetchMultiModelRigForecast(
       const hourLabel = timePart?.slice(0, 5) || '00:00';
 
       const dt = new Date(iso + 'Z');
+      let solar = solarCache.get(dayKey);
+      if (!solar) {
+        solar = computeSolarTimesUtc(facility.lat, facility.lon, dt);
+        solarCache.set(dayKey, solar);
+      }
+      const isNight = isCaaNightForHour(iso, solar);
+
       const isToday = dayKey === todayDateKey;
       const dayNameShort = isToday ? 'Today' : SHORT_DAYS[dt.getUTCDay()];
       const dayNameFull = isToday
@@ -451,6 +501,18 @@ export async function fetchMultiModelRigForecast(
       const waveHeightM = Number((marHourly.wave_height?.[idx] ?? 2.1).toFixed(1));
       const swellPeriodSec = Number((marHourly.wave_period?.[idx] ?? 8.2).toFixed(1));
       const swellDirDeg = Math.round(marHourly.wave_direction?.[idx] ?? 240);
+      const swellWaveHeightM =
+        typeof marHourly.swell_wave_height?.[idx] === 'number'
+          ? Number(marHourly.swell_wave_height[idx].toFixed(1))
+          : undefined;
+      const swellWavePeriodSec =
+        typeof marHourly.swell_wave_period?.[idx] === 'number'
+          ? Number(marHourly.swell_wave_period[idx].toFixed(1))
+          : undefined;
+      const swellWaveDirDeg =
+        typeof marHourly.swell_wave_direction?.[idx] === 'number'
+          ? Math.round(marHourly.swell_wave_direction[idx])
+          : undefined;
       const seaSurfaceTempC = Number(
         (marHourly.sea_surface_temperature?.[idx] ?? 9.8).toFixed(1)
       );
@@ -493,6 +555,7 @@ export async function fetchMultiModelRigForecast(
 
         const temp2mC = Number((rawVal('temperature_2m') ?? 8.5).toFixed(1));
         const dewPoint2mC = Number((rawVal('dew_point_2m') ?? temp2mC - 2.5).toFixed(1));
+        const dewSpreadC = Number(Math.max(0, temp2mC - dewPoint2mC).toFixed(1));
         const t925 = rawVal('temperature_925hPa') ?? t950;
         const z925 = rawVal('geopotential_height_925hPa') ?? 720;
         const t850 = rawVal('temperature_850hPa') ?? t925 - 4.0;
@@ -510,6 +573,8 @@ export async function fetchMultiModelRigForecast(
         const lowCloudPct = rawVal('cloud_cover_low') ?? 45;
         const precipMmHr = Number((rawVal('precipitation') ?? 0).toFixed(1));
         const qnhHpa = Math.round(rawVal('surface_pressure') ?? 1010);
+        const capeVal = rawVal('cape');
+        const wmoCode = rawVal('weather_code');
 
         // Visibility: direct from model (ICON/GFS) or derived from physical RH / precipitation / mist when not in ECMWF/GEM surface table
         const directVisMeters = rawVal('visibility');
@@ -519,12 +584,11 @@ export async function fetchMultiModelRigForecast(
             Math.min(50, Math.max(0.2, directVisMeters / 1000)).toFixed(1)
           );
         } else {
-          const spread = Math.max(0, temp2mC - dewPoint2mC);
-          if (spread <= 0.6 && lowCloudPct >= 85) visibilityKm = 0.8;
-          else if (spread <= 1.2) visibilityKm = 3.5;
+          if (dewSpreadC <= 0.6 && lowCloudPct >= 85) visibilityKm = 0.8;
+          else if (dewSpreadC <= 1.2) visibilityKm = 3.5;
           else if (precipMmHr >= 2.0) visibilityKm = 4.5;
           else if (precipMmHr > 0.2) visibilityKm = 9.0;
-          else visibilityKm = Number(Math.min(35, 12 + spread * 4).toFixed(1));
+          else visibilityKm = Number(Math.min(35, 12 + dewSpreadC * 4).toFixed(1));
         }
 
         const cloudCeilingFt = computePhysicalCloudCeilingFt(
@@ -533,6 +597,11 @@ export async function fetchMultiModelRigForecast(
           lowCloudPct,
           visibilityKm
         );
+
+        const conv = classifyConvection(capeVal, wmoCode, precipMmHr, freezingLevelFt);
+        const lightningRisk = conv.risk;
+        const lightningType = conv.type;
+        const fogSpreadRisk = classifyFogSpread(dewSpreadC, visibilityKm, lowCloudPct);
 
         const evalResult = evaluateAirframeLimits(
           ws10,
@@ -563,6 +632,13 @@ export async function fetchMultiModelRigForecast(
           visibilityKm,
           precipMmHr,
           temp2mC,
+          dewPoint2mC,
+          dewSpreadC,
+          capeJkg: capeVal !== null ? Math.round(capeVal) : undefined,
+          wmoWeatherCode: wmoCode !== null ? Math.round(wmoCode) : undefined,
+          lightningRisk,
+          lightningType,
+          fogSpreadRisk,
           qnhHpa,
           status: evalResult.status,
           statusReason: evalResult.reason,
@@ -577,9 +653,13 @@ export async function fetchMultiModelRigForecast(
         dayNameShort,
         dayNameFull,
         dateShort,
+        isNight,
         waveHeightM,
         swellPeriodSec,
         swellDirDeg,
+        swellWaveHeightM,
+        swellWavePeriodSec,
+        swellWaveDirDeg,
         seaSurfaceTempC,
         models: modelsRecord,
       });
@@ -747,7 +827,7 @@ export async function fetchFlightCorridorProfile(
     const lats = points.map((p) => p.lat.toFixed(3)).join(',');
     const lons = points.map((p) => p.lon.toFixed(3)).join(',');
 
-    const wxUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,wind_speed_950hPa,wind_direction_950hPa,wind_speed_925hPa,wind_direction_925hPa,temperature_925hPa,geopotential_height_925hPa,wind_speed_850hPa,wind_direction_850hPa,temperature_850hPa,geopotential_height_850hPa,temperature_2m,dew_point_2m,cloud_cover_low,visibility,freezing_level_height,precipitation&wind_speed_unit=kn&forecast_days=7`;
+    const wxUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,wind_speed_950hPa,wind_direction_950hPa,wind_speed_925hPa,wind_direction_925hPa,temperature_925hPa,geopotential_height_925hPa,wind_speed_850hPa,wind_direction_850hPa,temperature_850hPa,geopotential_height_850hPa,temperature_2m,dew_point_2m,cloud_cover_low,visibility,freezing_level_height,precipitation,cape,weather_code&wind_speed_unit=kn&forecast_days=7`;
     const marUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${lats}&longitude=${lons}&hourly=wave_height&forecast_days=7`;
 
     try {
@@ -837,6 +917,15 @@ export async function fetchFlightCorridorProfile(
     const cloudCeilingFt = computePhysicalCloudCeilingFt(t2m, dp2m, lowCloud, visKm);
     const waveHeightM = Number(Number(m?.hourly?.wave_height?.[hrIdx] ?? 2.0).toFixed(1));
     const precip = Number(w?.hourly?.precipitation?.[hrIdx] ?? 0);
+    const capeVal = typeof w?.hourly?.cape?.[hrIdx] === 'number' ? Number(w.hourly.cape[hrIdx]) : 0;
+    const wmoCode = typeof w?.hourly?.weather_code?.[hrIdx] === 'number' ? Number(w.hourly.weather_code[hrIdx]) : 0;
+    const dewSpreadC = Number(Math.max(0, t2m - dp2m).toFixed(1));
+    const lightningRisk: 'LOW' | 'MODERATE' | 'HIGH' =
+      [95, 96, 99].includes(wmoCode) || capeVal >= 600
+        ? 'HIGH'
+        : [80, 81, 82, 85, 86].includes(wmoCode) || capeVal >= 300
+        ? 'MODERATE'
+        : 'LOW';
 
     const evalLim = evaluateAirframeLimits(
       ws10,
@@ -849,6 +938,13 @@ export async function fetchFlightCorridorProfile(
       pt.isFpso,
       preset
     );
+
+    const effectiveStatus: 'GO' | 'CAUTION' | 'HOLD' =
+      lightningRisk === 'HIGH'
+        ? 'HOLD'
+        : lightningRisk === 'MODERATE' && evalLim.status === 'GO'
+        ? 'CAUTION'
+        : evalLim.status;
 
     return {
       label: pt.label,
@@ -868,7 +964,10 @@ export async function fetchFlightCorridorProfile(
       cloudCeilingFt,
       visibilityKm: visKm,
       waveHeightM,
-      status: evalLim.status,
+      dewSpreadC,
+      capeJkg: Math.round(capeVal),
+      lightningRisk,
+      status: effectiveStatus,
     };
   });
 }
@@ -1022,4 +1121,33 @@ export async function fetchSpatialWeatherGrid(
       seaSurfaceTempC,
     };
   });
+}
+
+export interface RainViewerRadarFrame {
+  tileUrlTemplate: string;
+  frameTimeIso: string;
+}
+
+/**
+ * Fetches the latest genuine live precipitation radar tile URL from RainViewer (free, CORS-enabled).
+ */
+export async function fetchRainViewerRadarFrame(): Promise<RainViewerRadarFrame | null> {
+  try {
+    const res = await fetch('https://api.rainviewer.com/public/weather-maps.json', {
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    const past = Array.isArray(json?.radar?.past) ? json.radar.past : [];
+    const latest = past[past.length - 1];
+    if (!json?.host || !latest?.path) return null;
+    return {
+      tileUrlTemplate: `${json.host}${latest.path}/256/{z}/{x}/{y}/2/1_1.png`,
+      frameTimeIso: new Date((latest.time || Math.floor(Date.now() / 1000)) * 1000)
+        .toISOString()
+        .slice(11, 16),
+    };
+  } catch {
+    return null;
+  }
 }
