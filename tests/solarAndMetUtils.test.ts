@@ -19,6 +19,7 @@ import {
   computeMinus10IsothermFt,
   WEATHER_MODELS_META,
 } from '../src/services/multiModelWeatherService.ts';
+import { resolveHeliAdminStopCode } from '../src/data/installationsAndAirports.ts';
 
 test('Glen Lyon winter daylight window is much shorter than summer daylight', () => {
   const winter = computeSolarTimesUtc(60.3589, -4.0652, new Date('2026-11-14T12:00:00Z'));
@@ -195,4 +196,27 @@ test('Deck-height wind, FPSO long-swell risk, runway crosswind, WMO sea-state an
   assert.equal(consensus.goCount, 4);
   assert.equal(consensus.holdCount, 1);
   assert.ok(consensus.dissentingModels.some((d) => d.includes('UKMO UKV')));
+});
+
+test('Blackpool EGNH, Irish Sea, Southern North Sea & UK SAR bases resolve and compute runway winds', () => {
+  const blkRwy = computeBestRunwayWind('EGNH', 275, 22, 31);
+  assert.ok(blkRwy);
+  assert.equal(blkRwy.runwayLabel, 'RWY 28');
+  assert.equal(blkRwy.headwindKts, 22);
+  assert.equal(blkRwy.crosswindKts, 0);
+
+  const iomRwy = computeBestRunwayWind('EGNS', 260, 20, 28);
+  assert.ok(iomRwy);
+  assert.equal(iomRwy.runwayLabel, 'RWY 26');
+
+  const cpc1 = resolveHeliAdminStopCode('CPC1');
+  assert.equal(cpc1?.primaryShoreBase, 'EGNH');
+  assert.equal(cpc1?.sector, 'irish_sea');
+
+  const clip = resolveHeliAdminStopCode('CLIP');
+  assert.equal(clip?.primaryShoreBase, 'EGSH');
+  assert.equal(clip?.sector, 'southern_north_sea');
+
+  const caernarfon = resolveHeliAdminStopCode('EGCK');
+  assert.equal(caernarfon?.assetType, 'SAR Base');
 });

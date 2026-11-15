@@ -838,6 +838,40 @@ export const SHORE_AIRPORT_RUNWAYS: Record<
   ],
   EGSH: [{ name: '09/27', hdg1: 90, hdg2: 270 }],
   EGNJ: [{ name: '02/20', hdg1: 24, hdg2: 204 }],
+  EGNH: [
+    { name: '10/28', hdg1: 95, hdg2: 275 },
+    { name: '13/31', hdg1: 127, hdg2: 307 },
+  ],
+  EGNS: [
+    { name: '08/26', hdg1: 79, hdg2: 259 },
+    { name: '03/21', hdg1: 29, hdg2: 209 },
+  ],
+  EGGP: [{ name: '09/27', hdg1: 86, hdg2: 266 }],
+  EGCC: [{ name: '05L/23R', hdg1: 51, hdg2: 231 }],
+  EGPK: [
+    { name: '12/30', hdg1: 121, hdg2: 301 },
+    { name: '02/20', hdg1: 24, hdg2: 204 },
+  ],
+  EGPE: [
+    { name: '05/23', hdg1: 49, hdg2: 229 },
+    { name: '11/29', hdg1: 110, hdg2: 290 },
+  ],
+  EGNV: [{ name: '05/23', hdg1: 48, hdg2: 228 }],
+  EGNT: [{ name: '07/25', hdg1: 65, hdg2: 245 }],
+  EGAA: [
+    { name: '07/25', hdg1: 65, hdg2: 245 },
+    { name: '17/35', hdg1: 162, hdg2: 342 },
+  ],
+  EGAC: [{ name: '04/22', hdg1: 35, hdg2: 215 }],
+  EGCK: [
+    { name: '07/25', hdg1: 71, hdg2: 251 },
+    { name: '02/20', hdg1: 13, hdg2: 193 },
+  ],
+  EGHQ: [{ name: '12/30', hdg1: 117, hdg2: 297 }],
+  EGDX: [{ name: '07/25', hdg1: 70, hdg2: 250 }],
+  EGMD: [{ name: '03/21', hdg1: 31, hdg2: 211 }],
+  EGHF: [{ name: '05/23', hdg1: 45, hdg2: 225 }],
+  EGSM: [{ name: '09/27', hdg1: 93, hdg2: 273 }],
   EGPO: [
     { name: '18/36', hdg1: 178, hdg2: 358 },
     { name: '06/24', hdg1: 64, hdg2: 244 },

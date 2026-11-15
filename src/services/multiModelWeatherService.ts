@@ -1106,7 +1106,7 @@ export async function fetchSpatialWeatherGrid(
   modelId: WeatherModelId,
   selectedHourIso?: string
 ): Promise<SpatialWeatherGridPoint[]> {
-  const latSteps = [53.5, 55.5, 57.5, 59.5, 61.5];
+  const latSteps = [51.0, 53.75, 56.5, 59.0, 61.5];
   const lonSteps = [-5.5, -3.0, -0.5, 2.0, 4.5];
 
   const coords: Array<{ lat: number; lon: number }> = [];
@@ -1295,6 +1295,21 @@ const VERIFIED_METAR_STATIONS: Array<{
   { icao: 'EGPD', label: 'Aberdeen Airport', lat: 57.2, lon: -2.2 },
   { icao: 'EGSH', label: 'Norwich Airport', lat: 52.68, lon: 1.28 },
   { icao: 'EGNJ', label: 'Humberside Airport', lat: 53.57, lon: -0.35 },
+  { icao: 'EGNS', label: 'Isle of Man (Ronaldsway)', lat: 54.08, lon: -4.62 },
+  { icao: 'EGGP', label: 'Liverpool Airport', lat: 53.33, lon: -2.85 },
+  { icao: 'EGNR', label: 'Hawarden / Dee Estuary', lat: 53.18, lon: -2.98 },
+  { icao: 'EGCC', label: 'Manchester Airport', lat: 53.35, lon: -2.28 },
+  { icao: 'EGCK', label: 'Caernarfon SAR (Wales)', lat: 53.1, lon: -4.34 },
+  { icao: 'EGPK', label: 'Prestwick SAR Base', lat: 55.51, lon: -4.59 },
+  { icao: 'EGPE', label: 'Inverness SAR Base', lat: 57.54, lon: -4.05 },
+  { icao: 'EGNV', label: 'Teesside Airport', lat: 54.51, lon: -1.43 },
+  { icao: 'EGNT', label: 'Newcastle Airport', lat: 55.04, lon: -1.69 },
+  { icao: 'EGAA', label: 'Belfast International', lat: 54.66, lon: -6.22 },
+  { icao: 'EGHQ', label: 'Newquay SAR Base', lat: 50.44, lon: -5.0 },
+  { icao: 'EGFF', label: 'Cardiff (Bristol Channel)', lat: 51.4, lon: -3.34 },
+  { icao: 'EGHI', label: 'Southampton / Solent', lat: 50.95, lon: -1.36 },
+  { icao: 'EGMD', label: 'Lydd SAR Base', lat: 50.96, lon: 0.94 },
+  { icao: 'ENZV', label: 'Stavanger Airport', lat: 58.88, lon: 5.64 },
 ];
 
 const nearbyMetarCache = new Map<

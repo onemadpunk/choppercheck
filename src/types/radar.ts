@@ -16,6 +16,8 @@ export type SectorId =
   | 'apache_north_sea'
   | 'west_of_shetland'
   | 'uk_north_sea'
+  | 'irish_sea'
+  | 'southern_north_sea'
   | 'norway_ncs'
   | 'scotland_airports'
   | 'uk_airports';
@@ -30,6 +32,9 @@ export type FieldOperator =
   | 'Ithaca Energy'
   | 'EnQuest'
   | 'CNOOC'
+  | 'Spirit Energy'
+  | 'Eni UK'
+  | 'Perenco'
   | 'Aker BP'
   | 'ConocoPhillips'
   | 'Vår Energi'

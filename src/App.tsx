@@ -73,7 +73,7 @@ const SECTOR_PRESETS: Array<{
 }> = [
   {
     id: 'apache_north_sea',
-    label: 'Apache (Forties & Beryl)',
+    label: 'Apache',
     lat: 57.7269,
     lon: 0.8472,
     zoom: 7,
@@ -96,8 +96,24 @@ const SECTOR_PRESETS: Array<{
     defaultFacilityId: 'uk-etap',
   },
   {
+    id: 'irish_sea',
+    label: 'Irish Sea',
+    lat: 53.75,
+    lon: -3.4,
+    zoom: 8,
+    defaultFacilityId: 'uk-south-morecambe-cpc1',
+  },
+  {
+    id: 'southern_north_sea',
+    label: 'Southern NS',
+    lat: 53.65,
+    lon: 1.45,
+    zoom: 7,
+    defaultFacilityId: 'uk-sns-clipper',
+  },
+  {
     id: 'norway_ncs',
-    label: 'Norwegian Waters',
+    label: 'Norway',
     lat: 59.8,
     lon: 3.1,
     zoom: 6,
@@ -1096,7 +1112,25 @@ export default function App() {
                   </option>
                 ))}
             </optgroup>
-            <optgroup label="All UK Regional & Onward Airports">
+            <optgroup label="Irish Sea (Blackpool / Morecambe & Liverpool Bay)">
+              {facilities
+                .filter((f) => f.sector === 'irish_sea')
+                .map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.shortName} ({f.code})
+                  </option>
+                ))}
+            </optgroup>
+            <optgroup label="Southern North Sea (Norwich / Humberside)">
+              {facilities
+                .filter((f) => f.sector === 'southern_north_sea')
+                .map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.shortName} ({f.code})
+                  </option>
+                ))}
+            </optgroup>
+            <optgroup label="All UK Regional, SAR & Onward Airports">
               {facilities
                 .filter((f) => f.sector === 'uk_airports')
                 .map((f) => (
