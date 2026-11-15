@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
+  AircraftTarget,
   AirframePresetId,
   CorridorWaypointProfile,
   CustomRigOverride,
@@ -7,18 +8,24 @@ import {
   HelideckWeatherState,
   InstallationOrAirport,
   MultiModelHourEntry,
+  NearbyStationMetar,
   WeatherModelId,
   WeatherOverlayMode,
 } from '../types/radar';
 import {
   AIRFRAME_PRESETS,
   WEATHER_MODELS_META,
+  fetchNearbyOffshoreOrUpwindMetars,
 } from '../services/multiModelWeatherService';
+import { calculateBearingDeg, calculateDistanceNm } from '../data/aircraftDecoder';
 import {
   buildContextAwareSevenDaySummaries,
+  computeBestRunwayWind,
+  computeFiveModelConsensus,
   computeSolarTimesUtc,
   computeWindOverDeckSector,
   decodeRawTafHighlights,
+  evaluateFpsoSwellRisk,
   evaluateHourWithLimits,
   formatCrewOutlookSummary,
 } from '../utils/solarAndMetUtils';
@@ -37,6 +44,8 @@ import {
   Minimize2,
   Moon,
   Navigation,
+  Plane,
+  Radio,
   RefreshCw,
   ShieldAlert,
   SlidersHorizontal,
@@ -70,6 +79,8 @@ interface HelideckWeatherPanelProps {
   onChangeFlightOpsMode: (mode: FlightOpsMode) => void;
   customOverride?: CustomRigOverride | null;
   onChangeCustomOverride: (override: CustomRigOverride | null) => void;
+  flights?: AircraftTarget[];
+  cachedForecastSavedAt?: string | null;
   isFullScreen?: boolean;
   onToggleFullScreen?: () => void;
 }
@@ -98,11 +109,29 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   onChangeFlightOpsMode,
   customOverride,
   onChangeCustomOverride,
+  flights = [],
+  cachedForecastSavedAt = null,
   isFullScreen = false,
   onToggleFullScreen,
 }) => {
   const [copiedOutlook, setCopiedOutlook] = useState(false);
   const [showRestrictionsEditor, setShowRestrictionsEditor] = useState(false);
+  const [nearbyMetars, setNearbyMetars] = useState<NearbyStationMetar[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setNearbyMetars([]);
+    fetchNearbyOffshoreOrUpwindMetars(facility, shoreBaseFacility.code)
+      .then((stations) => {
+        if (!cancelled) setNearbyMetars(stations);
+      })
+      .catch(() => {
+        if (!cancelled) setNearbyMetars([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [facility, shoreBaseFacility.code]);
 
   const preset = AIRFRAME_PRESETS[airframePresetId];
   const isFpso = facility.assetType === 'FPSO' || facility.assetType === 'Semi-Sub';
@@ -165,6 +194,33 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     customOverride,
   ]);
 
+  const fiveModelConsensus = useMemo(() => {
+    if (!activeHour) return null;
+    return computeFiveModelConsensus(
+      activeHour,
+      isFpso,
+      preset,
+      flightOpsMode,
+      customOverride
+    );
+  }, [activeHour, isFpso, preset, flightOpsMode, customOverride]);
+
+  const inboundHelis = useMemo(() => {
+    if (!flights || flights.length === 0) return [];
+    return flights
+      .filter((f) => f.isRotary && f.speedReported && f.groundSpeedKts >= 30)
+      .map((f) => {
+        const distNm = calculateDistanceNm(f.lat, f.lon, facility.lat, facility.lon);
+        const brgToRig = calculateBearingDeg(f.lat, f.lon, facility.lat, facility.lon);
+        const headingDiff = Math.abs(((f.trackDeg - brgToRig + 540) % 360) - 180);
+        const etaMin = Math.max(1, Math.round((distNm / f.groundSpeedKts) * 60));
+        return { flight: f, distNm, headingDiff, etaMin };
+      })
+      .filter((x) => x.distNm <= 40 && x.headingDiff <= 50)
+      .sort((a, b) => a.distNm - b.distNm)
+      .slice(0, 3);
+  }, [flights, facility.lat, facility.lon]);
+
   const tafHighlights = useMemo(
     () => decodeRawTafHighlights(weather?.rawTaf),
     [weather?.rawTaf]
@@ -173,7 +229,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   if (!weather && hourlyForecast.length === 0) {
     return (
       <div className="p-6 text-center text-slate-400 text-sm">
-        Loading 7-day multi-model (ICON · ECMWF · GFS · GEM), marine & METAR/TAF telemetry for{' '}
+        Loading 7-day multi-model (UKV · ICON · ECMWF · GFS · GEM), marine & METAR/TAF telemetry for{' '}
         {facility.name}...
       </div>
     );
@@ -210,13 +266,34 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   const minVisLimit = effLimits?.minVisibilityKm ?? preset.minVisibilityKm;
   const maxWaveLimit = effLimits?.maxFpsoWaveHeightM ?? preset.maxFpsoWaveHeightM;
 
-  const gustVal = activeModelSnapshot?.windGust10mKts ?? weather?.windGustKts ?? 0;
+  const deckWindVal =
+    activeModelSnapshot?.deckWindSpeedKts ??
+    activeModelSnapshot?.windSpeed10mKts ??
+    weather?.windSpeedKts ??
+    0;
+  const gustVal =
+    activeModelSnapshot?.deckWindGustKts ??
+    activeModelSnapshot?.windGust10mKts ??
+    weather?.windGustKts ??
+    0;
+  const approachShearKts = activeModelSnapshot?.approachShearKts ?? 0;
   const gustStatus =
-    gustVal >= maxGustLimit ? 'HOLD' : gustVal >= cautionGustLimit ? 'CAUTION' : 'GO';
+    gustVal >= maxGustLimit
+      ? 'HOLD'
+      : gustVal >= cautionGustLimit || approachShearKts >= 20
+      ? 'CAUTION'
+      : 'GO';
 
   const waveVal = activeHour?.waveHeightM ?? weather?.significantWaveHeightM ?? 0;
   const wavePeriodVal = activeHour?.swellPeriodSec ?? weather?.swellPeriodSec ?? 7;
-  const longSwellRisk = isFpso && wavePeriodVal >= 11.0 && waveVal >= 3.2;
+  const swellRisk = evaluateFpsoSwellRisk(
+    waveVal,
+    wavePeriodVal,
+    activeHour?.swellWaveHeightM,
+    activeHour?.swellWavePeriodSec,
+    isFpso
+  );
+  const longSwellRisk = swellRisk.isResonantSwell;
   const waveStatus = isFpso
     ? waveVal >= maxWaveLimit
       ? 'HOLD'
@@ -285,6 +362,26 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     if (currentStatus === 'CAUTION') return `${facility.code} Helideck`;
     return 'All 3 Route Legs Clear';
   }, [corridorWaypoints, shoreBaseFacility.code, facility.code, currentStatus]);
+
+  // Shore base runway crosswind check (using shore corridor leg wind or live weather)
+  const shoreLeg = corridorWaypoints[0];
+  const shoreRunwayWind = useMemo(() => {
+    const dir = shoreLeg?.windDir10mDeg ?? weather?.windDirectionDeg;
+    const spd = shoreLeg?.windSpeed10mKts ?? weather?.windSpeedKts;
+    const gst = shoreLeg?.windGust10mKts ?? weather?.windGustKts ?? spd;
+    if (typeof dir !== 'number' || typeof spd !== 'number' || typeof gst !== 'number') {
+      return null;
+    }
+    return computeBestRunwayWind(shoreBaseFacility.code, dir, spd, gst);
+  }, [
+    shoreBaseFacility.code,
+    shoreLeg?.windDir10mDeg,
+    shoreLeg?.windSpeed10mKts,
+    shoreLeg?.windGust10mKts,
+    weather?.windDirectionDeg,
+    weather?.windSpeedKts,
+    weather?.windGustKts,
+  ]);
 
   // FPSO Wind-Over-Deck Sector if heading saved
   const windDirNow = activeModelSnapshot?.windDir10mDeg ?? weather?.windDirectionDeg ?? 230;
@@ -398,6 +495,40 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             </button>
           </div>
         </div>
+
+        {cachedForecastSavedAt && (
+          <div className="px-3 py-2 rounded-lg bg-amber-950/40 border border-amber-500/45 text-amber-200 text-xs font-mono flex items-center justify-between gap-2">
+            <span>
+              Weak / Offline Signal — Showing saved forecast from{' '}
+              {cachedForecastSavedAt.slice(11, 16)} UTC
+            </span>
+            <button
+              onClick={onRefresh}
+              className="px-2 py-0.5 rounded bg-amber-400 text-slate-950 font-bold text-[10px] cursor-pointer shrink-0"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {inboundHelis.length > 0 && (
+          <div className="px-3 py-2 rounded-lg bg-cyan-950/35 border border-cyan-500/40 text-xs flex flex-wrap items-center justify-between gap-2">
+            <span className="font-semibold text-cyan-300 flex items-center gap-1.5">
+              <Plane className="w-3.5 h-3.5" />
+              Inbound within 40 NM:
+            </span>
+            <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px]">
+              {inboundHelis.map(({ flight, distNm, etaMin }) => (
+                <span
+                  key={flight.hex}
+                  className="px-2 py-0.5 rounded bg-slate-900 border border-cyan-500/40 text-white"
+                >
+                  {flight.callsign} ({flight.typeCode}) · {distNm.toFixed(0)} NM · ~{etaMin}m ETA
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* 0. Astronomical Daylight Window & Auto Day/Night Flight Mode Selector */}
         <div className="p-2.5 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2">
@@ -613,6 +744,11 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                     <span className="text-[8px] font-mono text-cyan-300 tabular-nums">
                       {day.maxWaveM}m
                     </span>
+                    {day.consensusBadge && (
+                      <span className="text-[7px] font-mono text-slate-400 tabular-nums">
+                        {day.consensusBadge}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -688,7 +824,9 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                             {hrLightning ? '⚡' : hrNight ? '☾' : '☀'}
                           </span>
                         </span>
-                        <span className="text-[8px]">{snap?.windGust10mKts}k</span>
+                        <span className="text-[8px]">
+                          {snap?.deckWindGustKts ?? snap?.windGust10mKts}k
+                        </span>
                       </button>
                     );
                   })}
@@ -764,6 +902,27 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
           </div>
           <p className="text-xs opacity-95">{currentReason}</p>
 
+          {/* 5-Model Spread & Agreement Confidence Bar */}
+          {fiveModelConsensus && (
+            <div className="px-2.5 py-1.5 rounded bg-slate-950/75 border border-white/10 font-mono text-[10px] flex flex-wrap items-center justify-between gap-1.5">
+              <span
+                className={
+                  fiveModelConsensus.isSplit ? 'text-amber-300 font-bold' : 'text-emerald-300 font-bold'
+                }
+              >
+                {fiveModelConsensus.headline}
+                {fiveModelConsensus.dissentingModels.length > 0
+                  ? ` · ${fiveModelConsensus.dissentingModels.join(', ')}`
+                  : ''}
+              </span>
+              <span className="text-slate-300 tabular-nums">
+                Spread: {fiveModelConsensus.gustMinKts}–{fiveModelConsensus.gustMaxKts}kt · 0°C{' '}
+                {fiveModelConsensus.freezeMinFt.toLocaleString()}–
+                {fiveModelConsensus.freezeMaxFt.toLocaleString()}ft
+              </span>
+            </div>
+          )}
+
           {/* FPSO Wind-Over-Deck Relative Sector Banner when vessel heading is entered */}
           {windOverDeck && (
             <div
@@ -787,8 +946,13 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
           <div className="grid grid-cols-1 gap-1 pt-1.5 border-t border-white/10 font-mono text-[11px]">
             {[
               {
-                label: '1. Helideck Wind & Gusts',
-                actual: `${activeModelSnapshot?.windSpeed10mKts ?? weather?.windSpeedKts ?? 0}G${gustVal} kt`,
+                label:
+                  facility.elevationFt > 45
+                    ? `1. Helideck Wind (~${facility.elevationFt}ft)${
+                        approachShearKts >= 20 ? ` · Shear +${approachShearKts}kt` : ''
+                      }`
+                    : '1. Helideck Wind & Gusts',
+                actual: `${deckWindVal}G${gustVal} kt`,
                 limit: `Max ${maxGustLimit} kt`,
                 st: gustStatus,
               },
@@ -797,9 +961,9 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                   ? '2. FPSO Sea State & Swell Period'
                   : '2. Significant Wave Height (Hs)',
                 actual: `${waveVal} m (${wavePeriodVal}s${
-                  activeHour?.swellWaveHeightM ? ` · Swell ${activeHour.swellWaveHeightM}m` : ''
+                  longSwellRisk ? ' · Resonant' : activeHour?.swellWaveHeightM ? ` · Swell ${activeHour.swellWaveHeightM}m` : ''
                 })`,
-                limit: isFpso ? `Max ${maxWaveLimit} m (<11s)` : 'Max 6.5 m',
+                limit: isFpso ? `Max ${maxWaveLimit} m (<10s)` : 'Max 6.5 m',
                 st: waveStatus,
               },
               {
@@ -951,15 +1115,15 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                           <div className="text-[9px] text-slate-400">{mod.resolution}</div>
                         </td>
                         <td className="py-1.5 pr-2 tabular-nums text-slate-200">
-                          {snap.windSpeed10mKts}G
+                          {snap.deckWindSpeedKts ?? snap.windSpeed10mKts}G
                           <span
                             className={
-                              snap.windGust10mKts >= cautionGustLimit
+                              (snap.deckWindGustKts ?? snap.windGust10mKts) >= cautionGustLimit
                                 ? 'text-amber-400 font-bold'
                                 : 'text-white'
                             }
                           >
-                            {snap.windGust10mKts}
+                            {snap.deckWindGustKts ?? snap.windGust10mKts}
                           </span>
                           kt
                         </td>
@@ -1051,6 +1215,26 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               </div>
             )}
 
+            {shoreRunwayWind && (
+              <div className="text-[10px] font-mono text-slate-300 bg-slate-950/60 px-2.5 py-1 rounded border border-slate-800/80 flex items-center justify-between">
+                <span>
+                  {shoreBaseFacility.code} {shoreRunwayWind.runwayLabel} Wind:
+                </span>
+                <span
+                  className={
+                    shoreRunwayWind.severity === 'HIGH'
+                      ? 'text-rose-300 font-bold'
+                      : shoreRunwayWind.severity === 'MODERATE'
+                      ? 'text-amber-300 font-bold'
+                      : 'text-emerald-300'
+                  }
+                >
+                  HW {shoreRunwayWind.headwindKts}kt · XW {shoreRunwayWind.crosswindKts}kt (Gust XW{' '}
+                  {shoreRunwayWind.gustCrosswindKts}kt)
+                </span>
+              </div>
+            )}
+
             <div className="grid grid-cols-3 gap-2 font-mono text-[11px]">
               {corridorWaypoints.map((wp, idx) => (
                 <div
@@ -1120,12 +1304,15 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
         <div className="grid grid-cols-2 gap-2.5">
           <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
             <div className="flex items-center justify-between text-xs text-slate-400">
-              <span>10m Surface Wind</span>
+              <span>
+                {facility.elevationFt > 45
+                  ? `Deck Wind (~${facility.elevationFt}ft)`
+                  : '10m Surface Wind'}
+              </span>
               <Wind className="w-3.5 h-3.5 text-cyan-400" />
             </div>
             <div className="text-xl font-mono font-bold tabular-nums text-white mt-1">
-              {activeModelSnapshot?.windSpeed10mKts ?? weather?.windSpeedKts ?? 0}{' '}
-              <span className="text-xs font-normal text-slate-400">G</span>{' '}
+              {deckWindVal} <span className="text-xs font-normal text-slate-400">G</span>{' '}
               <span
                 className={
                   gustVal >= cautionGustLimit ? 'text-amber-400' : 'text-white'
@@ -1136,7 +1323,8 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               <span className="text-xs font-normal text-slate-400">KT</span>
             </div>
             <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
-              Dir {String(windDirNow).padStart(3, '0')}° · 950hPa{' '}
+              10m {activeModelSnapshot?.windSpeed10mKts ?? 0}kt · 80m{' '}
+              {activeModelSnapshot?.windSpeed80mKts ?? deckWindVal}kt · 950hPa{' '}
               {activeModelSnapshot?.windSpeed950hPaKts ?? 25}kt
             </div>
           </div>
@@ -1150,7 +1338,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               {waveVal} <span className="text-xs font-normal text-slate-400">m</span>
             </div>
             <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
-              Period {wavePeriodVal}s ({activeHour?.swellDirDeg ?? 240}°) · SST{' '}
+              {swellRisk.label} ({activeHour?.swellDirDeg ?? 240}°) · SST{' '}
               {activeHour?.seaSurfaceTempC ?? weather?.temperatureC ?? 9}°C
             </div>
           </div>
@@ -1263,6 +1451,80 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* 8. Live Offshore Rig & Upwind Atlantic METAR Observations */}
+        {nearbyMetars.length > 0 && (
+          <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-white">
+                <Radio className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>OFFSHORE RIG & UPWIND METAR RING</span>
+              </div>
+              <span className="text-[10px] font-mono text-slate-400">
+                NEAREST {nearbyMetars.length} LIVE STATIONS
+              </span>
+            </div>
+
+            <div className="space-y-2">
+              {nearbyMetars.map((st) => {
+                const catStyle =
+                  st.flightCategory === 'VFR'
+                    ? 'text-emerald-300 bg-emerald-950/70 border-emerald-500/40'
+                    : st.flightCategory === 'MVFR'
+                    ? 'text-cyan-300 bg-cyan-950/70 border-cyan-500/40'
+                    : st.flightCategory === 'IFR'
+                    ? 'text-amber-300 bg-amber-950/70 border-amber-500/40'
+                    : 'text-rose-300 bg-rose-950/70 border-rose-500/40';
+                return (
+                  <div
+                    key={st.icao}
+                    className="p-2.5 bg-slate-950/90 border border-slate-800/90 rounded-lg space-y-1.5"
+                  >
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="font-mono text-xs font-bold text-cyan-300">
+                          {st.icao}
+                        </span>
+                        <span className="text-xs text-slate-200 font-medium truncate">
+                          {st.label}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0 font-mono text-[10px]">
+                        <span className="text-slate-400 tabular-nums">
+                          {st.distanceNm} NM · {String(st.bearingDeg).padStart(3, '0')}°
+                        </span>
+                        {st.flightCategory && (
+                          <span className={`px-1.5 py-0.5 rounded border ${catStyle}`}>
+                            {st.flightCategory}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {(st.seaStateLabel || typeof st.seaTempC === 'number') && (
+                      <div className="flex flex-wrap gap-1.5 text-[10px] font-mono">
+                        {st.seaStateLabel && (
+                          <span className="px-1.5 py-0.5 rounded bg-sky-950/70 border border-sky-500/35 text-sky-300">
+                            Sea State: {st.seaStateLabel}
+                          </span>
+                        )}
+                        {typeof st.seaTempC === 'number' && (
+                          <span className="px-1.5 py-0.5 rounded bg-teal-950/70 border border-teal-500/35 text-teal-300">
+                            Sea Temp: {st.seaTempC}°C
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="font-mono text-[11px] text-slate-300 break-words leading-relaxed">
+                      {st.rawOb}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 

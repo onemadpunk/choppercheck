@@ -1,12 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  computeBestRunwayWind,
+  computeDeckHeightWind,
+  computeFiveModelConsensus,
   computeSolarTimesUtc,
   computeWindOverDeckSector,
   decodeRawTafHighlights,
   deriveEffectiveLimits,
+  evaluateFpsoSwellRisk,
   evaluateHourWithLimits,
   isCaaNightForHour,
+  parseSeaStateFromMetar,
 } from '../src/utils/solarAndMetUtils.ts';
 import {
   AIRFRAME_PRESETS,
@@ -118,4 +123,76 @@ test('UKMO UKV 2km is registered as 5th model and handles convection-permitting 
   });
   assert.equal(ukvCell.risk, 'HIGH');
   assert.equal(ukvCell.type, 'TRIGGERED_WINTER');
+});
+
+test('Deck-height wind, FPSO long-swell risk, runway crosswind, WMO sea-state and 5-model consensus work cleanly', () => {
+  const deckWind = computeDeckHeightWind(15, 21, 27, 180);
+  assert.ok(deckWind.deckWindSpeedKts > 15 && deckWind.deckWindSpeedKts <= 27);
+  assert.ok(deckWind.deckWindGustKts >= 21);
+
+  const swell = evaluateFpsoSwellRisk(2.8, 11.5, 2.4, 11.5, true);
+  assert.equal(swell.isResonantSwell, true);
+
+  const rwy = computeBestRunwayWind('EGPD', 250, 22, 34);
+  assert.ok(rwy !== null);
+  assert.ok(rwy.crosswindKts >= 18);
+  assert.equal(rwy.severity, 'HIGH');
+
+  const sea = parseSeaStateFromMetar('METAR ENQA 151550Z AUTO 30017KT 9999 SCT042/// 06/M04 Q0993 W08/S6');
+  assert.equal(sea.seaTempC, 8);
+  assert.equal(sea.seaStateCode, 6);
+  assert.ok(sea.seaStateLabel?.includes('Very Rough'));
+
+  const baseSnap = {
+    modelShortName: 'Test',
+    resolutionLabel: 'Test',
+    windSpeed10mKts: 15,
+    windDir10mDeg: 240,
+    windGust10mKts: 22,
+    deckWindSpeedKts: 17,
+    deckWindGustKts: 24,
+    windSpeed950hPaKts: 25,
+    windDir950hPaDeg: 245,
+    temp950hPaC: 3,
+    windSpeed850hPaKts: 28,
+    windDir850hPaDeg: 250,
+    freezingLevelFt: 4200,
+    cloudCeilingFt: 2500,
+    visibilityKm: 15,
+    precipMmHr: 0,
+    temp2mC: 8,
+    qnhHpa: 1012,
+    status: 'GO' as const,
+    statusReason: 'GO',
+  };
+  const consensus = computeFiveModelConsensus(
+    {
+      hourIndex: 0,
+      hourIso: '2026-11-15T12:00',
+      hourLabel: '12:00',
+      dayKey: '2026-11-15',
+      dayNameShort: 'Today',
+      dayNameFull: 'Today',
+      dateShort: '15 Nov',
+      isNight: false,
+      waveHeightM: 2.0,
+      swellPeriodSec: 7.5,
+      swellDirDeg: 240,
+      seaSurfaceTempC: 9,
+      models: {
+        ukmo_seamless: { ...baseSnap, modelId: 'ukmo_seamless', visibilityKm: 0.4, deckWindGustKts: 32 },
+        icon_seamless: { ...baseSnap, modelId: 'icon_seamless' },
+        ecmwf_ifs025: { ...baseSnap, modelId: 'ecmwf_ifs025' },
+        gfs_seamless: { ...baseSnap, modelId: 'gfs_seamless' },
+        gem_seamless: { ...baseSnap, modelId: 'gem_seamless' },
+      },
+    },
+    true,
+    AIRFRAME_PRESETS.S92,
+    '24h_ops'
+  );
+  assert.equal(consensus.isSplit, true);
+  assert.equal(consensus.goCount, 4);
+  assert.equal(consensus.holdCount, 1);
+  assert.ok(consensus.dissentingModels.some((d) => d.includes('UKMO UKV')));
 });

@@ -6,11 +6,18 @@ import {
   InstallationOrAirport,
   ModelPointSnapshot,
   MultiModelHourEntry,
+  NearbyStationMetar,
   SpatialWeatherGridPoint,
   WeatherModelId,
 } from '../types/radar';
 import { calculateBearingDeg, calculateDistanceNm } from '../data/aircraftDecoder';
-import { computeSolarTimesUtc, isCaaNightForHour } from '../utils/solarAndMetUtils';
+import {
+  computeDeckHeightWind,
+  computeSolarTimesUtc,
+  isCaaNightForHour,
+  parseSeaStateFromMetar,
+} from '../utils/solarAndMetUtils';
+import { FLIGHT_API_ORIGIN } from './radarService';
 
 export const AIRFRAME_PRESETS: Record<AirframePresetId, AirframeLimitPreset> = {
   S92: {
@@ -469,6 +476,8 @@ export async function fetchMultiModelRigForecast(
     'wind_speed_10m',
     'wind_direction_10m',
     'wind_gusts_10m',
+    'wind_speed_80m',
+    'wind_direction_80m',
     'wind_speed_950hPa',
     'wind_direction_950hPa',
     'temperature_950hPa',
@@ -594,6 +603,16 @@ export async function fetchMultiModelRigForecast(
         const ws10 = Math.round(rawVal('wind_speed_10m') ?? 18);
         const wd10 = Math.round(rawVal('wind_direction_10m') ?? 230);
         const wg10 = Math.round(rawVal('wind_gusts_10m') ?? Math.round(ws10 * 1.28));
+        const rawWs80 = rawVal('wind_speed_80m');
+        const ws80 = rawWs80 !== null ? Math.round(rawWs80) : undefined;
+        const rawWd80 = rawVal('wind_direction_80m');
+        const wd80 = rawWd80 !== null ? Math.round(rawWd80) : undefined;
+        const { deckWindSpeedKts, deckWindGustKts } = computeDeckHeightWind(
+          ws10,
+          wg10,
+          ws80,
+          facility.elevationFt
+        );
 
         // Use native 950 hPa (ICON/GFS/GEM) or native 925 hPa (ECMWF WMO standard level)
         const ws950 = Math.round(
@@ -601,6 +620,7 @@ export async function fetchMultiModelRigForecast(
             rawVal('wind_speed_925hPa') ??
             Math.round(ws10 * 1.22)
         );
+        const approachShearKts = Math.max(0, ws950 - ws10);
         const wd950 = Math.round(
           rawVal('wind_direction_950hPa') ??
             rawVal('wind_direction_925hPa') ??
@@ -691,8 +711,8 @@ export async function fetchMultiModelRigForecast(
         const fogSpreadRisk = classifyFogSpread(dewSpreadC, visibilityKm, lowCloudPct);
 
         const evalResult = evaluateAirframeLimits(
-          ws10,
-          wg10,
+          deckWindSpeedKts,
+          deckWindGustKts,
           cloudCeilingFt,
           visibilityKm,
           freezingLevelFt,
@@ -709,6 +729,11 @@ export async function fetchMultiModelRigForecast(
           windSpeed10mKts: ws10,
           windDir10mDeg: wd10,
           windGust10mKts: wg10,
+          windSpeed80mKts: ws80,
+          windDir80mDeg: wd80,
+          deckWindSpeedKts,
+          deckWindGustKts,
+          approachShearKts,
           windSpeed950hPaKts: ws950,
           windDir950hPaDeg: wd950,
           temp950hPaC: t950,
@@ -1219,25 +1244,138 @@ export interface RainViewerRadarFrame {
 }
 
 /**
- * Fetches the latest genuine live precipitation radar tile URL from RainViewer (free, CORS-enabled).
+ * Fetches the last 6 genuine live precipitation radar frames (~60 min loop) from RainViewer (free, CORS-enabled).
  */
-export async function fetchRainViewerRadarFrame(): Promise<RainViewerRadarFrame | null> {
+export async function fetchRainViewerRadarFrames(): Promise<RainViewerRadarFrame[]> {
   try {
     const res = await fetch('https://api.rainviewer.com/public/weather-maps.json', {
       signal: AbortSignal.timeout(6000),
     });
-    if (!res.ok) return null;
+    if (!res.ok) return [];
     const json = await res.json();
     const past = Array.isArray(json?.radar?.past) ? json.radar.past : [];
-    const latest = past[past.length - 1];
-    if (!json?.host || !latest?.path) return null;
-    return {
-      tileUrlTemplate: `${json.host}${latest.path}/256/{z}/{x}/{y}/2/1_1.png`,
-      frameTimeIso: new Date((latest.time || Math.floor(Date.now() / 1000)) * 1000)
-        .toISOString()
-        .slice(11, 16),
-    };
+    if (!json?.host || past.length === 0) return [];
+    return past
+      .slice(-6)
+      .filter((f: { path?: string; time?: number }) => Boolean(f?.path))
+      .map((f: { path: string; time?: number }) => ({
+        tileUrlTemplate: `${json.host}${f.path}/256/{z}/{x}/{y}/2/1_1.png`,
+        frameTimeIso: new Date((f.time || Math.floor(Date.now() / 1000)) * 1000)
+          .toISOString()
+          .slice(11, 16),
+      }));
   } catch {
-    return null;
+    return [];
   }
+}
+
+export async function fetchRainViewerRadarFrame(): Promise<RainViewerRadarFrame | null> {
+  const frames = await fetchRainViewerRadarFrames();
+  return frames[frames.length - 1] ?? null;
+}
+
+const VERIFIED_METAR_STATIONS: Array<{
+  icao: string;
+  label: string;
+  lat: number;
+  lon: number;
+}> = [
+  { icao: 'ENQA', label: 'Statfjord A Platform', lat: 61.26, lon: 1.85 },
+  { icao: 'ENOA', label: 'Oseberg A Platform', lat: 60.49, lon: 2.82 },
+  { icao: 'ENJS', label: 'Johan Sverdrup Platform', lat: 58.83, lon: 2.54 },
+  { icao: 'ENSL', label: 'Sleipner Platform', lat: 58.37, lon: 1.91 },
+  { icao: 'ENDR', label: 'Draupner Platform', lat: 58.2, lon: 1.6 },
+  { icao: 'ENWV', label: 'Valhall Platform', lat: 56.27, lon: 3.39 },
+  { icao: 'ENFB', label: 'Balder / Ringhorne Area', lat: 59.5, lon: 2.2 },
+  { icao: 'ENHE', label: 'Heidrun Platform', lat: 65.32, lon: 7.31 },
+  { icao: 'EGPB', label: 'Sumburgh Airport', lat: 59.88, lon: -1.29 },
+  { icao: 'EGPO', label: 'Stornoway (Hebrides)', lat: 58.21, lon: -6.33 },
+  { icao: 'EGPL', label: 'Benbecula (Outer Hebrides)', lat: 57.48, lon: -7.36 },
+  { icao: 'EKVG', label: 'Vágar (Faroe Islands)', lat: 62.06, lon: -7.28 },
+  { icao: 'EGPD', label: 'Aberdeen Airport', lat: 57.2, lon: -2.2 },
+  { icao: 'EGSH', label: 'Norwich Airport', lat: 52.68, lon: 1.28 },
+  { icao: 'EGNJ', label: 'Humberside Airport', lat: 53.57, lon: -0.35 },
+];
+
+const nearbyMetarCache = new Map<
+  string,
+  { fetchedAt: number; stations: NearbyStationMetar[] }
+>();
+
+/**
+ * Fetches live real-time ICAO METARs (and offshore WMO sea states) from the 3 nearest verified
+ * offshore platforms or upwind Atlantic islands surrounding the target facility.
+ */
+export async function fetchNearbyOffshoreOrUpwindMetars(
+  facility: InstallationOrAirport,
+  excludeIcao?: string
+): Promise<NearbyStationMetar[]> {
+  const cacheKey = `${facility.id}_${excludeIcao || ''}`;
+  const cached = nearbyMetarCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < 5 * 60 * 1000) {
+    return cached.stations;
+  }
+
+  const candidates = VERIFIED_METAR_STATIONS.filter(
+    (s) => s.icao !== excludeIcao?.toUpperCase() && s.icao !== facility.code.toUpperCase()
+  )
+    .map((s) => ({
+      ...s,
+      distanceNm: Math.round(calculateDistanceNm(facility.lat, facility.lon, s.lat, s.lon)),
+      bearingDeg: Math.round(calculateBearingDeg(facility.lat, facility.lon, s.lat, s.lon)),
+    }))
+    .filter((s) => s.distanceNm <= 280)
+    .sort((a, b) => a.distanceNm - b.distanceNm)
+    .slice(0, 3);
+
+  const results = await Promise.allSettled(
+    candidates.map(async (st): Promise<NearbyStationMetar | null> => {
+      const url = `${FLIGHT_API_ORIGIN}/api/weather?lat=${st.lat.toFixed(
+        2
+      )}&lon=${st.lon.toFixed(2)}&icao=${encodeURIComponent(st.icao)}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) return null;
+      const json = await res.json();
+      const metar = Array.isArray(json?.metar)
+        ? json.metar.find(
+            (m: { icaoId?: string; rawOb?: string }) =>
+              m.icaoId === st.icao && typeof m.rawOb === 'string' && m.rawOb.trim().length > 0
+          )
+        : null;
+      if (!metar) return null;
+      const sea = parseSeaStateFromMetar(metar.rawOb);
+      const fltCat = ['VFR', 'MVFR', 'IFR', 'LIFR'].includes(metar.fltCat)
+        ? (metar.fltCat as NearbyStationMetar['flightCategory'])
+        : undefined;
+      const obsMs =
+        typeof metar.obsTime === 'number'
+          ? metar.obsTime < 1e12
+            ? metar.obsTime * 1000
+            : metar.obsTime
+          : undefined;
+      return {
+        icao: st.icao,
+        label: st.label,
+        distanceNm: st.distanceNm,
+        bearingDeg: st.bearingDeg,
+        rawOb: metar.rawOb,
+        rawTaf: typeof metar.rawTaf === 'string' ? metar.rawTaf : undefined,
+        flightCategory: fltCat,
+        seaTempC: sea.seaTempC,
+        seaStateCode: sea.seaStateCode,
+        seaStateLabel: sea.seaStateLabel,
+        obsTimeMs: obsMs,
+      };
+    })
+  );
+
+  const stations = results
+    .filter(
+      (r): r is PromiseFulfilledResult<NearbyStationMetar | null> => r.status === 'fulfilled'
+    )
+    .map((r) => r.value)
+    .filter((v): v is NearbyStationMetar => v !== null);
+
+  nearbyMetarCache.set(cacheKey, { fetchedAt: Date.now(), stations });
+  return stations;
 }

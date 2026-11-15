@@ -20,7 +20,7 @@ import {
   AIRFRAME_PRESETS,
   RainViewerRadarFrame,
   WEATHER_MODELS_META,
-  fetchRainViewerRadarFrame,
+  fetchRainViewerRadarFrames,
   interpolateSpotWeatherAtLatLon,
 } from '../services/multiModelWeatherService';
 import {
@@ -255,7 +255,9 @@ export const RadarMap: React.FC<RadarMapProps> = ({
 
   const [mapStyle, setMapStyle] = useState<MapStyleMode>('dark_radar');
   const [showRainRadar, setShowRainRadar] = useState<boolean>(false);
-  const [rainFrame, setRainFrame] = useState<RainViewerRadarFrame | null>(null);
+  const [rainFrames, setRainFrames] = useState<RainViewerRadarFrame[]>([]);
+  const [rainFrameIdx, setRainFrameIdx] = useState<number>(0);
+  const [rainLoopPlaying, setRainLoopPlaying] = useState<boolean>(true);
   const [currentZoom, setCurrentZoom] = useState<number>(mapViewTarget.zoom);
   const [cursorCoords, setCursorCoords] = useState<{ lat: number; lon: number }>({
     lat: activeFacility.lat,
@@ -432,7 +434,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
     baseTileLayerRef.current = newTileLayer;
   }, [mapStyle]);
 
-  // Fetch & Render Live RainViewer Precipitation Radar Overlay when enabled
+  // Fetch & Animate Live RainViewer Precipitation Radar Overlay (6 frames / ~60m loop)
   useEffect(() => {
     if (!showRainRadar) {
       if (rainTileLayerRef.current && mapRef.current) {
@@ -443,12 +445,15 @@ export const RadarMap: React.FC<RadarMapProps> = ({
     }
 
     let cancelled = false;
-    const loadFrame = async () => {
-      const frame = await fetchRainViewerRadarFrame();
-      if (!cancelled) setRainFrame(frame);
+    const loadFrames = async () => {
+      const frames = await fetchRainViewerRadarFrames();
+      if (!cancelled && frames.length > 0) {
+        setRainFrames(frames);
+        setRainFrameIdx(frames.length - 1);
+      }
     };
-    void loadFrame();
-    const timer = setInterval(() => void loadFrame(), 5 * 60 * 1000);
+    void loadFrames();
+    const timer = setInterval(() => void loadFrames(), 5 * 60 * 1000);
     return () => {
       cancelled = true;
       clearInterval(timer);
@@ -456,23 +461,41 @@ export const RadarMap: React.FC<RadarMapProps> = ({
   }, [showRainRadar]);
 
   useEffect(() => {
+    if (!showRainRadar || !rainLoopPlaying || rainFrames.length <= 1) return;
+    const anim = setInterval(() => {
+      setRainFrameIdx((prev) => (prev + 1) % rainFrames.length);
+    }, 950);
+    return () => clearInterval(anim);
+  }, [showRainRadar, rainLoopPlaying, rainFrames.length]);
+
+  const activeRainFrame =
+    rainFrames[rainFrameIdx] || rainFrames[rainFrames.length - 1] || null;
+
+  useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    if (rainTileLayerRef.current) {
-      map.removeLayer(rainTileLayerRef.current);
-      rainTileLayerRef.current = null;
+    if (!showRainRadar || !activeRainFrame) {
+      if (rainTileLayerRef.current) {
+        map.removeLayer(rainTileLayerRef.current);
+        rainTileLayerRef.current = null;
+      }
+      return;
     }
-    if (!showRainRadar || !rainFrame) return;
-    const layer = L.tileLayer(rainFrame.tileUrlTemplate, {
-      attribution: 'Rain: <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a>',
-      maxNativeZoom: 7,
-      maxZoom: 18,
-      opacity: 0.65,
-      zIndex: 250,
-    });
-    layer.addTo(map);
-    rainTileLayerRef.current = layer;
-  }, [showRainRadar, rainFrame, mapInstance]);
+    if (!rainTileLayerRef.current) {
+      const layer = L.tileLayer(activeRainFrame.tileUrlTemplate, {
+        attribution:
+          'Rain: <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a>',
+        maxNativeZoom: 7,
+        maxZoom: 18,
+        opacity: 0.65,
+        zIndex: 250,
+      });
+      layer.addTo(map);
+      rainTileLayerRef.current = layer;
+    } else {
+      rainTileLayerRef.current.setUrl(activeRainFrame.tileUrlTemplate);
+    }
+  }, [showRainRadar, activeRainFrame, mapInstance]);
 
   // Pan/zoom when mapViewTarget.seq updates
   useEffect(() => {
@@ -647,8 +670,16 @@ export const RadarMap: React.FC<RadarMapProps> = ({
     (weather?.cap437Status && weather.cap437Status !== 'UNAVAILABLE'
       ? weather.cap437Status
       : 'GO');
-  const hudWindSpd = activeHourSnap?.windSpeed10mKts ?? weather?.windSpeedKts ?? 20;
-  const hudWindGust = activeHourSnap?.windGust10mKts ?? weather?.windGustKts ?? 26;
+  const hudWindSpd =
+    activeHourSnap?.deckWindSpeedKts ??
+    activeHourSnap?.windSpeed10mKts ??
+    weather?.windSpeedKts ??
+    20;
+  const hudWindGust =
+    activeHourSnap?.deckWindGustKts ??
+    activeHourSnap?.windGust10mKts ??
+    weather?.windGustKts ??
+    26;
   const hudWave = activeHour?.waveHeightM ?? weather?.significantWaveHeightM ?? 2.1;
 
   return (
@@ -928,15 +959,32 @@ export const RadarMap: React.FC<RadarMapProps> = ({
             ))}
             <button
               onClick={() => setShowRainRadar((prev) => !prev)}
-              title="Toggle live RainViewer precipitation & squall radar tiles"
+              title="Toggle animated RainViewer precipitation & squall radar"
               className={`px-2 py-0.5 rounded text-[10px] font-mono whitespace-nowrap transition-colors cursor-pointer ${
                 showRainRadar
                   ? 'bg-sky-400 text-slate-950 font-bold'
                   : 'bg-slate-900 hover:bg-slate-800 text-sky-300 border border-sky-500/40'
               }`}
             >
-              {showRainRadar && rainFrame ? `Rain Radar (${rainFrame.frameTimeIso}Z)` : 'Rain Radar'}
+              {showRainRadar && activeRainFrame
+                ? `Rain (${activeRainFrame.frameTimeIso}Z)`
+                : 'Rain Radar'}
             </button>
+            {showRainRadar && rainFrames.length > 1 && (
+              <button
+                onClick={() => {
+                  setRainLoopPlaying((p) => {
+                    const next = !p;
+                    if (!next) setRainFrameIdx(rainFrames.length - 1);
+                    return next;
+                  });
+                }}
+                title={rainLoopPlaying ? 'Pause radar loop' : 'Play 60-min radar loop'}
+                className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-slate-900 hover:bg-slate-800 text-sky-300 border border-sky-500/40 cursor-pointer"
+              >
+                {rainLoopPlaying ? '⏸' : '▶'}
+              </button>
+            )}
           </div>
         </div>
 

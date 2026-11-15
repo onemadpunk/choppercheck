@@ -3,6 +3,7 @@ import {
   CorridorWaypointProfile,
   CustomRigOverride,
   DayFlightWindowSummary,
+  FiveModelConsensusSummary,
   FlightOpsMode,
   InstallationOrAirport,
   MultiModelHourEntry,
@@ -220,10 +221,75 @@ export function deriveEffectiveLimits(
   };
 }
 
+/**
+ * Interpolates sustained wind and gusts from 10m sea level up to a helideck's real elevation (AMSL)
+ * using live 80m model winds. Airports/shore pads (<= 45ft) stay at 10m surface wind.
+ */
+export function computeDeckHeightWind(
+  windSpeed10mKts: number,
+  windGust10mKts: number,
+  windSpeed80mKts: number | null | undefined,
+  elevationFt: number
+): { deckWindSpeedKts: number; deckWindGustKts: number } {
+  if (
+    typeof windSpeed80mKts !== 'number' ||
+    !Number.isFinite(windSpeed80mKts) ||
+    elevationFt <= 45
+  ) {
+    return {
+      deckWindSpeedKts: windSpeed10mKts,
+      deckWindGustKts: windGust10mKts,
+    };
+  }
+  const elevM = Math.max(10, Math.min(80, elevationFt * 0.3048));
+  const frac = (elevM - 10) / 70;
+  const upperWs = Math.max(windSpeed10mKts, windSpeed80mKts);
+  const deckWindSpeedKts = Math.round(windSpeed10mKts + (upperWs - windSpeed10mKts) * frac);
+  const baseGustRatio = windSpeed10mKts > 0 ? windGust10mKts / windSpeed10mKts : 1.25;
+  const dampedRatio = Math.max(1.12, 1 + (baseGustRatio - 1) * (1 - 0.15 * frac));
+  const deckWindGustKts = Math.max(
+    windGust10mKts,
+    Math.round(deckWindSpeedKts * dampedRatio)
+  );
+  return { deckWindSpeedKts, deckWindGustKts };
+}
+
+export function evaluateFpsoSwellRisk(
+  waveHeightM: number,
+  swellPeriodSec: number,
+  swellWaveHeightM?: number,
+  swellWavePeriodSec?: number,
+  isFpso = false
+): {
+  isResonantSwell: boolean;
+  effectivePeriodSec: number;
+  effectiveSwellM: number;
+  label: string;
+} {
+  const effectivePeriodSec = Number(
+    Math.max(swellPeriodSec || 0, swellWavePeriodSec || 0).toFixed(1)
+  );
+  const effectiveSwellM = Number((swellWaveHeightM ?? waveHeightM).toFixed(1));
+  const isResonantSwell =
+    isFpso && effectivePeriodSec >= 10.0 && (effectiveSwellM >= 1.5 || waveHeightM >= 2.5);
+  const label = isResonantSwell
+    ? `Resonant Atlantic swell (${effectiveSwellM}m @ ${effectivePeriodSec}s)`
+    : `${effectiveSwellM}m @ ${effectivePeriodSec}s`;
+  return {
+    isResonantSwell,
+    effectivePeriodSec,
+    effectiveSwellM,
+    label,
+  };
+}
+
 export function evaluateHourWithLimits(
   snap: {
     windSpeed10mKts: number;
     windGust10mKts: number;
+    deckWindSpeedKts?: number;
+    deckWindGustKts?: number;
+    approachShearKts?: number;
     cloudCeilingFt: number;
     visibilityKm: number;
     freezingLevelFt: number;
@@ -243,6 +309,8 @@ export function evaluateHourWithLimits(
 ): { status: 'GO' | 'CAUTION' | 'HOLD'; reason: string; limits: EffectiveOperatingLimits } {
   const limits = deriveEffectiveLimits(basePreset, isNight, isFpso, flightOpsMode, customOverride);
   const phaseLabel = isNight ? 'NIGHT' : 'DAY';
+  const effWind = snap.deckWindSpeedKts ?? snap.windSpeed10mKts;
+  const effGust = snap.deckWindGustKts ?? snap.windGust10mKts;
 
   if (limits.daylightOnlyBlocked) {
     const why = customOverride?.daylightOnlyDeck
@@ -250,7 +318,7 @@ export function evaluateHourWithLimits(
       : 'Outside Daylight Crew-Change Window (CAA Night)';
     return {
       status: 'HOLD',
-      reason: `NIGHT HOLD: ${why} · Gusts ${snap.windGust10mKts}kt, Wave ${waveHeightM}m`,
+      reason: `NIGHT HOLD: ${why} · Gusts ${effGust}kt, Wave ${waveHeightM}m`,
       limits,
     };
   }
@@ -272,12 +340,12 @@ export function evaluateHourWithLimits(
     };
   }
   if (
-    snap.windGust10mKts >= limits.maxHelideckGustKts ||
-    snap.windSpeed10mKts >= limits.maxHelideckGustKts - 5
+    effGust >= limits.maxHelideckGustKts ||
+    effWind >= limits.maxHelideckGustKts - 5
   ) {
     return {
       status: 'HOLD',
-      reason: `NO-GO (${phaseLabel}): Gusts ${snap.windGust10mKts} kt exceed ${basePreset.id} ${limits.maxHelideckGustKts} kt ${phaseLabel.toLowerCase()} limit`,
+      reason: `NO-GO (${phaseLabel}): Deck gusts ${effGust} kt exceed ${basePreset.id} ${limits.maxHelideckGustKts} kt ${phaseLabel.toLowerCase()} limit`,
       limits,
     };
   }
@@ -306,14 +374,16 @@ export function evaluateHourWithLimits(
     };
   }
 
-  const longPeriodSwellCaution = isFpso && swellPeriodSec >= 11.0 && waveHeightM >= 3.2;
+  const longPeriodSwellCaution = isFpso && swellPeriodSec >= 10.0 && waveHeightM >= 2.5;
+  const approachShearCaution = (snap.approachShearKts ?? 0) >= 20;
 
   if (
-    snap.windGust10mKts >= limits.cautionGustKts ||
+    effGust >= limits.cautionGustKts ||
     icingHazard ||
     snap.lightningRisk === 'MODERATE' ||
     snap.fogSpreadRisk === 'HIGH' ||
     longPeriodSwellCaution ||
+    approachShearCaution ||
     snap.cloudCeilingFt < limits.minCloudCeilingFt + 350 ||
     snap.visibilityKm < limits.minVisibilityKm + 2.0 ||
     (isFpso && waveHeightM >= limits.maxFpsoWaveHeightM - 1.2) ||
@@ -340,7 +410,14 @@ export function evaluateHourWithLimits(
     if (longPeriodSwellCaution) {
       return {
         status: 'CAUTION',
-        reason: `FPSO SWELL PERIOD CAUTION: ${waveHeightM}m @ ${swellPeriodSec}s long swell (Pitch/Roll risk)`,
+        reason: `FPSO SWELL PERIOD CAUTION: ${waveHeightM}m @ ${swellPeriodSec}s long Atlantic swell (Pitch/Roll risk)`,
+        limits,
+      };
+    }
+    if (approachShearCaution) {
+      return {
+        status: 'CAUTION',
+        reason: `APPROACH SHEAR CAUTION: +${snap.approachShearKts} kt jump from 10m to 950hPa`,
         limits,
       };
     }
@@ -360,15 +437,110 @@ export function evaluateHourWithLimits(
     }
     return {
       status: 'CAUTION',
-      reason: `CAUTION (${phaseLabel}): Gusts ${snap.windGust10mKts} kt · Ceiling ${snap.cloudCeilingFt.toLocaleString()} ft · Wave ${waveHeightM}m`,
+      reason: `CAUTION (${phaseLabel}): Gusts ${effGust} kt · Ceiling ${snap.cloudCeilingFt.toLocaleString()} ft · Wave ${waveHeightM}m`,
       limits,
     };
   }
 
   return {
     status: 'GO',
-    reason: `GO (${basePreset.id} ${phaseLabel} Limits) — Gusts ${snap.windGust10mKts} kt · Wave ${waveHeightM}m · 0°C ${snap.freezingLevelFt.toLocaleString()} ft`,
+    reason: `GO (${basePreset.id} ${phaseLabel} Limits) — Deck gusts ${effGust} kt · Wave ${waveHeightM}m · 0°C ${snap.freezingLevelFt.toLocaleString()} ft`,
     limits,
+  };
+}
+
+const MODEL_SHORT_LABELS: Record<WeatherModelId, string> = {
+  ukmo_seamless: 'UKMO UKV',
+  icon_seamless: 'ICON-EU',
+  ecmwf_ifs025: 'ECMWF',
+  gfs_seamless: 'GFS',
+  gem_seamless: 'GEM',
+};
+
+/**
+ * Computes 5-model consensus and spread across UKMO UKV, ICON-EU, ECMWF, GFS, and GEM for any hour.
+ */
+export function computeFiveModelConsensus(
+  hourEntry: MultiModelHourEntry,
+  isFpso: boolean,
+  basePreset: AirframeLimitPreset,
+  flightOpsMode: FlightOpsMode,
+  customOverride?: CustomRigOverride | null
+): FiveModelConsensusSummary {
+  const modelIds = Object.keys(hourEntry.models) as WeatherModelId[];
+  let goCount = 0;
+  let cautionCount = 0;
+  let holdCount = 0;
+  let gustMinKts = 999;
+  let gustMaxKts = 0;
+  let freezeMinFt = 99999;
+  let freezeMaxFt = 0;
+
+  const perModel: Array<{ id: WeatherModelId; status: 'GO' | 'CAUTION' | 'HOLD' }> = [];
+
+  for (const mId of modelIds) {
+    const snap = hourEntry.models[mId];
+    if (!snap) continue;
+    const ev = evaluateHourWithLimits(
+      snap,
+      hourEntry.waveHeightM,
+      hourEntry.swellPeriodSec,
+      Boolean(hourEntry.isNight),
+      isFpso,
+      basePreset,
+      flightOpsMode,
+      customOverride
+    );
+    perModel.push({ id: mId, status: ev.status });
+    if (ev.status === 'GO') goCount++;
+    else if (ev.status === 'CAUTION') cautionCount++;
+    else holdCount++;
+
+    const g = snap.deckWindGustKts ?? snap.windGust10mKts;
+    if (g < gustMinKts) gustMinKts = g;
+    if (g > gustMaxKts) gustMaxKts = g;
+    if (snap.freezingLevelFt < freezeMinFt) freezeMinFt = snap.freezingLevelFt;
+    if (snap.freezingLevelFt > freezeMaxFt) freezeMaxFt = snap.freezingLevelFt;
+  }
+
+  const totalModels = perModel.length || 5;
+  const consensusStatus: 'GO' | 'CAUTION' | 'HOLD' =
+    holdCount >= Math.ceil(totalModels / 2)
+      ? 'HOLD'
+      : holdCount > 0 || cautionCount >= Math.ceil(totalModels / 2)
+      ? 'CAUTION'
+      : 'GO';
+
+  const agreementCount =
+    consensusStatus === 'HOLD'
+      ? holdCount
+      : consensusStatus === 'CAUTION'
+      ? Math.max(cautionCount, totalModels - goCount)
+      : goCount;
+
+  const isSplit = goCount > 0 && (holdCount > 0 || cautionCount > 0);
+  const dissentingModels = perModel
+    .filter((p) => p.status !== consensusStatus)
+    .map((p) => `${MODEL_SHORT_LABELS[p.id] || p.id} (${p.status})`);
+
+  const headline = !isSplit
+    ? `${agreementCount}/${totalModels} MODELS AGREE ${consensusStatus}`
+    : `SPLIT (${goCount} GO · ${cautionCount} CAUT · ${holdCount} HOLD)`;
+
+  return {
+    totalModels,
+    goCount,
+    cautionCount,
+    holdCount,
+    agreementCount,
+    consensusStatus,
+    isSplit,
+    headline,
+    gustMinKts: gustMinKts === 999 ? 0 : gustMinKts,
+    gustMaxKts,
+    freezeMinFt: freezeMinFt === 99999 ? 0 : freezeMinFt,
+    freezeMaxFt,
+    dissentingModels,
   };
 }
 
@@ -437,7 +609,8 @@ export function buildContextAwareSevenDaySummaries(
         customOverride
       );
 
-      if (snap.windGust10mKts > maxGustKts) maxGustKts = snap.windGust10mKts;
+      const gustReading = snap.deckWindGustKts ?? snap.windGust10mKts;
+      if (gustReading > maxGustKts) maxGustKts = gustReading;
       if (h.waveHeightM > maxWaveM) maxWaveM = h.waveHeightM;
       if (snap.cloudCeilingFt < minCeilingFt) minCeilingFt = snap.cloudCeilingFt;
       if (snap.freezingLevelFt < minFreezingFt) minFreezingFt = snap.freezingLevelFt;
@@ -469,6 +642,17 @@ export function buildContextAwareSevenDaySummaries(
       evalSet[0] ||
       dayHours[0];
 
+    const repConsensus = computeFiveModelConsensus(
+      repHour,
+      isFpso,
+      basePreset,
+      flightOpsMode,
+      customOverride
+    );
+    const consensusBadge = repConsensus.isSplit
+      ? `Split ${repConsensus.goCount}/${repConsensus.totalModels}`
+      : `${repConsensus.agreementCount}/${repConsensus.totalModels}`;
+
     summaries.push({
       dayKey,
       dayNameShort: dayHours[0].dayNameShort,
@@ -485,6 +669,7 @@ export function buildContextAwareSevenDaySummaries(
       holdHoursCount: holdCount,
       lightningHoursCount: lightningCount,
       hasLightningRisk: lightningCount > 0,
+      consensusBadge,
       primaryRiskReason:
         worstReason ||
         `All ${evalSet.length} flight hours within limits (Max Gust ${maxGustKts} kt, Max Wave ${maxWaveM}m)`,
@@ -640,4 +825,114 @@ export function formatCrewOutlookSummary(params: {
   lines.push('Note: Automated NWP weather guidance only — always verify official HLO & pilot brief.');
 
   return lines.join('\n');
+}
+
+export const SHORE_AIRPORT_RUNWAYS: Record<
+  string,
+  Array<{ name: string; hdg1: number; hdg2: number }>
+> = {
+  EGPD: [{ name: '16/34', hdg1: 162, hdg2: 342 }],
+  EGPB: [
+    { name: '09/27', hdg1: 90, hdg2: 270 },
+    { name: '15/33', hdg1: 148, hdg2: 328 },
+  ],
+  EGSH: [{ name: '09/27', hdg1: 90, hdg2: 270 }],
+  EGNJ: [{ name: '02/20', hdg1: 24, hdg2: 204 }],
+  EGPO: [
+    { name: '18/36', hdg1: 178, hdg2: 358 },
+    { name: '06/24', hdg1: 64, hdg2: 244 },
+  ],
+  ENZV: [
+    { name: '18/36', hdg1: 180, hdg2: 360 },
+    { name: '11/29', hdg1: 108, hdg2: 288 },
+  ],
+  ENBR: [{ name: '17/35', hdg1: 170, hdg2: 350 }],
+  EKVG: [{ name: '12/30', hdg1: 120, hdg2: 300 }],
+};
+
+export function computeBestRunwayWind(
+  icao: string,
+  windDirDeg: number,
+  windSpeedKts: number,
+  windGustKts: number
+): {
+  runwayLabel: string;
+  headwindKts: number;
+  crosswindKts: number;
+  gustCrosswindKts: number;
+  severity: 'LOW' | 'MODERATE' | 'HIGH';
+} | null {
+  const rwys = SHORE_AIRPORT_RUNWAYS[icao.toUpperCase()];
+  if (!rwys || rwys.length === 0) return null;
+
+  let best: {
+    runwayLabel: string;
+    headwindKts: number;
+    crosswindKts: number;
+    gustCrosswindKts: number;
+  } | null = null;
+
+  for (const r of rwys) {
+    const [n1, n2] = r.name.split('/');
+    for (const cand of [
+      { label: `RWY ${n1}`, hdg: r.hdg1 },
+      { label: `RWY ${n2}`, hdg: r.hdg2 },
+    ]) {
+      const diffRad = ((windDirDeg - cand.hdg) * Math.PI) / 180;
+      const hw = Math.round(windSpeedKts * Math.cos(diffRad));
+      const xw = Math.round(Math.abs(windSpeedKts * Math.sin(diffRad)));
+      const gxw = Math.round(Math.abs(windGustKts * Math.sin(diffRad)));
+      if (!best || hw > best.headwindKts) {
+        best = {
+          runwayLabel: cand.label,
+          headwindKts: hw,
+          crosswindKts: xw,
+          gustCrosswindKts: gxw,
+        };
+      }
+    }
+  }
+
+  if (!best) return null;
+  const severity: 'LOW' | 'MODERATE' | 'HIGH' =
+    best.gustCrosswindKts >= 30 || best.crosswindKts >= 22
+      ? 'HIGH'
+      : best.gustCrosswindKts >= 20 || best.crosswindKts >= 15
+      ? 'MODERATE'
+      : 'LOW';
+
+  return { ...best, severity };
+}
+
+const WMO_SEA_STATE_LABELS: Record<number, string> = {
+  0: 'Calm (0m)',
+  1: 'Calm (0–0.1m)',
+  2: 'Smooth (0.1–0.5m)',
+  3: 'Slight (0.5–1.25m)',
+  4: 'Moderate (1.25–2.5m)',
+  5: 'Rough (2.5–4.0m)',
+  6: 'Very Rough (4.0–6.0m)',
+  7: 'High (6.0–9.0m)',
+  8: 'Very High (9.0–14m)',
+  9: 'Phenomenal (>14m)',
+};
+
+export function parseSeaStateFromMetar(rawOb?: string): {
+  seaTempC?: number;
+  seaStateCode?: number;
+  seaStateLabel?: string;
+} {
+  if (!rawOb) return {};
+  const m = rawOb.toUpperCase().match(/\bW(M?\d{2}|\/{2,3})\/S(\d)\b/);
+  if (!m) return {};
+  let seaTempC: number | undefined;
+  if (!m[1].includes('/')) {
+    seaTempC = m[1].startsWith('M') ? -parseInt(m[1].slice(1), 10) : parseInt(m[1], 10);
+  }
+  const seaStateCode = parseInt(m[2], 10);
+  return {
+    seaTempC,
+    seaStateCode,
+    seaStateLabel: WMO_SEA_STATE_LABELS[seaStateCode],
+  };
 }

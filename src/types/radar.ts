@@ -202,6 +202,11 @@ export interface ModelPointSnapshot {
   windSpeed10mKts: number;
   windDir10mDeg: number;
   windGust10mKts: number;
+  windSpeed80mKts?: number;
+  windDir80mDeg?: number;
+  deckWindSpeedKts?: number;
+  deckWindGustKts?: number;
+  approachShearKts?: number;
   windSpeed950hPaKts: number;
   windDir950hPaDeg: number;
   temp950hPaC: number;
@@ -262,7 +267,38 @@ export interface DayFlightWindowSummary {
   holdHoursCount: number;
   lightningHoursCount?: number;
   hasLightningRisk?: boolean;
+  consensusBadge?: string;
   primaryRiskReason: string;
+}
+
+export interface NearbyStationMetar {
+  icao: string;
+  label: string;
+  distanceNm: number;
+  bearingDeg: number;
+  rawOb: string;
+  rawTaf?: string;
+  flightCategory?: 'VFR' | 'MVFR' | 'IFR' | 'LIFR';
+  seaTempC?: number;
+  seaStateCode?: number;
+  seaStateLabel?: string;
+  obsTimeMs?: number;
+}
+
+export interface FiveModelConsensusSummary {
+  totalModels: number;
+  goCount: number;
+  cautionCount: number;
+  holdCount: number;
+  agreementCount: number;
+  consensusStatus: 'GO' | 'CAUTION' | 'HOLD';
+  isSplit: boolean;
+  headline: string;
+  gustMinKts: number;
+  gustMaxKts: number;
+  freezeMinFt: number;
+  freezeMaxFt: number;
+  dissentingModels: string[];
 }
 
 export interface CorridorWaypointProfile {

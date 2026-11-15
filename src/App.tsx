@@ -260,6 +260,7 @@ export default function App() {
   const [selectedHourIdx, setSelectedHourIdx] = useState<number>(0);
   const [corridorWaypoints, setCorridorWaypoints] = useState<CorridorWaypointProfile[]>([]);
   const [ensembleLoading, setEnsembleLoading] = useState<boolean>(false);
+  const [cachedForecastSavedAt, setCachedForecastSavedAt] = useState<string | null>(null);
   const [flightOpsMode, setFlightOpsMode] = useState<FlightOpsMode>(() => {
     try {
       const saved = localStorage.getItem('choppercheck_flight_ops_mode');
@@ -527,14 +528,78 @@ export default function App() {
     setWeatherLoading(true);
     setEnsembleLoading(true);
 
+    const WX_CACHE_KEY = 'choppercheck_wx_cache_v1';
+    const readSavedForecast = (facId: string): { savedAtIso: string; hours: MultiModelHourEntry[] } | null => {
+      try {
+        const raw = localStorage.getItem(WX_CACHE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as Record<
+          string,
+          { savedAtIso: string; savedAtMs: number; hours: MultiModelHourEntry[] }
+        >;
+        const entry = parsed?.[facId];
+        if (!entry || !Array.isArray(entry.hours) || entry.hours.length === 0) return null;
+        if (Date.now() - entry.savedAtMs > 6 * 3600 * 1000) return null;
+        return { savedAtIso: entry.savedAtIso, hours: entry.hours };
+      } catch {
+        return null;
+      }
+    };
+
+    const writeSavedForecast = (facId: string, hours: MultiModelHourEntry[]) => {
+      if (hours.length === 0) return;
+      try {
+        const raw = localStorage.getItem(WX_CACHE_KEY);
+        const parsed = raw
+          ? (JSON.parse(raw) as Record<
+              string,
+              { savedAtIso: string; savedAtMs: number; hours: MultiModelHourEntry[] }
+            >)
+          : {};
+        parsed[facId] = {
+          savedAtIso: new Date().toISOString(),
+          savedAtMs: Date.now(),
+          hours,
+        };
+        const keys = Object.keys(parsed);
+        if (keys.length > 6) {
+          keys
+            .sort((a, b) => (parsed[a]?.savedAtMs || 0) - (parsed[b]?.savedAtMs || 0))
+            .slice(0, keys.length - 6)
+            .forEach((k) => delete parsed[k]);
+        }
+        localStorage.setItem(WX_CACHE_KEY, JSON.stringify(parsed));
+      } catch {
+        // ignore storage quota errors
+      }
+    };
+
     fetchMultiModelRigForecast(activeFacility, activePreset)
       .then((hours) => {
         if (requestId !== weatherRequestRef.current) return;
-        setHourlyForecast(hours);
+        if (hours.length > 0) {
+          setHourlyForecast(hours);
+          setCachedForecastSavedAt(null);
+          writeSavedForecast(activeFacility.id, hours);
+        } else {
+          const cached = readSavedForecast(activeFacility.id);
+          if (cached) {
+            setHourlyForecast(cached.hours);
+            setCachedForecastSavedAt(cached.savedAtIso);
+          } else {
+            setHourlyForecast([]);
+            setCachedForecastSavedAt(null);
+          }
+        }
         setEnsembleLoading(false);
       })
       .catch(() => {
         if (requestId !== weatherRequestRef.current) return;
+        const cached = readSavedForecast(activeFacility.id);
+        if (cached) {
+          setHourlyForecast(cached.hours);
+          setCachedForecastSavedAt(cached.savedAtIso);
+        }
         setEnsembleLoading(false);
       });
 
@@ -1364,6 +1429,8 @@ export default function App() {
                   onChangeFlightOpsMode={handleChangeFlightOpsMode}
                   customOverride={activeRigOverride}
                   onChangeCustomOverride={handleChangeActiveRigOverride}
+                  flights={flights}
+                  cachedForecastSavedAt={cachedForecastSavedAt}
                   isFullScreen={activeTab === 'weather'}
                   onToggleFullScreen={() =>
                     setActiveTab((prev) => (prev === 'weather' ? 'radar' : 'weather'))
