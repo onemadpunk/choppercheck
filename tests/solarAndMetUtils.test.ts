@@ -8,7 +8,12 @@ import {
   evaluateHourWithLimits,
   isCaaNightForHour,
 } from '../src/utils/solarAndMetUtils.ts';
-import { AIRFRAME_PRESETS, classifyNorthSeaConvection, computeMinus10IsothermFt } from '../src/services/multiModelWeatherService.ts';
+import {
+  AIRFRAME_PRESETS,
+  classifyNorthSeaConvection,
+  computeMinus10IsothermFt,
+  WEATHER_MODELS_META,
+} from '../src/services/multiModelWeatherService.ts';
 
 test('Glen Lyon winter daylight window is much shorter than summer daylight', () => {
   const winter = computeSolarTimesUtc(60.3589, -4.0652, new Date('2026-11-14T12:00:00Z'));
@@ -96,4 +101,21 @@ test('North Sea triggered-lightning physics separates winter triggered setup fro
   });
   assert.equal(naturalTs.risk, 'HIGH');
   assert.equal(naturalTs.type, 'NATURAL_TS');
+});
+
+test('UKMO UKV 2km is registered as 5th model and handles convection-permitting precipitation', () => {
+  assert.equal(WEATHER_MODELS_META.length, 5);
+  assert.ok(WEATHER_MODELS_META.some((m) => m.id === 'ukmo_seamless' && m.shortName === 'UKMO UKV'));
+
+  const ukvCell = classifyNorthSeaConvection({
+    cape: 190,
+    wmo: 71,
+    precip: 1.6,
+    showers: 0,
+    freezeFt: 1800,
+    minus10Ft: 8500,
+    sstMinus500C: 35,
+  });
+  assert.equal(ukvCell.risk, 'HIGH');
+  assert.equal(ukvCell.type, 'TRIGGERED_WINTER');
 });

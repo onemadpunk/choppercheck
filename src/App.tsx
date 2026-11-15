@@ -253,7 +253,7 @@ export default function App() {
   const [weatherLoading, setWeatherLoading] = useState<boolean>(false);
   const [weatherOverlayMode, setWeatherOverlayMode] =
     useState<WeatherOverlayMode>('go_nogo_matrix');
-  const [weatherModelId, setWeatherModelId] = useState<WeatherModelId>('icon_seamless');
+  const [weatherModelId, setWeatherModelId] = useState<WeatherModelId>('ukmo_seamless');
   const [airframePresetId, setAirframePresetId] = useState<AirframePresetId>('S92');
   const [spatialGrid, setSpatialGrid] = useState<SpatialWeatherGridPoint[]>([]);
   const [hourlyForecast, setHourlyForecast] = useState<MultiModelHourEntry[]>([]);

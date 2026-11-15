@@ -72,6 +72,12 @@ export const WEATHER_MODELS_META: Array<{
   resolution: string;
 }> = [
   {
+    id: 'ukmo_seamless',
+    shortName: 'UKMO UKV',
+    agency: 'UK Met Office (2km UK / 10km Global)',
+    resolution: '2 km UKV (48h) / 10 km',
+  },
+  {
     id: 'icon_seamless',
     shortName: 'DWD ICON-EU',
     agency: 'German Weather Service (DWD)',
@@ -395,7 +401,9 @@ export function classifyNorthSeaConvection(params: {
   }
 
   const isShowerWmo = wmo !== null && [80, 81, 82, 85, 86].includes(wmo);
-  const hasActiveShowers = isShowerWmo || showers >= 0.3;
+  // Convection-permitting models like UKMO UKV 2km place showers directly in precipitation rather than splitting showers
+  const hasActiveShowers =
+    isShowerWmo || showers >= 0.3 || (precip >= 1.0 && cape !== null && cape >= 120);
   const coldTopStrong = sstMinus500C >= 34 && minus10Ft <= 10500;
   const coldTopMod = sstMinus500C >= 31 && minus10Ft <= 11500;
 
@@ -448,8 +456,8 @@ const SHORT_MONTHS = [
 ];
 
 /**
- * Fetches a full 7-day (up to 168 hours) multi-model offshore forecast across all 4 meteorological models
- * (DWD ICON-EU, ECMWF IFS, NOAA GFS, ECCC GEM) + WaveWatch III / Copernicus Marine.
+ * Fetches a full 7-day (up to 168 hours) multi-model offshore forecast across all 5 meteorological models
+ * (UKMO UKV 2km, DWD ICON-EU, ECMWF IFS, NOAA GFS, ECCC GEM) + WaveWatch III / Copernicus Marine.
  */
 export async function fetchMultiModelRigForecast(
   facility: InstallationOrAirport,
@@ -488,7 +496,7 @@ export async function fetchMultiModelRigForecast(
     'weather_code',
   ].join(',');
 
-  const modelsParam = 'icon_seamless,gfs_seamless,ecmwf_ifs025,gem_seamless';
+  const modelsParam = 'ukmo_seamless,icon_seamless,gfs_seamless,ecmwf_ifs025,gem_seamless';
   const wxUrl = `https://api.open-meteo.com/v1/forecast?latitude=${facility.lat.toFixed(
     3
   )}&longitude=${facility.lon.toFixed(

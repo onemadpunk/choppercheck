@@ -894,13 +894,13 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
           </div>
         </div>
 
-        {/* 4. 4-Model Ensemble Cross-Reference Table */}
+        {/* 4. 5-Model Ensemble Cross-Reference Table */}
         {activeHour && (
           <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-white flex items-center gap-1.5">
                 <Layers className="w-3.5 h-3.5 text-amber-400" />
-                4-Model Agreement ({activeHour.dayNameShort} {activeHour.dateShort} ·{' '}
+                5-Model Agreement ({activeHour.dayNameShort} {activeHour.dateShort} ·{' '}
                 {activeHour.hourLabel} UTC)
               </span>
               <span className="text-[10px] font-mono text-emerald-400">
@@ -1277,11 +1277,12 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
           </div>
 
           <p className="text-[11px] text-slate-400 leading-relaxed">
-            <strong>Live Sources:</strong> DWD <strong>ICON-EU</strong> (6.5 km),{' '}
-            <strong>ECMWF IFS</strong> (9 km Open Data), NOAA <strong>GFS</strong> (0.25°), ECCC{' '}
-            <strong>GEM</strong> (15 km), Copernicus Marine / WaveWatch III, and NOAA Aviation
-            Weather METAR/TAF queried live at {facility.lat.toFixed(2)}°N,{' '}
-            {facility.lon.toFixed(2)}°E. Always confirm with official HLO & pilot brief.
+            <strong>Live Sources:</strong> UK Met Office <strong>UKV</strong> (2 km UK / 10 km
+            Global), DWD <strong>ICON-EU</strong> (6.5 km), <strong>ECMWF IFS</strong> (9 km Open
+            Data), NOAA <strong>GFS</strong> (0.25°), ECCC <strong>GEM</strong> (15 km), Copernicus
+            Marine / WaveWatch III, and NOAA Aviation Weather METAR/TAF queried live at{' '}
+            {facility.lat.toFixed(2)}°N, {facility.lon.toFixed(2)}°E. Always confirm with official
+            HLO & pilot brief.
           </p>
         </div>
       </div>

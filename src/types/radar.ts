@@ -153,10 +153,15 @@ export interface HelideckWeatherState {
 }
 
 // ============================================================================
-// MULTI-MODEL OFFSHORE WEATHER & VECTOR STREAMLINE ENGINE (ICON / ECMWF / GFS / GEM)
+// MULTI-MODEL OFFSHORE WEATHER & VECTOR STREAMLINE ENGINE (UKMO UKV / ICON / ECMWF / GFS / GEM)
 // ============================================================================
 
-export type WeatherModelId = 'icon_seamless' | 'gfs_seamless' | 'ecmwf_ifs025' | 'gem_seamless';
+export type WeatherModelId =
+  | 'ukmo_seamless'
+  | 'icon_seamless'
+  | 'gfs_seamless'
+  | 'ecmwf_ifs025'
+  | 'gem_seamless';
 
 export type WeatherOverlayMode =
   | 'off'
