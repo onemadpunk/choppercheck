@@ -86,12 +86,12 @@ export const CrewAndFlightBoard: React.FC<CrewAndFlightBoardProps> = ({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search callsign, registration, aircraft type or operator…"
-            className="w-full pl-9 pr-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500"
+            className="w-full pl-9 pr-3 py-2.5 sm:py-2 bg-slate-900 border border-slate-800 rounded-lg text-base sm:text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500"
           />
         </div>
 
         {/* Category Segmented Filter */}
-        <div className="flex items-center gap-1 overflow-x-auto pb-0.5">
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
           {[
             { id: 'all', label: 'All Sky' },
             { id: 'offshore_heli', label: 'Helicopters' },
@@ -104,7 +104,7 @@ export const CrewAndFlightBoard: React.FC<CrewAndFlightBoardProps> = ({
               onClick={() =>
                 onChangeCategoryFilter(tab.id as 'all' | TrafficCategory | 'active_facility')
               }
-              className={`px-2.5 py-1.5 rounded-md text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+              className={`min-h-[36px] px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 categoryFilter === tab.id
                   ? 'bg-cyan-500 text-slate-950 font-semibold'
                   : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
@@ -116,12 +116,12 @@ export const CrewAndFlightBoard: React.FC<CrewAndFlightBoardProps> = ({
         </div>
 
         {/* Helicopter / Flight Operator Filter */}
-        <div className="flex items-center gap-1 overflow-x-auto pb-0.5">
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
           {heliOperators.map((op) => (
             <button
               key={op}
               onClick={() => onChangeHeliOpFilter(op)}
-              className={`px-2 py-1 rounded text-[11px] font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+              className={`min-h-[34px] px-2.5 py-1 rounded text-[11px] font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 heliOpFilter === op
                   ? 'bg-slate-800 text-cyan-300 border border-cyan-500/60'
                   : 'text-slate-400 hover:text-slate-200'
@@ -206,13 +206,14 @@ export const CrewAndFlightBoard: React.FC<CrewAndFlightBoardProps> = ({
                       onTogglePin(flight.hex);
                     }}
                     title="Pin tracked aircraft"
-                    className={`min-w-[38px] min-h-[38px] rounded-md flex items-center justify-center border transition-colors cursor-pointer ${
+                    aria-label={isPinned ? 'Unpin tracked aircraft' : 'Pin tracked aircraft'}
+                    className={`min-w-[44px] min-h-[44px] rounded-md flex items-center justify-center border transition-colors cursor-pointer ${
                       isPinned
                         ? 'bg-amber-500 text-slate-950 border-amber-400'
                         : 'bg-slate-900 hover:bg-slate-800 text-slate-400 border-slate-800'
                     }`}
                   >
-                    <Pin className="w-3.5 h-3.5" />
+                    <Pin className="w-4 h-4" />
                   </button>
                 </div>
               </div>

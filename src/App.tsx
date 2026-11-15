@@ -949,7 +949,7 @@ export default function App() {
   );
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-[#07090e] text-slate-100 flex flex-col select-none">
+    <div className="app-shell h-[100dvh] w-screen overflow-hidden bg-[#07090e] text-slate-100 flex flex-col select-none">
       {/* =====================================================================
           PINNED DUE-OFF FLIGHT / 10 NM APPROACH ALERT BANNER
          ===================================================================== */}
@@ -965,14 +965,15 @@ export default function App() {
                 href={getWhatsAppShareUrl(pinnedFlight, activeFacility.shortName)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="px-2 py-1 rounded bg-slate-950 text-amber-400 font-mono text-[10px] flex items-center gap-1"
+                className="px-2.5 py-1.5 rounded bg-slate-950 text-amber-400 font-mono text-[10px] flex items-center gap-1"
               >
                 <Share2 className="w-3 h-3" /> WhatsApp
               </a>
             )}
             <button
               onClick={() => setActiveAlertBanner(null)}
-              className="p-1 rounded hover:bg-amber-600/40 cursor-pointer"
+              aria-label="Dismiss alert"
+              className="p-2 rounded hover:bg-amber-600/40 cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
@@ -983,9 +984,9 @@ export default function App() {
       {/* =====================================================================
           TOP COMMAND BAR (Compact, Mobile-Safe, Zero Clutter)
          ===================================================================== */}
-      <header className="h-13 px-3 bg-slate-950/95 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0 z-30">
+      <header className="min-h-13 px-2.5 sm:px-3 py-1.5 pt-[max(0.375rem,env(safe-area-inset-top))] bg-slate-950/95 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0 z-30">
         {/* Left: Brand Identity & Active Locked Rig/Airport */}
-        <div className="flex items-center gap-2.5 min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
           <div className="w-8 h-8 rounded-lg bg-cyan-500/15 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shrink-0">
             <Radar className="w-4 h-4" />
           </div>
@@ -995,7 +996,7 @@ export default function App() {
                 ChopperCheck.com
               </span>
               <span
-                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold ${
+                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold shrink-0 ${
                   isOnline
                     ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-500/40'
                     : 'bg-amber-950/80 text-amber-400 border border-amber-500/40'
@@ -1006,8 +1007,8 @@ export default function App() {
               </span>
             </div>
             <div className="text-[11px] text-slate-400 truncate font-mono">
-              {activeFacility.shortName} ({activeFacility.code}) ·{' '}
-              <span className="text-cyan-400">Made by onemadpunk</span>
+              {activeFacility.shortName} ({activeFacility.code})
+              <span className="hidden sm:inline text-cyan-400"> · Made by onemadpunk</span>
             </div>
           </div>
         </div>
@@ -1045,23 +1046,24 @@ export default function App() {
             </button>
           )}
 
-          {/* 360° Overhead Sky Compass Button */}
+          {/* 360° Overhead Sky Compass Button (Desktop — mobile uses bottom Compass tab) */}
           <button
             onClick={() => setShowSkyCompassModal(true)}
             title="Open 360° Overhead Sky Compass (Spot Helicopters & Planes From Your Rig or Home)"
-            className="min-h-[36px] px-2.5 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+            className="hidden lg:flex min-h-[36px] px-2.5 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-xs font-semibold items-center gap-1.5 cursor-pointer"
           >
             <Compass className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-            <span className="hidden md:inline whitespace-nowrap">Sky Compass</span>
+            <span className="whitespace-nowrap">Sky Compass</span>
           </button>
 
           {/* GPS Home / Spotter Button */}
           <button
             onClick={handleUseMyGps}
             title="Centre on My GPS"
-            className="min-h-[36px] px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-medium text-amber-300 flex items-center gap-1.5 cursor-pointer"
+            aria-label="Centre on My GPS"
+            className="min-h-[40px] min-w-[40px] sm:min-h-[36px] sm:min-w-0 px-2 sm:px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-medium text-amber-300 flex items-center justify-center gap-1.5 cursor-pointer"
           >
-            <LocateFixed className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <LocateFixed className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-amber-400 shrink-0" />
             <span className="hidden md:inline whitespace-nowrap">My GPS</span>
           </button>
 
@@ -1153,9 +1155,10 @@ export default function App() {
           <button
             onClick={() => setShowInstallModal(true)}
             title="Install App on Phone"
-            className="min-h-[36px] px-2.5 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold text-xs flex items-center gap-1.5 cursor-pointer"
+            className="min-h-[40px] sm:min-h-[36px] px-2.5 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold text-xs flex items-center gap-1.5 cursor-pointer"
           >
-            <span className="whitespace-nowrap">Install App</span>
+            <span className="whitespace-nowrap sm:hidden">Install</span>
+            <span className="hidden sm:inline whitespace-nowrap">Install App</span>
           </button>
         </div>
       </header>
@@ -1163,13 +1166,13 @@ export default function App() {
       {/* =====================================================================
           SECOND SUB-BAR: FAVOURITE RIGS + SINGLE-RIG FOCUS + HELICOPTER FILTER
          ===================================================================== */}
-      <div className="bg-slate-900/95 border-b border-slate-800 px-3 py-1.5 flex items-center justify-between gap-2 overflow-x-auto shrink-0 z-20">
+      <div className="bg-slate-900/95 border-b border-slate-800 px-2.5 sm:px-3 py-1.5 flex items-center justify-between gap-2 overflow-x-auto no-scrollbar shrink-0 z-20">
         {/* Left: Starred Favourite Rigs 1-Tap Bar + Single-Rig Focus Toggle */}
         <div className="flex items-center gap-1.5 shrink-0">
           <button
             onClick={handleToggleSingleRigFocus}
             title="Hide all other rigs on the map and focus exclusively on your active rig"
-            className={`px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1 border transition-colors cursor-pointer whitespace-nowrap ${
+            className={`min-h-[34px] px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1 border transition-colors cursor-pointer whitespace-nowrap ${
               singleRigFocus
                 ? 'bg-cyan-500 text-slate-950 border-cyan-400 font-bold'
                 : 'bg-slate-950 text-slate-300 border-slate-800 hover:text-white'
@@ -1195,7 +1198,7 @@ export default function App() {
                 <button
                   key={fav.id}
                   onClick={() => handleSelectFacility(fav)}
-                  className={`px-2 py-1 rounded-md text-xs font-mono transition-colors cursor-pointer whitespace-nowrap ${
+                  className={`min-h-[34px] px-2.5 py-1 rounded-md text-xs font-mono transition-colors cursor-pointer whitespace-nowrap ${
                     isCurrent
                       ? 'bg-amber-400 text-slate-950 font-bold'
                       : 'bg-slate-950 text-slate-300 border border-slate-800 hover:border-amber-500/50 hover:text-amber-300'
@@ -1224,7 +1227,7 @@ export default function App() {
               <button
                 key={cat.id}
                 onClick={() => setCategoryFilter(cat.id)}
-                className={`px-2 py-1 rounded text-[11px] font-medium whitespace-nowrap transition-colors cursor-pointer ${
+                className={`min-h-[34px] px-2.5 py-1 rounded text-[11px] font-medium whitespace-nowrap transition-colors cursor-pointer ${
                   categoryFilter === cat.id
                     ? 'bg-cyan-500 text-slate-950 font-semibold'
                     : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
@@ -1238,7 +1241,7 @@ export default function App() {
           <button
             onClick={handleToggleAlerts}
             title="Alerts while this page runs: airborne detection and 25 / 10 NM proximity rings"
-            className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`min-h-[34px] px-2.5 py-1 rounded-lg text-xs font-medium border flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer ${
               alertsEnabled
                 ? 'bg-slate-950 text-cyan-300 border-cyan-500/40'
                 : 'bg-slate-950 text-slate-400 border-slate-800'
@@ -1249,19 +1252,37 @@ export default function App() {
             ) : (
               <Bell className="w-3.5 h-3.5" />
             )}
-            {alertsEnabled ? 'Page Alerts On' : 'Page Alerts Off'}
+            <span className="sm:hidden">{alertsEnabled ? 'Alerts On' : 'Alerts Off'}</span>
+            <span className="hidden sm:inline">
+              {alertsEnabled ? 'Page Alerts On' : 'Page Alerts Off'}
+            </span>
           </button>
 
-          <div className="px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium bg-slate-950 text-emerald-400 border border-emerald-500/40 whitespace-nowrap shrink-0">
-            {feedState === 'loading'
-              ? 'Connecting to aircraft feed…'
-              : feedState === 'unavailable'
-              ? 'Feed unavailable · last known positions'
-              : (feedState === 'partial' ? 'Partial feed · ' : 'UK/IRE · ') +
-                feedProvider +
-                ' · ' +
-                liveCount +
-                ' tracked aircraft'}
+          <div
+            className={`min-h-[34px] px-2.5 py-1 rounded-lg text-[11px] sm:text-xs font-mono font-medium bg-slate-950 border flex items-center whitespace-nowrap shrink-0 ${
+              feedState === 'unavailable'
+                ? 'text-amber-300 border-amber-500/40'
+                : 'text-emerald-400 border-emerald-500/40'
+            }`}
+          >
+            <span className="sm:hidden">
+              {feedState === 'loading'
+                ? 'Feed: Syncing…'
+                : feedState === 'unavailable'
+                ? 'Feed paused'
+                : `${liveCount} live`}
+            </span>
+            <span className="hidden sm:inline">
+              {feedState === 'loading'
+                ? 'Connecting to aircraft feed…'
+                : feedState === 'unavailable'
+                ? 'Feed unavailable · last known positions'
+                : (feedState === 'partial' ? 'Partial feed · ' : 'UK/IRE · ') +
+                  feedProvider +
+                  ' · ' +
+                  liveCount +
+                  ' tracked aircraft'}
+            </span>
           </div>
         </div>
       </div>
@@ -1324,7 +1345,7 @@ export default function App() {
 
           {/* Floating Selected Aircraft Card on Desktop/Mobile so it never crushes the Weather Dock */}
           {selectedFlight && mobileDetailsOpen && (
-            <div className="fixed lg:absolute bottom-14 lg:bottom-4 left-2 right-2 lg:left-3 lg:right-auto lg:w-[390px] z-[500] max-h-[52vh] lg:max-h-[65vh] overflow-y-auto shadow-2xl rounded-xl">
+            <div className="fixed lg:absolute bottom-[calc(3.75rem+env(safe-area-inset-bottom))] lg:bottom-4 left-2 right-2 lg:left-3 lg:right-auto lg:w-[390px] z-[500] max-h-[58vh] lg:max-h-[65vh] overflow-y-auto shadow-2xl rounded-xl">
               <FlightDossierPanel
                 flight={selectedFlight}
                 activeFacility={activeFacility}
@@ -1496,10 +1517,13 @@ export default function App() {
       <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-[600] h-14 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 grid grid-cols-5 items-center">
         <button
           onClick={() => setActiveTab('radar')}
-          className={`min-h-[44px] flex flex-col items-center justify-center cursor-pointer ${
+          className={`min-h-[44px] flex flex-col items-center justify-center cursor-pointer relative ${
             activeTab === 'radar' ? 'text-cyan-400' : 'text-slate-400'
           }`}
         >
+          {activeTab === 'radar' && (
+            <span className="absolute top-0 inset-x-3 h-0.5 bg-cyan-400 rounded-b" />
+          )}
           <Radar className="w-4 h-4" />
           <span className="text-[10px] font-medium mt-0.5 whitespace-nowrap">Radar</span>
         </button>
@@ -1508,11 +1532,21 @@ export default function App() {
             setActiveTab('flights');
             setDockTab('flights');
           }}
-          className={`min-h-[44px] flex flex-col items-center justify-center cursor-pointer ${
+          className={`min-h-[44px] flex flex-col items-center justify-center cursor-pointer relative ${
             activeTab === 'flights' ? 'text-cyan-400' : 'text-slate-400'
           }`}
         >
-          <Plane className="w-4 h-4" />
+          {activeTab === 'flights' && (
+            <span className="absolute top-0 inset-x-3 h-0.5 bg-cyan-400 rounded-b" />
+          )}
+          <div className="relative">
+            <Plane className="w-4 h-4" />
+            {visibleFlights.length > 0 && (
+              <span className="absolute -top-1.5 -right-3 px-1 min-w-[14px] h-[14px] rounded-full bg-cyan-500 text-slate-950 text-[9px] font-mono font-bold flex items-center justify-center leading-none">
+                {visibleFlights.length > 99 ? '99+' : visibleFlights.length}
+              </span>
+            )}
+          </div>
           <span className="text-[10px] font-medium mt-0.5 whitespace-nowrap">Flights</span>
         </button>
         <button
@@ -1527,10 +1561,13 @@ export default function App() {
             setActiveTab('directory');
             setDockTab('directory');
           }}
-          className={`min-h-[44px] flex flex-col items-center justify-center cursor-pointer ${
+          className={`min-h-[44px] flex flex-col items-center justify-center cursor-pointer relative ${
             activeTab === 'directory' ? 'text-cyan-400' : 'text-slate-400'
           }`}
         >
+          {activeTab === 'directory' && (
+            <span className="absolute top-0 inset-x-3 h-0.5 bg-cyan-400 rounded-b" />
+          )}
           <Building2 className="w-4 h-4" />
           <span className="text-[10px] font-medium mt-0.5 whitespace-nowrap">Rigs</span>
         </button>
@@ -1539,10 +1576,13 @@ export default function App() {
             setActiveTab('weather');
             setDockTab('weather');
           }}
-          className={`min-h-[44px] flex flex-col items-center justify-center cursor-pointer ${
+          className={`min-h-[44px] flex flex-col items-center justify-center cursor-pointer relative ${
             activeTab === 'weather' ? 'text-cyan-400' : 'text-slate-400'
           }`}
         >
+          {activeTab === 'weather' && (
+            <span className="absolute top-0 inset-x-3 h-0.5 bg-cyan-400 rounded-b" />
+          )}
           <CloudRainWind className="w-4 h-4" />
           <span className="text-[10px] font-medium mt-0.5 whitespace-nowrap">Weather</span>
         </button>

@@ -31,6 +31,8 @@ import { WeatherStreamlineCanvas } from './WeatherStreamlineCanvas';
 import {
   Building2,
   Calendar,
+  ChevronDown,
+  ChevronUp,
   CloudRainWind,
   Compass,
   Crosshair,
@@ -254,6 +256,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
   const trailLayerRef = useRef<L.LayerGroup | null>(null);
 
   const [mapStyle, setMapStyle] = useState<MapStyleMode>('dark_radar');
+  const [mobileDockOpen, setMobileDockOpen] = useState<boolean>(false);
   const [showRainRadar, setShowRainRadar] = useState<boolean>(false);
   const [rainFrames, setRainFrames] = useState<RainViewerRadarFrame[]>([]);
   const [rainFrameIdx, setRainFrameIdx] = useState<number>(0);
@@ -696,7 +699,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       />
 
       {/* Top-Left Active Helideck / Airport Lock HUD */}
-      <div className="map-reference-card absolute top-2.5 left-2.5 z-[400] bg-slate-950/92 backdrop-blur-md border border-slate-800 rounded-xl p-2.5 w-[calc(100vw-72px)] max-w-[325px] sm:max-w-xs pointer-events-auto shadow-xl">
+      <div className="map-reference-card absolute top-2.5 left-2.5 z-[400] bg-slate-950/92 backdrop-blur-md border border-slate-800 rounded-xl p-2 sm:p-2.5 w-[calc(100vw-72px)] sm:w-auto max-w-[300px] sm:max-w-xs pointer-events-auto shadow-xl">
         <div className="flex items-center justify-between gap-2">
           <span className="text-[10px] font-mono text-cyan-400 tracking-tight truncate font-semibold">
             {isFavoriteFacility ? '★ MY FAVOURITE RIG' : 'LOCKED RIG / BASE'} · {activeFacility.code}
@@ -717,7 +720,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
                 ? 'Saved as Favourite Rig (Tap to remove)'
                 : 'Save as My Favourite Rig on this phone'
             }
-            className={`px-2 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1 border shrink-0 transition-colors cursor-pointer ${
+            className={`min-h-[34px] px-2.5 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1 border shrink-0 transition-colors cursor-pointer ${
               isFavoriteFacility
                 ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
                 : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-700'
@@ -739,7 +742,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         {/* Live / Selected Day Weather & Limits Mini-Bar (tappable to open 7-Day Planner) */}
         <button
           onClick={onOpenWeather}
-          className="mt-2 w-full px-2 py-1.5 rounded-md bg-slate-900/95 hover:bg-slate-900 border border-cyan-500/35 flex items-center justify-between gap-1.5 text-[11px] font-mono cursor-pointer transition-colors"
+          className="mt-1.5 sm:mt-2 w-full min-h-[36px] px-2 py-1.5 rounded-md bg-slate-900/95 hover:bg-slate-900 border border-cyan-500/35 flex items-center justify-between gap-1.5 text-[11px] font-mono cursor-pointer transition-colors"
         >
           <span
             className={`font-bold ${
@@ -756,15 +759,15 @@ export const RadarMap: React.FC<RadarMapProps> = ({
             {hudWindSpd}G{hudWindGust}kt · {hudWave}m
           </span>
           <span className="text-cyan-400 font-sans font-semibold text-[10px]">
-            7-Day Limits →
+            7-Day →
           </span>
         </button>
 
         {/* Quick Mobile Action Row: Focus Only 1 Rig + Change Rig */}
-        <div className="mt-2 grid grid-cols-2 gap-1.5">
+        <div className="mt-1.5 sm:mt-2 grid grid-cols-2 gap-1.5">
           <button
             onClick={onToggleSingleRigFocus}
-            className={`px-2 py-1.5 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 border transition-colors cursor-pointer ${
+            className={`min-h-[36px] px-2 py-1.5 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 border transition-colors cursor-pointer ${
               singleRigFocus
                 ? 'bg-cyan-500 text-slate-950 border-cyan-400 font-bold'
                 : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-800'
@@ -778,7 +781,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
 
           <button
             onClick={onOpenDirectory}
-            className="px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-800 flex items-center justify-center gap-1 transition-colors cursor-pointer"
+            className="min-h-[36px] px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-800 flex items-center justify-center gap-1 transition-colors cursor-pointer"
           >
             <Building2 className="w-3.5 h-3.5 shrink-0" />
             <span className="truncate">Change Rig</span>
@@ -789,6 +792,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       {/* Right Map Floating Tactical Controls */}
       <div className="map-controls absolute top-3 right-3 z-[400] flex flex-col gap-1.5 pointer-events-auto">
         <button
+          data-secondary-control="true"
           onClick={() =>
             mapRef.current?.fitBounds(
               [
@@ -807,6 +811,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         <button
           onClick={() => mapRef.current?.zoomIn()}
           title="Zoom In"
+          aria-label="Zoom In"
           className="min-w-[44px] min-h-[44px] bg-slate-950/90 hover:bg-slate-900 text-slate-200 border border-slate-800 rounded-lg flex items-center justify-center transition-colors cursor-pointer"
         >
           <Plus className="w-4 h-4" />
@@ -814,6 +819,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         <button
           onClick={() => mapRef.current?.zoomOut()}
           title="Zoom Out"
+          aria-label="Zoom Out"
           className="min-w-[44px] min-h-[44px] bg-slate-950/90 hover:bg-slate-900 text-slate-200 border border-slate-800 rounded-lg flex items-center justify-center transition-colors cursor-pointer"
         >
           <Minus className="w-4 h-4" />
@@ -823,6 +829,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
             mapRef.current?.flyTo([activeFacility.lat, activeFacility.lon], 8, { duration: 0.7 })
           }
           title="Center on Active Rig / Airport"
+          aria-label="Center on Active Rig or Airport"
           className="min-w-[44px] min-h-[44px] bg-slate-950/90 hover:bg-slate-900 text-cyan-400 border border-slate-800 rounded-lg flex items-center justify-center transition-colors cursor-pointer"
         >
           <Crosshair className="w-4 h-4" />
@@ -830,11 +837,13 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         <button
           onClick={onUseMyGps}
           title="Centre map on my GPS"
+          aria-label="Centre map on my GPS"
           className="min-w-[44px] min-h-[44px] bg-slate-950/90 hover:bg-slate-900 text-amber-400 border border-slate-800 rounded-lg flex items-center justify-center transition-colors cursor-pointer"
         >
           <LocateFixed className="w-4 h-4" />
         </button>
         <button
+          data-secondary-control="true"
           onClick={() =>
             onChangeWeatherOverlayMode(
               weatherOverlayMode === 'off' ? 'go_nogo_matrix' : 'off'
@@ -853,12 +862,14 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         <button
           onClick={cycleMapStyle}
           title={`Switch Map Layer (Current: ${mapStyleLabel})`}
+          aria-label={`Switch Map Layer (Current: ${mapStyleLabel})`}
           className="min-w-[44px] min-h-[44px] bg-slate-950/90 hover:bg-slate-900 text-emerald-400 border border-slate-800 rounded-lg flex flex-col items-center justify-center transition-colors cursor-pointer px-1"
         >
           <Globe className="w-4 h-4" />
           <span className="text-[8px] font-mono mt-0.5 leading-none">MAP</span>
         </button>
         <button
+          data-secondary-control="true"
           onClick={onToggleRangeRings}
           title="Toggle distance rings"
           className={`min-w-[44px] min-h-[44px] border rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
@@ -870,6 +881,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
           <Compass className="w-4 h-4" />
         </button>
         <button
+          data-secondary-control="true"
           onClick={onToggleFacilityLabels}
           title="Toggle Rig & Aircraft Labels"
           className={`min-w-[44px] min-h-[44px] border rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
@@ -883,146 +895,217 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       </div>
 
       {/* Floating Multi-Model Offshore Weather, 7-Day Time Machine & Go/No-Go Control Dock */}
-      <div className="absolute bottom-2.5 right-2.5 left-2.5 sm:left-auto z-[400] bg-slate-950/94 backdrop-blur-md border border-slate-800 rounded-xl p-2.5 pointer-events-auto shadow-2xl max-w-full sm:max-w-[580px] space-y-1.5">
-        {/* Row 1: 7-Day Forecast Day Picker (Tap Mon, Tue, etc. to preview future flight limits on map) */}
-        {daySummaries.length > 0 && (
-          <div className="flex items-center justify-between gap-1.5 pb-1.5 border-b border-slate-800/80 overflow-x-auto">
-            <div className="flex items-center gap-1 shrink-0">
-              <Calendar className="w-3 h-3 text-cyan-400" />
-              <span className="text-[10px] font-mono text-cyan-400 font-semibold uppercase">
-                DAY:
-              </span>
-              {daySummaries.slice(0, 7).map((d) => {
-                const isDayActive = activeHour?.dayKey === d.dayKey;
-                const dotColor =
-                  d.overallStatus === 'HOLD'
-                    ? 'text-rose-400'
-                    : d.overallStatus === 'CAUTION'
-                    ? 'text-amber-400'
-                    : 'text-emerald-400';
-                return (
-                  <button
-                    key={d.dayKey}
-                    onClick={() => onChangeSelectedHourIdx(d.representativeHourIndex)}
-                    className={`px-2 py-0.5 rounded text-[10px] font-mono whitespace-nowrap flex items-center gap-1 transition-colors cursor-pointer ${
-                      isDayActive
-                        ? 'bg-cyan-500 text-slate-950 font-bold'
-                        : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
-                    }`}
-                  >
-                    <span className={isDayActive ? 'text-slate-950' : dotColor}>●</span>
-                    <span>{d.dayNameShort}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <button
-              onClick={onOpenWeather}
-              className="px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10px] font-mono whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              {activeHour
-                ? `${activeHour.dayNameShort} ${activeHour.hourLabel} UTC`
-                : '7-Day Details'}
-            </button>
-          </div>
-        )}
-
-        {/* Row 2: Weather Overlay Streamline Mode Selector */}
-        <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-slate-800/80 overflow-x-auto">
-          <div className="flex items-center gap-1 shrink-0">
-            <span className="text-[10px] font-mono text-cyan-400 font-semibold uppercase">
-              LAYER:
+      <div className="absolute bottom-2 right-2 left-2 sm:bottom-2.5 sm:right-2.5 sm:left-auto z-[400] bg-slate-950/94 backdrop-blur-md border border-slate-800 rounded-xl p-2 sm:p-2.5 pointer-events-auto shadow-2xl max-w-full sm:max-w-[580px] space-y-1.5">
+        {/* Compact Single-Row Phone Summary Bar when collapsed (< sm) */}
+        <div className="flex sm:hidden items-center justify-between gap-1.5">
+          <button
+            onClick={() => setMobileDockOpen((prev) => !prev)}
+            className="min-h-[38px] px-2 py-1 rounded-lg bg-slate-900/90 border border-slate-800 flex items-center gap-1.5 text-[11px] font-mono text-slate-200 min-w-0 flex-1 cursor-pointer"
+          >
+            <CloudRainWind className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+            <span className="truncate">
+              {activeHour ? `${activeHour.dayNameShort} ${activeHour.hourLabel}Z` : 'NOW'} ·{' '}
+              {WEATHER_MODELS_META.find((m) => m.id === weatherModelId)?.shortName || weatherModelId} ·{' '}
+              {activePreset.id}
             </span>
-            {(
-              [
-                { id: 'off', label: 'Off' },
-                { id: 'go_nogo_matrix', label: 'Go/No-Go Matrix' },
-                { id: 'wind_surface', label: '10m Wind' },
-                { id: 'wind_950hpa', label: '950hPa (1,800ft)' },
-                { id: 'wind_850hpa', label: '850hPa (5,000ft)' },
-                { id: 'wave_swell', label: 'Waves (Hs)' },
-                { id: 'freezing_icing', label: '0°C Icing' },
-              ] as Array<{ id: WeatherOverlayMode; label: string }>
-            ).map((m) => (
-              <button
-                key={m.id}
-                onClick={() => onChangeWeatherOverlayMode(m.id)}
-                className={`px-2 py-0.5 rounded text-[10px] font-mono whitespace-nowrap transition-colors cursor-pointer ${
-                  weatherOverlayMode === m.id
-                    ? 'bg-cyan-500 text-slate-950 font-bold'
-                    : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800'
-                }`}
-              >
-                {m.label}
-              </button>
-            ))}
-            <button
-              onClick={() => setShowRainRadar((prev) => !prev)}
-              title="Toggle animated RainViewer precipitation & squall radar"
-              className={`px-2 py-0.5 rounded text-[10px] font-mono whitespace-nowrap transition-colors cursor-pointer ${
-                showRainRadar
-                  ? 'bg-sky-400 text-slate-950 font-bold'
-                  : 'bg-slate-900 hover:bg-slate-800 text-sky-300 border border-sky-500/40'
-              }`}
-            >
-              {showRainRadar && activeRainFrame
-                ? `Rain (${activeRainFrame.frameTimeIso}Z)`
-                : 'Rain Radar'}
-            </button>
-            {showRainRadar && rainFrames.length > 1 && (
-              <button
-                onClick={() => {
-                  setRainLoopPlaying((p) => {
-                    const next = !p;
-                    if (!next) setRainFrameIdx(rainFrames.length - 1);
-                    return next;
-                  });
-                }}
-                title={rainLoopPlaying ? 'Pause radar loop' : 'Play 60-min radar loop'}
-                className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-slate-900 hover:bg-slate-800 text-sky-300 border border-sky-500/40 cursor-pointer"
-              >
-                {rainLoopPlaying ? '⏸' : '▶'}
-              </button>
+          </button>
+
+          <button
+            onClick={() => setShowRainRadar((prev) => !prev)}
+            className={`min-h-[38px] px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold border whitespace-nowrap shrink-0 cursor-pointer ${
+              showRainRadar
+                ? 'bg-sky-400 text-slate-950 border-sky-300'
+                : 'bg-slate-900 text-sky-300 border-sky-500/40'
+            }`}
+          >
+            {showRainRadar ? 'Rain ON' : 'Rain'}
+          </button>
+
+          <button
+            onClick={() => setMobileDockOpen((prev) => !prev)}
+            aria-expanded={mobileDockOpen}
+            className="min-h-[38px] px-2.5 py-1 rounded-lg bg-cyan-500/15 text-cyan-300 border border-cyan-500/40 text-[11px] font-mono font-semibold flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            {mobileDockOpen ? (
+              <>
+                <span>Done</span>
+                <ChevronDown className="w-3.5 h-3.5" />
+              </>
+            ) : (
+              <>
+                <span>Layers</span>
+                <ChevronUp className="w-3.5 h-3.5" />
+              </>
             )}
-          </div>
+          </button>
         </div>
 
-        {/* Row 3: Model Source & Airframe Limit Preset Row */}
-        <div className="flex items-center justify-between gap-2 overflow-x-auto text-[10px] font-mono">
-          <div className="flex items-center gap-1 shrink-0">
-            <span className="text-slate-400">MODEL:</span>
-            {WEATHER_MODELS_META.map((mod) => (
+        {/* Full 3-Row Controls: Always visible on >= sm, expandable on phones */}
+        <div className={`${mobileDockOpen ? 'block' : 'hidden'} sm:block space-y-1.5`}>
+          {/* Row 1: 7-Day Forecast Day Picker (Tap Mon, Tue, etc. to preview future flight limits on map) */}
+          {daySummaries.length > 0 && (
+            <div className="flex items-center justify-between gap-1.5 pb-1.5 border-b border-slate-800/80 overflow-x-auto no-scrollbar">
+              <div className="flex items-center gap-1 shrink-0">
+                <Calendar className="w-3 h-3 text-cyan-400" />
+                <span className="text-[10px] font-mono text-cyan-400 font-semibold uppercase">
+                  DAY:
+                </span>
+                {daySummaries.slice(0, 7).map((d) => {
+                  const isDayActive = activeHour?.dayKey === d.dayKey;
+                  const dotColor =
+                    d.overallStatus === 'HOLD'
+                      ? 'text-rose-400'
+                      : d.overallStatus === 'CAUTION'
+                      ? 'text-amber-400'
+                      : 'text-emerald-400';
+                  return (
+                    <button
+                      key={d.dayKey}
+                      onClick={() => onChangeSelectedHourIdx(d.representativeHourIndex)}
+                      className={`px-2 py-1.5 sm:py-0.5 rounded text-[10px] font-mono whitespace-nowrap flex items-center gap-1 transition-colors cursor-pointer ${
+                        isDayActive
+                          ? 'bg-cyan-500 text-slate-950 font-bold'
+                          : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
+                      }`}
+                    >
+                      <span className={isDayActive ? 'text-slate-950' : dotColor}>●</span>
+                      <span>{d.dayNameShort}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
               <button
-                key={mod.id}
-                onClick={() => onChangeWeatherModelId(mod.id)}
-                title={`${mod.shortName} (${mod.agency} · ${mod.resolution})`}
-                className={`px-1.5 py-0.5 rounded whitespace-nowrap cursor-pointer ${
-                  weatherModelId === mod.id
-                    ? 'bg-amber-400 text-slate-950 font-bold'
-                    : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
+                onClick={onOpenWeather}
+                className="px-2 py-1.5 sm:py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10px] font-mono whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                {activeHour
+                  ? `${activeHour.dayNameShort} ${activeHour.hourLabel} UTC`
+                  : '7-Day Details'}
+              </button>
+            </div>
+          )}
+
+          {/* Row 2: Weather Overlay Streamline Mode Selector */}
+          <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-slate-800/80 overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-1 shrink-0">
+              <span className="text-[10px] font-mono text-cyan-400 font-semibold uppercase">
+                LAYER:
+              </span>
+              {(
+                [
+                  { id: 'off', label: 'Off' },
+                  { id: 'go_nogo_matrix', label: 'Go/No-Go Matrix' },
+                  { id: 'wind_surface', label: '10m Wind' },
+                  { id: 'wind_950hpa', label: '950hPa (1,800ft)' },
+                  { id: 'wind_850hpa', label: '850hPa (5,000ft)' },
+                  { id: 'wave_swell', label: 'Waves (Hs)' },
+                  { id: 'freezing_icing', label: '0°C Icing' },
+                ] as Array<{ id: WeatherOverlayMode; label: string }>
+              ).map((m) => (
+                <button
+                  key={m.id}
+                  onClick={() => onChangeWeatherOverlayMode(m.id)}
+                  className={`px-2 py-1.5 sm:py-0.5 rounded text-[10px] font-mono whitespace-nowrap transition-colors cursor-pointer ${
+                    weatherOverlayMode === m.id
+                      ? 'bg-cyan-500 text-slate-950 font-bold'
+                      : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800'
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
+              <button
+                onClick={() => setShowRainRadar((prev) => !prev)}
+                title="Toggle animated RainViewer precipitation & squall radar"
+                className={`px-2 py-1.5 sm:py-0.5 rounded text-[10px] font-mono whitespace-nowrap transition-colors cursor-pointer ${
+                  showRainRadar
+                    ? 'bg-sky-400 text-slate-950 font-bold'
+                    : 'bg-slate-900 hover:bg-slate-800 text-sky-300 border border-sky-500/40'
                 }`}
               >
-                {mod.shortName}
+                {showRainRadar && activeRainFrame
+                  ? `Rain (${activeRainFrame.frameTimeIso}Z)`
+                  : 'Rain Radar'}
               </button>
-            ))}
+              {showRainRadar && rainFrames.length > 1 && (
+                <button
+                  onClick={() => {
+                    setRainLoopPlaying((p) => {
+                      const next = !p;
+                      if (!next) setRainFrameIdx(rainFrames.length - 1);
+                      return next;
+                    });
+                  }}
+                  title={rainLoopPlaying ? 'Pause radar loop' : 'Play 60-min radar loop'}
+                  className="px-2 py-1.5 sm:py-0.5 rounded text-[10px] font-mono bg-slate-900 hover:bg-slate-800 text-sky-300 border border-sky-500/40 cursor-pointer"
+                >
+                  {rainLoopPlaying ? '⏸' : '▶'}
+                </button>
+              )}
+            </div>
           </div>
 
-          <div className="flex items-center gap-1 shrink-0">
-            <span className="text-slate-400">LIMITS:</span>
-            {(['S92', 'AW189', 'H175', 'AW139', 'H160'] as AirframePresetId[]).map((presetId) => (
-              <button
-                key={presetId}
-                onClick={() => onChangeAirframePresetId(presetId)}
-                className={`px-1.5 py-0.5 rounded whitespace-nowrap cursor-pointer ${
-                  airframePresetId === presetId
-                    ? 'bg-emerald-400 text-slate-950 font-bold'
-                    : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
-                }`}
-              >
-                {AIRFRAME_PRESETS[presetId].id}
-              </button>
-            ))}
+          {/* Row 3: Model Source & Airframe Limit Preset Row */}
+          <div className="flex items-center justify-between gap-2 overflow-x-auto no-scrollbar text-[10px] font-mono">
+            <div className="flex items-center gap-1 shrink-0">
+              <span className="text-slate-400">MODEL:</span>
+              {WEATHER_MODELS_META.map((mod) => (
+                <button
+                  key={mod.id}
+                  onClick={() => onChangeWeatherModelId(mod.id)}
+                  title={`${mod.shortName} (${mod.agency} · ${mod.resolution})`}
+                  className={`px-2 py-1.5 sm:py-0.5 rounded whitespace-nowrap cursor-pointer ${
+                    weatherModelId === mod.id
+                      ? 'bg-amber-400 text-slate-950 font-bold'
+                      : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
+                  }`}
+                >
+                  {mod.shortName}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-1 shrink-0">
+              <span className="text-slate-400">LIMITS:</span>
+              {(['S92', 'AW189', 'H175', 'AW139', 'H160'] as AirframePresetId[]).map((presetId) => (
+                <button
+                  key={presetId}
+                  onClick={() => onChangeAirframePresetId(presetId)}
+                  className={`px-2 py-1.5 sm:py-0.5 rounded whitespace-nowrap cursor-pointer ${
+                    airframePresetId === presetId
+                      ? 'bg-emerald-400 text-slate-950 font-bold'
+                      : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
+                  }`}
+                >
+                  {AIRFRAME_PRESETS[presetId].id}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Mobile-only Quick Map Rings & Labels toggles inside expanded Layers drawer */}
+          <div className="flex sm:hidden items-center gap-1.5 pt-1 border-t border-slate-800/80 text-[10px] font-mono">
+            <button
+              onClick={onToggleRangeRings}
+              className={`flex-1 py-1.5 px-2 rounded border text-center cursor-pointer ${
+                showRangeRings
+                  ? 'bg-cyan-950/90 text-cyan-300 border-cyan-500/60'
+                  : 'bg-slate-900 text-slate-400 border-slate-800'
+              }`}
+            >
+              {showRangeRings ? 'Range Rings: ON' : 'Range Rings: OFF'}
+            </button>
+            <button
+              onClick={onToggleFacilityLabels}
+              className={`flex-1 py-1.5 px-2 rounded border text-center cursor-pointer ${
+                showFacilityLabels
+                  ? 'bg-cyan-950/90 text-cyan-300 border-cyan-500/60'
+                  : 'bg-slate-900 text-slate-400 border-slate-800'
+              }`}
+            >
+              {showFacilityLabels ? 'Labels: ON' : 'Labels: OFF'}
+            </button>
           </div>
         </div>
       </div>

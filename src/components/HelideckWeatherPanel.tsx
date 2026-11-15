@@ -422,7 +422,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   );
 
   return (
-    <div className="flex flex-col h-full bg-slate-950 text-slate-100 overflow-y-auto p-4 sm:p-5 space-y-4">
+    <div className="flex flex-col h-full bg-slate-950 text-slate-100 overflow-y-auto p-3 sm:p-5 space-y-4">
       <div className={isFullScreen ? 'max-w-6xl mx-auto w-full space-y-4' : 'space-y-4'}>
         {/* Header, Copy Outlook, Full-Screen Expand Toggle & Refresh */}
         <div className="flex items-center justify-between gap-2">
@@ -441,7 +441,8 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             <button
               onClick={handleCopyOutlook}
               title="Copy 7-day crew-change weather outlook for WhatsApp / Signal"
-              className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg border text-xs font-semibold cursor-pointer transition-colors ${
+              aria-label="Copy 7-day crew-change weather outlook"
+              className={`min-w-[44px] min-h-[44px] flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-lg border text-xs font-semibold cursor-pointer transition-colors ${
                 copiedOutlook
                   ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
                   : 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-200'
@@ -449,12 +450,12 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             >
               {copiedOutlook ? (
                 <>
-                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <Check className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-emerald-400" />
                   <span className="hidden sm:inline">Copied</span>
                 </>
               ) : (
                 <>
-                  <Copy className="w-3.5 h-3.5 text-cyan-400" />
+                  <Copy className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-cyan-400" />
                   <span className="hidden sm:inline">Copy Outlook</span>
                 </>
               )}
@@ -485,7 +486,8 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             <button
               onClick={onRefresh}
               title="Refresh 7-Day ICON / ECMWF / GFS / GEM & Aviation METAR/TAF"
-              className="min-w-[40px] min-h-[40px] rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 flex items-center justify-center text-slate-300 cursor-pointer shrink-0"
+              aria-label="Refresh weather and forecasts"
+              className="min-w-[44px] min-h-[44px] rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 flex items-center justify-center text-slate-300 cursor-pointer shrink-0"
             >
               <RefreshCw
                 className={`w-4 h-4 ${
@@ -549,10 +551,10 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-slate-800/80">
-            <div className="flex items-center gap-1">
+            <div className="flex flex-wrap items-center gap-1.5">
               <button
                 onClick={() => onChangeFlightOpsMode('24h_ops')}
-                className={`px-2 py-1 rounded text-[11px] font-mono cursor-pointer flex items-center gap-1 ${
+                className={`min-h-[38px] sm:min-h-0 px-2.5 py-1.5 sm:px-2 sm:py-1 rounded text-[11px] font-mono cursor-pointer flex items-center gap-1 ${
                   flightOpsMode === '24h_ops'
                     ? 'bg-cyan-500 text-slate-950 font-bold'
                     : 'bg-slate-950 text-slate-300 border border-slate-800 hover:bg-slate-800'
@@ -563,7 +565,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               </button>
               <button
                 onClick={() => onChangeFlightOpsMode('daylight_only')}
-                className={`px-2 py-1 rounded text-[11px] font-mono cursor-pointer flex items-center gap-1 ${
+                className={`min-h-[38px] sm:min-h-0 px-2.5 py-1.5 sm:px-2 sm:py-1 rounded text-[11px] font-mono cursor-pointer flex items-center gap-1 ${
                   flightOpsMode === 'daylight_only'
                     ? 'bg-amber-400 text-slate-950 font-bold'
                     : 'bg-slate-950 text-slate-300 border border-slate-800 hover:bg-slate-800'
@@ -576,7 +578,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
 
             <button
               onClick={() => setShowRestrictionsEditor((p) => !p)}
-              className={`px-2 py-1 rounded text-[11px] font-mono cursor-pointer flex items-center gap-1 border ${
+              className={`min-h-[38px] sm:min-h-0 px-2.5 py-1.5 sm:px-2 sm:py-1 rounded text-[11px] font-mono cursor-pointer flex items-center gap-1 border ${
                 hasCustomOverride
                   ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 font-bold'
                   : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
@@ -696,7 +698,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               )}
             </div>
 
-            <div className="grid grid-cols-7 gap-1">
+            <div className="flex overflow-x-auto gap-1.5 pb-1 no-scrollbar sm:grid sm:grid-cols-7 sm:gap-1 sm:pb-0">
               {daySummaries.slice(0, 7).map((day) => {
                 const isSelectedDay = day.dayKey === activeDayKey;
                 const pillClr =
@@ -710,13 +712,13 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                   <button
                     key={day.dayKey}
                     onClick={() => onChangeSelectedHourIdx(day.representativeHourIndex)}
-                    className={`p-1.5 rounded-lg border flex flex-col items-center justify-between text-center transition-all cursor-pointer ${
+                    className={`min-w-[74px] shrink-0 sm:min-w-0 p-2 sm:p-1.5 rounded-lg border flex flex-col items-center justify-between text-center transition-all cursor-pointer ${
                       isSelectedDay
                         ? 'ring-2 ring-cyan-400 bg-slate-800 border-cyan-400'
                         : pillClr
                     }`}
                   >
-                    <span className="text-[10px] font-bold text-white leading-tight flex items-center gap-0.5">
+                    <span className="text-xs sm:text-[10px] font-bold text-white leading-tight flex items-center gap-0.5">
                       {day.dayNameShort}
                       {day.hasLightningRisk && (
                         <span title={`${day.lightningHoursCount}h triggered lightning / squall risk`}>
@@ -724,11 +726,11 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                         </span>
                       )}
                     </span>
-                    <span className="text-[8px] font-mono text-slate-400 leading-tight">
+                    <span className="text-[10px] sm:text-[8px] font-mono text-slate-400 leading-tight">
                       {day.dateShort}
                     </span>
                     <span
-                      className={`mt-1 px-1 py-0.2 rounded text-[8px] font-mono font-bold ${
+                      className={`mt-1 px-1.5 sm:px-1 py-0.5 sm:py-0.2 rounded text-[9px] sm:text-[8px] font-mono font-bold ${
                         day.overallStatus === 'HOLD'
                           ? 'bg-rose-500 text-white'
                           : day.overallStatus === 'CAUTION'
@@ -738,14 +740,14 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                     >
                       {day.overallStatus}
                     </span>
-                    <span className="text-[8px] font-mono text-slate-300 mt-0.5 tabular-nums">
+                    <span className="text-[10px] sm:text-[8px] font-mono text-slate-300 mt-1 sm:mt-0.5 tabular-nums">
                       {day.maxGustKts}kt
                     </span>
-                    <span className="text-[8px] font-mono text-cyan-300 tabular-nums">
+                    <span className="text-[10px] sm:text-[8px] font-mono text-cyan-300 tabular-nums">
                       {day.maxWaveM}m
                     </span>
                     {day.consensusBadge && (
-                      <span className="text-[7px] font-mono text-slate-400 tabular-nums">
+                      <span className="text-[9px] sm:text-[7px] font-mono text-slate-400 tabular-nums">
                         {day.consensusBadge}
                       </span>
                     )}
@@ -757,7 +759,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             {/* Selected Day Summary & Hour-by-Hour Scrubber with Day/Night & Lightning Indicators */}
             {activeDaySummary && (
               <div className="pt-2 border-t border-slate-800 space-y-2">
-                <div className="flex items-center justify-between text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-1 text-xs">
                   <span className="font-semibold text-cyan-300">
                     {activeDaySummary.dayNameFull} ({activeDaySummary.dateShort}) ·{' '}
                     <span className="font-mono text-white">
@@ -779,7 +781,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                   </div>
                 )}
 
-                <div className="grid grid-cols-8 sm:grid-cols-12 gap-1">
+                <div className="grid grid-cols-6 sm:grid-cols-12 gap-1.5 sm:gap-1">
                   {activeDayHours.map((hr) => {
                     const snap = hr.models[weatherModelId];
                     const hrNight = Boolean(hr.isNight);
@@ -812,7 +814,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                         title={`${hr.hourLabel} UTC (${hrNight ? 'CAA Night' : 'Daylight'})${
                           hrLightning ? ' · ⚡ Triggered Lightning Risk' : ''
                         } — ${hrEval?.reason || ''}`}
-                        className={`py-1 rounded text-[9px] font-mono font-bold flex flex-col items-center cursor-pointer border ${
+                        className={`py-2 sm:py-1 rounded text-[10px] sm:text-[9px] font-mono font-bold flex flex-col items-center cursor-pointer border ${
                           isSelHr
                             ? 'border-white ring-2 ring-cyan-300 scale-105'
                             : 'border-transparent opacity-85 hover:opacity-100'
@@ -820,11 +822,11 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                       >
                         <span className="flex items-center gap-0.5">
                           {hr.hourLabel.slice(0, 2)}
-                          <span className="text-[7px] opacity-85">
+                          <span className="text-[8px] sm:text-[7px] opacity-85">
                             {hrLightning ? '⚡' : hrNight ? '☾' : '☀'}
                           </span>
                         </span>
-                        <span className="text-[8px]">
+                        <span className="text-[9px] sm:text-[8px]">
                           {snap?.deckWindGustKts ?? snap?.windGust10mKts}k
                         </span>
                       </button>
@@ -838,7 +840,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
 
         {/* 2. Airframe Operating Limit Preset Selector */}
         <div className="p-2.5 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2">
-          <div className="flex items-center justify-between text-[11px] font-mono">
+          <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] font-mono">
             <span className="text-cyan-400 font-semibold">
               HELICOPTER OPERATING LIMITS PRESET:
             </span>
@@ -855,7 +857,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 <button
                   key={id}
                   onClick={() => onChangeAirframePresetId(id)}
-                  className={`py-1.5 px-1 rounded text-xs font-mono font-semibold transition-colors cursor-pointer ${
+                  className={`py-2.5 sm:py-1.5 px-1 rounded text-xs font-mono font-semibold transition-colors cursor-pointer ${
                     isSel
                       ? 'bg-cyan-500 text-slate-950 font-bold'
                       : 'bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800'
@@ -1005,7 +1007,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             ].map((item, idx) => (
               <div
                 key={idx}
-                className="flex items-center justify-between px-2 py-1 rounded bg-slate-950/75 text-slate-200"
+                className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-1 px-2 py-1.5 sm:py-1 rounded bg-slate-950/75 text-slate-200"
               >
                 <span className="truncate pr-2">{item.label}</span>
                 <div className="flex items-center gap-2 shrink-0 tabular-nums">
@@ -1105,7 +1107,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                           isActiveMod ? 'bg-slate-800/90' : 'hover:bg-slate-950/60'
                         }`}
                       >
-                        <td className="py-1.5 pr-2">
+                        <td className="py-2.5 sm:py-1.5 pr-2">
                           <div className="font-bold text-white flex items-center gap-1">
                             {isActiveMod && (
                               <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
@@ -1114,7 +1116,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                           </div>
                           <div className="text-[9px] text-slate-400">{mod.resolution}</div>
                         </td>
-                        <td className="py-1.5 pr-2 tabular-nums text-slate-200">
+                        <td className="py-2.5 sm:py-1.5 pr-2 tabular-nums text-slate-200">
                           {snap.deckWindSpeedKts ?? snap.windSpeed10mKts}G
                           <span
                             className={
@@ -1127,10 +1129,10 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                           </span>
                           kt
                         </td>
-                        <td className="py-1.5 pr-2 tabular-nums text-cyan-300">
+                        <td className="py-2.5 sm:py-1.5 pr-2 tabular-nums text-cyan-300">
                           {snap.windSpeed950hPaKts}kt @ {snap.windDir950hPaDeg}°
                         </td>
-                        <td className="py-1.5 pr-2 tabular-nums">
+                        <td className="py-2.5 sm:py-1.5 pr-2 tabular-nums">
                           <span
                             className={
                               snap.freezingLevelFt <= 3000
@@ -1141,7 +1143,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                             {snap.freezingLevelFt.toLocaleString()}ft
                           </span>
                         </td>
-                        <td className="py-1.5 text-right">
+                        <td className="py-2.5 sm:py-1.5 text-right">
                           <span
                             className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
                               modEval.status === 'GO'
@@ -1235,11 +1237,11 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               </div>
             )}
 
-            <div className="grid grid-cols-3 gap-2 font-mono text-[11px]">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 font-mono text-[11px]">
               {corridorWaypoints.map((wp, idx) => (
                 <div
                   key={idx}
-                  className="p-2 rounded bg-slate-950 border border-slate-800 space-y-1"
+                  className="p-2.5 sm:p-2 rounded bg-slate-950 border border-slate-800 space-y-1"
                 >
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] text-cyan-400 font-bold truncate">
@@ -1301,17 +1303,17 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
         )}
 
         {/* 6. Ventusky-Level Atmospheric & Marine Telemetry Grid */}
-        <div className="grid grid-cols-2 gap-2.5">
-          <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
-            <div className="flex items-center justify-between text-xs text-slate-400">
+        <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+          <div className="p-2.5 sm:p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
+            <div className="flex items-center justify-between text-[11px] sm:text-xs text-slate-400">
               <span>
                 {facility.elevationFt > 45
                   ? `Deck Wind (~${facility.elevationFt}ft)`
                   : '10m Surface Wind'}
               </span>
-              <Wind className="w-3.5 h-3.5 text-cyan-400" />
+              <Wind className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
             </div>
-            <div className="text-xl font-mono font-bold tabular-nums text-white mt-1">
+            <div className="text-lg sm:text-xl font-mono font-bold tabular-nums text-white mt-1">
               {deckWindVal} <span className="text-xs font-normal text-slate-400">G</span>{' '}
               <span
                 className={
@@ -1329,12 +1331,12 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             </div>
           </div>
 
-          <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
-            <div className="flex items-center justify-between text-xs text-slate-400">
+          <div className="p-2.5 sm:p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
+            <div className="flex items-center justify-between text-[11px] sm:text-xs text-slate-400">
               <span>Significant Wave & Swell</span>
-              <Waves className="w-3.5 h-3.5 text-cyan-400" />
+              <Waves className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
             </div>
-            <div className="text-xl font-mono font-bold tabular-nums text-white mt-1">
+            <div className="text-lg sm:text-xl font-mono font-bold tabular-nums text-white mt-1">
               {waveVal} <span className="text-xs font-normal text-slate-400">m</span>
             </div>
             <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
@@ -1343,12 +1345,12 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             </div>
           </div>
 
-          <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
-            <div className="flex items-center justify-between text-xs text-slate-400">
+          <div className="p-2.5 sm:p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
+            <div className="flex items-center justify-between text-[11px] sm:text-xs text-slate-400">
               <span>0°C Freezing & Temp/Dew</span>
-              <Snowflake className="w-3.5 h-3.5 text-purple-400" />
+              <Snowflake className="w-3.5 h-3.5 text-purple-400 shrink-0" />
             </div>
-            <div className="text-lg font-mono font-bold tabular-nums text-white mt-1">
+            <div className="text-base sm:text-lg font-mono font-bold tabular-nums text-white mt-1">
               {freezeVal.toLocaleString()}{' '}
               <span className="text-xs font-normal text-slate-400">ft</span> ·{' '}
               {activeModelSnapshot?.temp2mC ?? weather?.temperatureC ?? 8}°C
@@ -1359,12 +1361,12 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             </div>
           </div>
 
-          <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
-            <div className="flex items-center justify-between text-xs text-slate-400">
+          <div className="p-2.5 sm:p-3 bg-slate-900/90 border border-slate-800 rounded-lg">
+            <div className="flex items-center justify-between text-[11px] sm:text-xs text-slate-400">
               <span>Ceiling, Vis & Convection</span>
-              <CloudLightning className="w-3.5 h-3.5 text-amber-400" />
+              <CloudLightning className="w-3.5 h-3.5 text-amber-400 shrink-0" />
             </div>
-            <div className="text-lg font-mono font-bold tabular-nums text-white mt-1">
+            <div className="text-base sm:text-lg font-mono font-bold tabular-nums text-white mt-1">
               {ceilVal.toLocaleString()}{' '}
               <span className="text-xs font-normal text-slate-400">ft</span> · {visVal}{' '}
               <span className="text-xs font-normal text-slate-400">km</span>
