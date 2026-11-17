@@ -422,8 +422,8 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   );
 
   return (
-    <div className="flex flex-col h-full bg-slate-950 text-slate-100 overflow-y-auto p-3 sm:p-5 space-y-4">
-      <div className={isFullScreen ? 'max-w-6xl mx-auto w-full space-y-4' : 'space-y-4'}>
+    <div className="flex flex-col h-full min-w-0 w-full bg-slate-950 text-slate-100 overflow-y-auto overflow-x-hidden p-3 sm:p-5 space-y-4">
+      <div className={isFullScreen ? 'max-w-6xl mx-auto w-full min-w-0 space-y-4' : 'w-full min-w-0 space-y-4'}>
         {/* Header, Copy Outlook, Full-Screen Expand Toggle & Refresh */}
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
@@ -682,10 +682,10 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
 
         {/* 1. 7-DAY CREW-CHANGE FLIGHT DELAY PLANNER */}
         {daySummaries.length > 0 && (
-          <div className="p-3 bg-slate-900/95 border border-cyan-500/35 rounded-lg space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
+          <div className="p-3 bg-slate-900/95 border border-cyan-500/35 rounded-lg space-y-2.5 min-w-0 max-w-full overflow-hidden">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                <Calendar className="w-3.5 h-3.5 text-cyan-400" />
+                <Calendar className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
                 7-Day Crew-Change Outlook (Tap Any Day)
               </span>
               {selectedHourIdx > 0 && (
@@ -698,7 +698,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               )}
             </div>
 
-            <div className="flex overflow-x-auto gap-1.5 pb-1 no-scrollbar sm:grid sm:grid-cols-7 sm:gap-1 sm:pb-0">
+            <div className="flex w-full min-w-0 overflow-x-auto gap-1.5 pb-1 no-scrollbar sm:grid sm:grid-cols-7 sm:gap-1 sm:pb-0">
               {daySummaries.slice(0, 7).map((day) => {
                 const isSelectedDay = day.dayKey === activeDayKey;
                 const pillClr =
@@ -871,13 +871,13 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
         </div>
 
         {/* 3. Dynamic Go / No-Go Verdict & 7-Point Operating Limits Checklist */}
-        <div className={`p-3 rounded-lg border ${statusColor} space-y-2.5`}>
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 font-semibold text-sm">
-              {currentStatus === 'GO' && <CheckCircle2 className="w-4 h-4 shrink-0" />}
-              {currentStatus === 'CAUTION' && <AlertTriangle className="w-4 h-4 shrink-0" />}
-              {currentStatus === 'HOLD' && <ShieldAlert className="w-4 h-4 shrink-0" />}
-              <span>
+        <div className={`p-3 rounded-lg border ${statusColor} space-y-2.5 min-w-0`}>
+          <div className="flex flex-wrap sm:flex-nowrap items-start sm:items-center justify-between gap-2">
+            <div className="flex items-start sm:items-center gap-2 font-semibold text-sm min-w-0">
+              {currentStatus === 'GO' && <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 sm:mt-0" />}
+              {currentStatus === 'CAUTION' && <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 sm:mt-0" />}
+              {currentStatus === 'HOLD' && <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5 sm:mt-0" />}
+              <span className="break-words">
                 {facility.shortName} ({activeHour?.dayNameShort || 'NOW'}{' '}
                 {activeHour?.hourLabel || ''}):{' '}
                 {currentStatus === 'GO'
@@ -902,7 +902,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               </span>
             </div>
           </div>
-          <p className="text-xs opacity-95">{currentReason}</p>
+          <p className="text-xs opacity-95 break-words">{currentReason}</p>
 
           {/* 5-Model Spread & Agreement Confidence Bar */}
           {fiveModelConsensus && (
@@ -928,7 +928,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
           {/* FPSO Wind-Over-Deck Relative Sector Banner when vessel heading is entered */}
           {windOverDeck && (
             <div
-              className={`px-2.5 py-1.5 rounded text-[11px] font-mono flex items-center justify-between ${
+              className={`px-2.5 py-1.5 rounded text-[11px] font-mono flex flex-wrap items-center justify-between gap-1.5 ${
                 windOverDeck.severity === 'AFT_TURBULENCE'
                   ? 'bg-rose-950/70 text-rose-200 border border-rose-500/40'
                   : windOverDeck.severity === 'CROSSWIND'
@@ -1007,14 +1007,27 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             ].map((item, idx) => (
               <div
                 key={idx}
-                className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-1 px-2 py-1.5 sm:py-1 rounded bg-slate-950/75 text-slate-200"
+                className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 px-2 py-1.5 sm:py-1 rounded bg-slate-950/75 text-slate-200 min-w-0"
               >
-                <span className="truncate pr-2">{item.label}</span>
-                <div className="flex items-center gap-2 shrink-0 tabular-nums">
-                  <span className="text-white font-bold">{item.actual}</span>
+                <div className="flex items-center justify-between gap-2 min-w-0">
+                  <span className="break-words min-w-0">{item.label}</span>
+                  <span
+                    className={`sm:hidden shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                      item.st === 'GO'
+                        ? 'bg-emerald-500/25 text-emerald-300'
+                        : item.st === 'CAUTION'
+                        ? 'bg-amber-500/25 text-amber-300'
+                        : 'bg-rose-500/30 text-rose-300'
+                    }`}
+                  >
+                    {item.st === 'GO' ? 'PASS' : item.st}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0 sm:justify-end tabular-nums">
+                  <span className="text-white font-bold break-words">{item.actual}</span>
                   <span className="text-slate-400 text-[10px]">({item.limit})</span>
                   <span
-                    className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                    className={`hidden sm:inline-block shrink-0 px-1.5 py-0.2 rounded text-[9px] font-bold ${
                       item.st === 'GO'
                         ? 'bg-emerald-500/25 text-emerald-300'
                         : item.st === 'CAUTION'
@@ -1062,10 +1075,10 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
 
         {/* 4. 5-Model Ensemble Cross-Reference Table */}
         {activeHour && (
-          <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2">
-            <div className="flex items-center justify-between">
+          <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2 min-w-0">
+            <div className="flex flex-wrap items-center justify-between gap-1.5">
               <span className="text-xs font-semibold text-white flex items-center gap-1.5">
-                <Layers className="w-3.5 h-3.5 text-amber-400" />
+                <Layers className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                 5-Model Agreement ({activeHour.dayNameShort} {activeHour.dateShort} ·{' '}
                 {activeHour.hourLabel} UTC)
               </span>
@@ -1074,13 +1087,13 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               </span>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse font-mono text-[11px]">
+            <div className="overflow-x-auto max-w-full">
+              <table className="w-full text-left border-collapse font-mono text-[10px] sm:text-[11px]">
                 <thead>
                   <tr className="border-b border-slate-800 text-slate-400 text-[10px]">
                     <th className="py-1.5 pr-2">Model</th>
                     <th className="py-1.5 pr-2">10m Wind</th>
-                    <th className="py-1.5 pr-2">950hPa (1.8k ft)</th>
+                    <th className="py-1.5 pr-2">950hPa</th>
                     <th className="py-1.5 pr-2">0°C Ice</th>
                     <th className="py-1.5 text-right">{preset.id}</th>
                   </tr>
@@ -1201,7 +1214,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             </div>
 
             {limitingLeg && (
-              <div className="text-[11px] font-mono text-slate-300 bg-slate-950/70 px-2.5 py-1 rounded border border-slate-800/80 flex items-center justify-between">
+              <div className="text-[11px] font-mono text-slate-300 bg-slate-950/70 px-2.5 py-1.5 rounded border border-slate-800/80 flex flex-wrap items-center justify-between gap-1.5">
                 <span>Limiting Route Leg ({activeHour?.dayNameShort} {activeHour?.hourLabel}):</span>
                 <strong
                   className={
@@ -1218,7 +1231,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             )}
 
             {shoreRunwayWind && (
-              <div className="text-[10px] font-mono text-slate-300 bg-slate-950/60 px-2.5 py-1 rounded border border-slate-800/80 flex items-center justify-between">
+              <div className="text-[10px] font-mono text-slate-300 bg-slate-950/60 px-2.5 py-1.5 rounded border border-slate-800/80 flex flex-wrap items-center justify-between gap-1.5">
                 <span>
                   {shoreBaseFacility.code} {shoreRunwayWind.runwayLabel} Wind:
                 </span>
@@ -1381,11 +1394,11 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
 
         {/* 7. Live Shore Base METAR & Official Airport TAF (24–30h Aviation Forecast) */}
         {weather && (weather.rawMetar || weather.rawTaf || weather.delayRiskSummary) && (
-          <div className={`p-3 rounded-lg border ${delayColor} space-y-2.5`}>
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5 text-xs font-semibold">
+          <div className={`p-3 rounded-lg border ${delayColor} space-y-2.5 min-w-0`}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs font-semibold min-w-0">
                 <CloudFog className="w-4 h-4 text-cyan-400 shrink-0" />
-                <span>
+                <span className="break-words">
                   SHORE BASE ({weather.shoreBaseIcao}) METAR & TAF
                   {weather.delayRiskLevel ? (
                     <>
@@ -1406,14 +1419,14 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 </span>
               </div>
               {weather.flightCategory && (
-                <span className="text-[11px] font-mono text-cyan-300">
+                <span className="text-[11px] font-mono text-cyan-300 shrink-0">
                   CAT: {weather.flightCategory}
                 </span>
               )}
             </div>
 
             {weather.delayRiskSummary && (
-              <p className="text-xs text-slate-300 leading-relaxed">
+              <p className="text-xs text-slate-300 leading-relaxed break-words">
                 {weather.delayRiskSummary}
               </p>
             )}
@@ -1423,7 +1436,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 <div className="text-[10px] font-mono text-slate-400">
                   OFFICIAL AIRPORT METAR ({weather.shoreBaseIcao}):
                 </div>
-                <div className="p-2 bg-slate-950 rounded border border-slate-800 font-mono text-[11px] text-cyan-300 break-words">
+                <div className="p-2 bg-slate-950 rounded border border-slate-800 font-mono text-[11px] text-cyan-300 [overflow-wrap:anywhere]">
                   {weather.rawMetar}
                 </div>
               </div>
@@ -1448,7 +1461,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                     ))}
                   </div>
                 )}
-                <div className="p-2 bg-slate-950 rounded border border-slate-800 font-mono text-[11px] text-amber-200 break-words leading-relaxed">
+                <div className="p-2 bg-slate-950 rounded border border-slate-800 font-mono text-[11px] text-amber-200 [overflow-wrap:anywhere] leading-relaxed">
                   {weather.rawTaf}
                 </div>
               </div>
@@ -1458,8 +1471,8 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
 
         {/* 8. Live Offshore Rig & Upwind Atlantic METAR Observations */}
         {nearbyMetars.length > 0 && (
-          <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
+          <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2.5 min-w-0">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-1.5 text-xs font-semibold text-white">
                 <Radio className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                 <span>OFFSHORE RIG & UPWIND METAR RING</span>
@@ -1520,7 +1533,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                       </div>
                     )}
 
-                    <div className="font-mono text-[11px] text-slate-300 break-words leading-relaxed">
+                    <div className="font-mono text-[11px] text-slate-300 [overflow-wrap:anywhere] leading-relaxed">
                       {st.rawOb}
                     </div>
                   </div>

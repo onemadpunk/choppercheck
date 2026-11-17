@@ -992,8 +992,9 @@ export default function App() {
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <span className="text-sm font-bold tracking-tight text-white truncate">
-                ChopperCheck.com
+              <span className="text-[13px] sm:text-sm font-bold tracking-tight text-white truncate">
+                <span className="sm:hidden">ChopperCheck</span>
+                <span className="hidden sm:inline">ChopperCheck.com</span>
               </span>
               <span
                 className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold shrink-0 ${
@@ -1007,7 +1008,9 @@ export default function App() {
               </span>
             </div>
             <div className="text-[11px] text-slate-400 truncate font-mono">
-              {activeFacility.shortName} ({activeFacility.code})
+              {activeFacility.shortName.includes(`(${activeFacility.code})`)
+                ? activeFacility.shortName
+                : `${activeFacility.shortName} (${activeFacility.code})`}
               <span className="hidden sm:inline text-cyan-400"> · Made by onemadpunk</span>
             </div>
           </div>
@@ -1365,7 +1368,7 @@ export default function App() {
 
         {/* RIGHT TELEMETRY & OPERATIONS DOCK (Full-Width when expanded to Weather, 500px on Desktop Split View) */}
         <aside
-          className={`w-full ${
+          className={`w-full min-w-0 overflow-hidden ${
             activeTab === 'weather'
               ? 'lg:w-full'
               : 'lg:w-[480px] xl:w-[540px]'
@@ -1416,7 +1419,7 @@ export default function App() {
           </div>
 
           {/* Active Panel Body */}
-          <div className="flex-1 overflow-hidden">
+          <div className="flex-1 min-w-0 overflow-hidden">
             {dockTab === 'flights' && (
               <CrewAndFlightBoard
                 flights={flights}
