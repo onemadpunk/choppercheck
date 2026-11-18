@@ -84,6 +84,8 @@ interface HelideckWeatherPanelProps {
   cachedForecastSavedAt?: string | null;
   isFullScreen?: boolean;
   onToggleFullScreen?: () => void;
+  viewMode?: 'simple' | 'detailed';
+  onChangeViewMode?: (mode: 'simple' | 'detailed') => void;
 }
 
 export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
@@ -114,12 +116,14 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   cachedForecastSavedAt = null,
   isFullScreen = false,
   onToggleFullScreen,
+  viewMode: externalViewMode,
+  onChangeViewMode: externalOnChangeViewMode,
 }) => {
   const [copiedOutlook, setCopiedOutlook] = useState(false);
   const [copiedRigLink, setCopiedRigLink] = useState(false);
   const [showRestrictionsEditor, setShowRestrictionsEditor] = useState(false);
   const [nearbyMetars, setNearbyMetars] = useState<NearbyStationMetar[]>([]);
-  const [viewMode, setViewMode] = useState<'simple' | 'detailed'>(() => {
+  const [internalViewMode, setInternalViewMode] = useState<'simple' | 'detailed'>(() => {
     try {
       return localStorage.getItem('choppercheck_wx_view_mode') === 'detailed'
         ? 'detailed'
@@ -129,8 +133,13 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     }
   });
 
+  const viewMode = externalViewMode ?? internalViewMode;
+
   const handleSetViewMode = (mode: 'simple' | 'detailed') => {
-    setViewMode(mode);
+    setInternalViewMode(mode);
+    if (externalOnChangeViewMode) {
+      externalOnChangeViewMode(mode);
+    }
     try {
       localStorage.setItem('choppercheck_wx_view_mode', mode);
     } catch {

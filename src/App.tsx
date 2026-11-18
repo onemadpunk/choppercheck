@@ -308,6 +308,24 @@ export default function App() {
   const [showInstallModal, setShowInstallModal] = useState<boolean>(false);
   const [showSkyCompassModal, setShowSkyCompassModal] = useState<boolean>(false);
   const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<'simple' | 'detailed'>(() => {
+    try {
+      return localStorage.getItem('choppercheck_wx_view_mode') === 'detailed'
+        ? 'detailed'
+        : 'simple';
+    } catch {
+      return 'simple';
+    }
+  });
+
+  const handleSetViewMode = useCallback((mode: 'simple' | 'detailed') => {
+    setViewMode(mode);
+    try {
+      localStorage.setItem('choppercheck_wx_view_mode', mode);
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
 
   // Load shared rig and optional HLL limits from URL parameters (?rig=GL&gust=40&wave=5.0&ceil=250&hdg=240&pr=2.0&inc=2.5&shr=1.0)
   useEffect(() => {
@@ -1108,6 +1126,26 @@ export default function App() {
             </button>
           )}
 
+          {/* Global Simple Crew View vs Pro Heli-Admin View Toggle Button */}
+          <button
+            onClick={() => handleSetViewMode(viewMode === 'simple' ? 'detailed' : 'simple')}
+            title={
+              viewMode === 'simple'
+                ? 'Currently in Simple Crew View (Plain English). Click to switch to Heli-Admin Pro View.'
+                : 'Currently in Heli-Admin Pro View (Full Telemetry). Click to switch to Simple Crew View.'
+            }
+            className={`min-h-[40px] sm:min-h-[36px] px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 border cursor-pointer transition-colors ${
+              viewMode === 'simple'
+                ? 'bg-emerald-500/20 hover:bg-emerald-500/30 border-emerald-500/50 text-emerald-300'
+                : 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-500/50 text-amber-300'
+            }`}
+          >
+            <span className="w-2 h-2 rounded-full bg-current" />
+            <span className="whitespace-nowrap">
+              {viewMode === 'simple' ? 'Simple View' : 'Pro View'}
+            </span>
+          </button>
+
           {/* 360° Overhead Sky Compass Button (Desktop — mobile uses bottom Compass tab) */}
           <button
             onClick={() => setShowSkyCompassModal(true)}
@@ -1403,6 +1441,8 @@ export default function App() {
             onChangeSelectedHourIdx={setSelectedHourIdx}
             flightOpsMode={flightOpsMode}
             customOverride={activeRigOverride}
+            viewMode={viewMode}
+            onChangeViewMode={handleSetViewMode}
           />
 
           {/* Floating Selected Aircraft Card on Desktop/Mobile so it never crushes the Weather Dock */}
@@ -1552,6 +1592,8 @@ export default function App() {
                   onToggleFullScreen={() =>
                     setActiveTab((prev) => (prev === 'weather' ? 'radar' : 'weather'))
                   }
+                  viewMode={viewMode}
+                  onChangeViewMode={handleSetViewMode}
                 />
               ))}
           </div>

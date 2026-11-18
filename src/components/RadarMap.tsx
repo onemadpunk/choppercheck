@@ -85,6 +85,8 @@ interface RadarMapProps {
   onChangeSelectedHourIdx: (idx: number) => void;
   flightOpsMode: FlightOpsMode;
   customOverride?: CustomRigOverride | null;
+  viewMode?: 'simple' | 'detailed';
+  onChangeViewMode?: (mode: 'simple' | 'detailed') => void;
 }
 
 type MapStyleMode = 'dark_radar' | 'daylight_osm' | 'satellite' | 'nautical_ocean';
@@ -243,6 +245,8 @@ export const RadarMap: React.FC<RadarMapProps> = ({
   onChangeSelectedHourIdx,
   flightOpsMode,
   customOverride,
+  viewMode = 'simple',
+  onChangeViewMode,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -742,25 +746,39 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         {/* Live / Selected Day Weather & Limits Mini-Bar (tappable to open 7-Day Planner) */}
         <button
           onClick={onOpenWeather}
-          className="mt-1.5 sm:mt-2 w-full min-h-[36px] px-2 py-1.5 rounded-md bg-slate-900/95 hover:bg-slate-900 border border-cyan-500/35 flex items-center justify-between gap-1.5 text-[11px] font-mono cursor-pointer transition-colors"
+          className="mt-1.5 sm:mt-2 w-full min-h-[38px] px-2.5 py-1.5 rounded-md bg-slate-900/95 hover:bg-slate-900 border border-cyan-500/35 flex flex-col gap-0.5 text-left cursor-pointer transition-colors"
         >
-          <span
-            className={`font-bold ${
-              hudStatus === 'GO'
-                ? 'text-emerald-400'
-                : hudStatus === 'CAUTION'
-                ? 'text-amber-400'
-                : 'text-rose-400'
-            }`}
-          >
-            ● {activePreset.id} {hudStatus}
-          </span>
-          <span className="text-slate-200 tabular-nums">
-            {hudWindSpd}G{hudWindGust}kt · {hudWave}m
-          </span>
-          <span className="text-cyan-400 font-sans font-semibold text-[10px]">
-            7-Day →
-          </span>
+          <div className="w-full flex items-center justify-between gap-1.5 text-[11px] font-mono">
+            <span
+              className={`font-bold ${
+                hudStatus === 'GO'
+                  ? 'text-emerald-400'
+                  : hudStatus === 'CAUTION'
+                  ? 'text-amber-400'
+                  : 'text-rose-400'
+              }`}
+            >
+              ●{' '}
+              {viewMode === 'simple'
+                ? hudStatus === 'GO'
+                  ? 'GOOD TO FLY'
+                  : hudStatus === 'CAUTION'
+                  ? 'POSSIBLE DELAY'
+                  : 'WEATHER HOLD'
+                : `${activePreset.id} ${hudStatus}`}
+            </span>
+            <span className="text-cyan-400 font-sans font-semibold text-[10px]">
+              Open 7-Day Weather →
+            </span>
+          </div>
+          <div className="w-full flex items-center justify-between text-[10px] font-mono text-slate-300 tabular-nums">
+            <span>
+              Wind {hudWindGust}kt gusts · Waves {hudWave}m
+            </span>
+            <span className="text-slate-400">
+              {activeHour ? `${activeHour.dayNameShort} ${activeHour.hourLabel}Z` : 'Live'}
+            </span>
+          </div>
         </button>
 
         {/* Quick Mobile Action Row: Focus Only 1 Rig + Change Rig */}
@@ -975,14 +993,28 @@ export const RadarMap: React.FC<RadarMapProps> = ({
                 })}
               </div>
 
-              <button
-                onClick={onOpenWeather}
-                className="px-2 py-1.5 sm:py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10px] font-mono whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                {activeHour
-                  ? `${activeHour.dayNameShort} ${activeHour.hourLabel} UTC`
-                  : '7-Day Details'}
-              </button>
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  onClick={onOpenWeather}
+                  className="px-2 py-1.5 sm:py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10px] font-mono whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  {activeHour
+                    ? `${activeHour.dayNameShort} ${activeHour.hourLabel} UTC`
+                    : '7-Day Details'}
+                </button>
+                {onChangeViewMode && (
+                  <button
+                    onClick={() => onChangeViewMode(viewMode === 'simple' ? 'detailed' : 'simple')}
+                    className={`px-2 py-1.5 sm:py-0.5 rounded text-[10px] font-mono font-bold whitespace-nowrap shrink-0 border cursor-pointer ${
+                      viewMode === 'simple'
+                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                        : 'bg-amber-400 text-slate-950 border-amber-300'
+                    }`}
+                  >
+                    {viewMode === 'simple' ? '⚙️ Pro Mode' : '✓ Pro Mode ON'}
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
@@ -990,18 +1022,24 @@ export const RadarMap: React.FC<RadarMapProps> = ({
           <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-slate-800/80 overflow-x-auto no-scrollbar">
             <div className="flex items-center gap-1 shrink-0">
               <span className="text-[10px] font-mono text-cyan-400 font-semibold uppercase">
-                LAYER:
+                MAP WEATHER:
               </span>
-              {(
-                [
-                  { id: 'off', label: 'Off' },
-                  { id: 'go_nogo_matrix', label: 'Go/No-Go Matrix' },
-                  { id: 'wind_surface', label: '10m Wind' },
-                  { id: 'wind_950hpa', label: '950hPa (1,800ft)' },
-                  { id: 'wind_850hpa', label: '850hPa (5,000ft)' },
-                  { id: 'wave_swell', label: 'Waves (Hs)' },
-                  { id: 'freezing_icing', label: '0°C Icing' },
-                ] as Array<{ id: WeatherOverlayMode; label: string }>
+              {(viewMode === 'simple'
+                ? ([
+                    { id: 'off', label: 'Off' },
+                    { id: 'go_nogo_matrix', label: 'Flight Status Map' },
+                    { id: 'wind_surface', label: 'Wind' },
+                    { id: 'wave_swell', label: 'Waves' },
+                  ] as Array<{ id: WeatherOverlayMode; label: string }>)
+                : ([
+                    { id: 'off', label: 'Off' },
+                    { id: 'go_nogo_matrix', label: 'Go/No-Go Matrix' },
+                    { id: 'wind_surface', label: '10m Wind' },
+                    { id: 'wind_950hpa', label: '950hPa (1,800ft)' },
+                    { id: 'wind_850hpa', label: '850hPa (5,000ft)' },
+                    { id: 'wave_swell', label: 'Waves (Hs)' },
+                    { id: 'freezing_icing', label: '0°C Icing' },
+                  ] as Array<{ id: WeatherOverlayMode; label: string }>)
               ).map((m) => (
                 <button
                   key={m.id}
@@ -1046,7 +1084,8 @@ export const RadarMap: React.FC<RadarMapProps> = ({
             </div>
           </div>
 
-          {/* Row 3: Model Source & Airframe Limit Preset Row */}
+          {/* Row 3: Model Source & Airframe Limit Preset Row (Shown in Pro View) */}
+          {viewMode === 'detailed' && (
           <div className="flex items-center justify-between gap-2 overflow-x-auto no-scrollbar text-[10px] font-mono">
             <div className="flex items-center gap-1 shrink-0">
               <span className="text-slate-400">MODEL:</span>
@@ -1083,6 +1122,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
               ))}
             </div>
           </div>
+          )}
 
           {/* Mobile-only Quick Map Rings & Labels toggles inside expanded Layers drawer */}
           <div className="flex sm:hidden items-center gap-1.5 pt-1 border-t border-slate-800/80 text-[10px] font-mono">
