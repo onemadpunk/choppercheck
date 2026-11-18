@@ -17,7 +17,7 @@ import {
   WeatherModelId,
   WeatherOverlayMode,
 } from './types/radar';
-import { INSTALLATIONS_AND_AIRPORTS } from './data/installationsAndAirports';
+import { INSTALLATIONS_AND_AIRPORTS, resolveHeliAdminStopCode } from './data/installationsAndAirports';
 import {
   advanceAircraftPositionsSmoothly,
   fetchHelideckWeather,
@@ -308,6 +308,65 @@ export default function App() {
   const [showInstallModal, setShowInstallModal] = useState<boolean>(false);
   const [showSkyCompassModal, setShowSkyCompassModal] = useState<boolean>(false);
   const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
+
+  // Load shared rig and optional HLL limits from URL parameters (?rig=GL&gust=40&wave=5.0&ceil=250&hdg=240&pr=2.0&inc=2.5&shr=1.0)
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const rigParam = params.get('rig');
+      if (!rigParam) return;
+      const matched =
+        INSTALLATIONS_AND_AIRPORTS.find(
+          (f) => f.id.toLowerCase() === rigParam.toLowerCase() || f.code.toLowerCase() === rigParam.toLowerCase()
+        ) || resolveHeliAdminStopCode(rigParam);
+      if (!matched) return;
+
+      setActiveFacilityId(matched.id);
+      setActiveSector(matched.sector);
+      setQueryCenter({ lat: matched.lat, lon: matched.lon });
+      setMapViewTarget((prev) => ({
+        lat: matched.lat,
+        lon: matched.lon,
+        zoom: matched.assetType === 'UK Airport' || matched.assetType === 'SAR Base' ? 9 : 8,
+        seq: prev.seq + 1,
+      }));
+
+      const sharedOverride: CustomRigOverride = {};
+      let hasSharedParam = false;
+      const numParam = (k: string) => {
+        const v = params.get(k);
+        if (v !== null && v.trim() !== '' && Number.isFinite(Number(v))) {
+          hasSharedParam = true;
+          return Number(v);
+        }
+        return undefined;
+      };
+      sharedOverride.maxGustKts = numParam('gust');
+      sharedOverride.maxWaveM = numParam('wave');
+      sharedOverride.minCeilingFt = numParam('ceil');
+      sharedOverride.vesselHeadingDeg = numParam('hdg');
+      sharedOverride.maxPitchRollDeg = numParam('pr');
+      sharedOverride.maxInclinationDeg = numParam('inc');
+      sharedOverride.maxShrMs = numParam('shr');
+      if (params.get('daylight') === '1') {
+        sharedOverride.daylightOnlyDeck = true;
+        hasSharedParam = true;
+      }
+      if (hasSharedParam) {
+        setCustomRigOverrides((prev) => {
+          const next = { ...prev, [matched.id]: sharedOverride };
+          try {
+            localStorage.setItem('choppercheck_rig_overrides', JSON.stringify(next));
+          } catch {
+            // ignore storage errors
+          }
+          return next;
+        });
+      }
+    } catch {
+      // ignore URL parsing errors
+    }
+  }, []);
 
   // Expiry runs even when every network request fails. Predictions retain the original observation time.
   useEffect(() => {
