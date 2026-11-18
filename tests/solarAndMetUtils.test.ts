@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   computeBestRunwayWind,
   computeDeckHeightWind,
+  computeEstimatedFpsoDeckMotion,
   computeFiveModelConsensus,
   computeSolarTimesUtc,
   computeWindOverDeckSector,
@@ -33,15 +34,39 @@ test('Glen Lyon winter daylight window is much shorter than summer daylight', ()
   assert.equal(isCaaNightForHour('2026-11-14T12:00', winter), false);
 });
 
-test('Night operating limits tighten ceiling, visibility, gust and FPSO wave margins automatically', () => {
+test('Night operating limits tighten ceiling, visibility, gust and FPSO wave margins automatically and match CAP 437 / SPA.HOFO.125', () => {
   const s92 = AIRFRAME_PRESETS.S92;
   const day = deriveEffectiveLimits(s92, false, true, '24h_ops');
   const night = deriveEffectiveLimits(s92, true, true, '24h_ops');
 
-  assert.ok(night.minCloudCeilingFt > day.minCloudCeilingFt);
-  assert.ok(night.minVisibilityKm > day.minVisibilityKm);
-  assert.ok(night.maxHelideckGustKts < day.maxHelideckGustKts);
-  assert.ok(night.maxFpsoWaveHeightM < day.maxFpsoWaveHeightM);
+  assert.equal(day.maxHelideckGustKts, 60);
+  assert.equal(day.maxFpsoWaveHeightM, 6.0);
+  assert.equal(day.minCloudCeilingFt, 250);
+  assert.equal(day.maxPitchRollDeg, 3.0);
+  assert.equal(day.maxInclinationDeg, 3.5);
+  assert.equal(day.maxShrMs, 1.3);
+
+  assert.equal(night.maxHelideckGustKts, 55);
+  assert.equal(night.maxFpsoWaveHeightM, 5.5);
+  assert.equal(night.minCloudCeilingFt, 300);
+  assert.equal(night.maxPitchRollDeg, 2.0);
+  assert.equal(night.maxInclinationDeg, 2.5);
+  assert.equal(night.maxShrMs, 1.0);
+
+  const customOverride = deriveEffectiveLimits(s92, false, true, '24h_ops', {
+    maxGustKts: 50,
+    maxWaveM: 4.5,
+    minCeilingFt: 300,
+    maxPitchRollDeg: 2.0,
+    maxInclinationDeg: 2.5,
+    maxShrMs: 1.0,
+  });
+  assert.equal(customOverride.maxHelideckGustKts, 50);
+  assert.equal(customOverride.maxFpsoWaveHeightM, 4.5);
+  assert.equal(customOverride.minCloudCeilingFt, 300);
+  assert.equal(customOverride.maxPitchRollDeg, 2.0);
+  assert.equal(customOverride.maxInclinationDeg, 2.5);
+  assert.equal(customOverride.maxShrMs, 1.0);
 
   const blockedDaylightOnly = evaluateHourWithLimits(
     {
@@ -219,4 +244,44 @@ test('Blackpool EGNH, Irish Sea, Southern North Sea & UK SAR bases resolve and c
 
   const caernarfon = resolveHeliAdminStopCode('EGCK');
   assert.equal(caernarfon?.assetType, 'SAR Base');
+
+  const catcher = resolveHeliAdminStopCode('CAT');
+  assert.equal(catcher?.assetType, 'FPSO');
+
+  // Verify all 5 presets have 60kt wind, 6.0m sea state, and 250ft Day ARA ceiling
+  for (const preset of Object.values(AIRFRAME_PRESETS)) {
+    assert.equal(preset.maxHelideckGustKts, 60);
+    assert.equal(preset.maxFpsoWaveHeightM, 6.0);
+    assert.equal(preset.minCloudCeilingFt, 250);
+  }
+
+  // Verify wave-derived FPSO deck motion RAO estimator (Green deck vs Red deck)
+  const calmMotion = computeEstimatedFpsoDeckMotion({
+    waveHeightM: 2.2,
+    swellPeriodSec: 8.5,
+    swellWaveHeightM: 1.8,
+    swellWavePeriodSec: 8.5,
+    swellDirDeg: 240,
+    windDirDeg: 240,
+    maxPitchRollLimit: 3.0,
+    maxInclinationLimit: 3.5,
+    maxShrLimit: 1.3,
+  });
+  assert.equal(calmMotion.deckLightStatus, 'GREEN');
+  assert.ok(calmMotion.estPitchRollDeg > 0 && calmMotion.estPitchRollDeg < 2.0);
+  assert.ok(calmMotion.estShrMs > 0 && calmMotion.estShrMs < 1.0);
+
+  const stormMotion = computeEstimatedFpsoDeckMotion({
+    waveHeightM: 6.4,
+    swellPeriodSec: 12.5,
+    swellWaveHeightM: 5.8,
+    swellWavePeriodSec: 12.5,
+    swellDirDeg: 310,
+    windDirDeg: 230,
+    maxPitchRollLimit: 3.0,
+    maxInclinationLimit: 3.5,
+    maxShrLimit: 1.3,
+  });
+  assert.equal(stormMotion.deckLightStatus, 'RED');
+  assert.ok(stormMotion.estPitchRollDeg >= 3.0);
 });

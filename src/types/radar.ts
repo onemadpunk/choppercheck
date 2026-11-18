@@ -189,6 +189,12 @@ export interface AirframeLimitPreset {
   minVisibilityKm: number;
   minIcingFreezingLevelFt: number;
   maxFpsoWaveHeightM: number;
+  maxPitchRollDegDay: number;
+  maxPitchRollDegNight: number;
+  maxInclinationDegDay: number;
+  maxInclinationDegNight: number;
+  maxShrMsDay: number;
+  maxShrMsNight: number;
 }
 
 export type FlightOpsMode = '24h_ops' | 'daylight_only';
@@ -196,6 +202,10 @@ export type FlightOpsMode = '24h_ops' | 'daylight_only';
 export interface CustomRigOverride {
   maxGustKts?: number;
   maxWaveM?: number;
+  minCeilingFt?: number;
+  maxPitchRollDeg?: number;
+  maxInclinationDeg?: number;
+  maxShrMs?: number;
   daylightOnlyDeck?: boolean;
   vesselHeadingDeg?: number;
 }

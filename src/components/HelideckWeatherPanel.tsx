@@ -21,6 +21,7 @@ import { calculateBearingDeg, calculateDistanceNm } from '../data/aircraftDecode
 import {
   buildContextAwareSevenDaySummaries,
   computeBestRunwayWind,
+  computeEstimatedFpsoDeckMotion,
   computeFiveModelConsensus,
   computeSolarTimesUtc,
   computeWindOverDeckSector,
@@ -265,6 +266,14 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   const minCeilLimit = effLimits?.minCloudCeilingFt ?? preset.minCloudCeilingFt;
   const minVisLimit = effLimits?.minVisibilityKm ?? preset.minVisibilityKm;
   const maxWaveLimit = effLimits?.maxFpsoWaveHeightM ?? preset.maxFpsoWaveHeightM;
+  const maxPitchRollLimit =
+    effLimits?.maxPitchRollDeg ??
+    (isNightHour ? preset.maxPitchRollDegNight : preset.maxPitchRollDegDay);
+  const maxInclinationLimit =
+    effLimits?.maxInclinationDeg ??
+    (isNightHour ? preset.maxInclinationDegNight : preset.maxInclinationDegDay);
+  const maxShrLimit =
+    effLimits?.maxShrMs ?? (isNightHour ? preset.maxShrMsNight : preset.maxShrMsDay);
 
   const deckWindVal =
     activeModelSnapshot?.deckWindSpeedKts ??
@@ -294,17 +303,12 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     isFpso
   );
   const longSwellRisk = swellRisk.isResonantSwell;
-  const waveStatus = isFpso
-    ? waveVal >= maxWaveLimit
+  const waveStatus =
+    waveVal >= maxWaveLimit
       ? 'HOLD'
       : waveVal >= maxWaveLimit - 1.2 || longSwellRisk
       ? 'CAUTION'
-      : 'GO'
-    : waveVal >= 6.5
-    ? 'HOLD'
-    : waveVal >= 5.2
-    ? 'CAUTION'
-    : 'GO';
+      : 'GO';
 
   const ceilVal = activeModelSnapshot?.cloudCeilingFt ?? 2200;
   const ceilStatus =
@@ -390,6 +394,34 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
       ? computeWindOverDeckSector(windDirNow, customOverride.vesselHeadingDeg)
       : null;
 
+  const fpsoMotionEstimate = useMemo(() => {
+    if (!isFpso) return null;
+    return computeEstimatedFpsoDeckMotion({
+      waveHeightM: waveVal,
+      swellPeriodSec: wavePeriodVal,
+      swellWaveHeightM: activeHour?.swellWaveHeightM,
+      swellWavePeriodSec: activeHour?.swellWavePeriodSec,
+      swellDirDeg: activeHour?.swellDirDeg,
+      windDirDeg: windDirNow,
+      vesselHeadingDeg: customOverride?.vesselHeadingDeg,
+      maxPitchRollLimit,
+      maxInclinationLimit,
+      maxShrLimit,
+    });
+  }, [
+    isFpso,
+    waveVal,
+    wavePeriodVal,
+    activeHour?.swellWaveHeightM,
+    activeHour?.swellWavePeriodSec,
+    activeHour?.swellDirDeg,
+    windDirNow,
+    customOverride?.vesselHeadingDeg,
+    maxPitchRollLimit,
+    maxInclinationLimit,
+    maxShrLimit,
+  ]);
+
   const handleCopyOutlook = async () => {
     const modelName =
       WEATHER_MODELS_META.find((m) => m.id === weatherModelId)?.shortName || weatherModelId;
@@ -417,6 +449,10 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     customOverride &&
       (customOverride.maxGustKts ||
         customOverride.maxWaveM ||
+        customOverride.minCeilingFt ||
+        customOverride.maxPitchRollDeg ||
+        customOverride.maxInclinationDeg ||
+        customOverride.maxShrMs ||
         customOverride.daylightOnlyDeck ||
         typeof customOverride.vesselHeadingDeg === 'number')
   );
@@ -592,9 +628,9 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
           {/* Collapsible Local Deck Restrictions & FPSO Heading Editor */}
           {showRestrictionsEditor && (
             <div className="p-2.5 mt-1.5 rounded bg-slate-950 border border-slate-800 space-y-2 text-xs">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
                 <span className="font-mono text-[11px] text-amber-300 font-semibold">
-                  LOCAL HELIDECK RESTRICTIONS (SAVED ON THIS DEVICE FOR {facility.code})
+                  LOCAL HELIDECK / HLL / HELIMET LIMITS (SAVED FOR {facility.code})
                 </span>
                 {hasCustomOverride && (
                   <button
@@ -607,7 +643,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-[11px]">
                 <label className="space-y-1">
-                  <span className="text-slate-400 block text-[10px]">Max Gust Override (kt)</span>
+                  <span className="text-slate-400 block text-[10px]">Max Wind/Gust (kt)</span>
                   <input
                     type="number"
                     min={20}
@@ -622,7 +658,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                   />
                 </label>
                 <label className="space-y-1">
-                  <span className="text-slate-400 block text-[10px]">Max Wave Override (m)</span>
+                  <span className="text-slate-400 block text-[10px]">Max Sea State Hs (m)</span>
                   <input
                     type="number"
                     step="0.1"
@@ -637,25 +673,91 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                     className="w-full px-2 py-1 rounded bg-slate-900 border border-slate-700 text-white"
                   />
                 </label>
+                <label className="space-y-1">
+                  <span className="text-slate-400 block text-[10px]">Min Cloud Ceiling (ft)</span>
+                  <input
+                    type="number"
+                    step="50"
+                    min={150}
+                    max={1500}
+                    placeholder={`${minCeilLimit}`}
+                    value={customOverride?.minCeilingFt ?? ''}
+                    onChange={(e) => {
+                      const val = e.target.value ? Number(e.target.value) : undefined;
+                      onChangeCustomOverride({ ...customOverride, minCeilingFt: val });
+                    }}
+                    className="w-full px-2 py-1 rounded bg-slate-900 border border-slate-700 text-white"
+                  />
+                </label>
                 {isFpso && (
-                  <label className="space-y-1">
-                    <span className="text-slate-400 block text-[10px]">FPSO Heading (°T)</span>
-                    <input
-                      type="number"
-                      min={0}
-                      max={359}
-                      placeholder="e.g. 240"
-                      value={customOverride?.vesselHeadingDeg ?? ''}
-                      onChange={(e) => {
-                        const val =
-                          e.target.value !== ''
-                            ? ((Number(e.target.value) % 360) + 360) % 360
-                            : undefined;
-                        onChangeCustomOverride({ ...customOverride, vesselHeadingDeg: val });
-                      }}
-                      className="w-full px-2 py-1 rounded bg-slate-900 border border-slate-700 text-white"
-                    />
-                  </label>
+                  <>
+                    <label className="space-y-1">
+                      <span className="text-slate-400 block text-[10px]">FPSO Heading (°T)</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={359}
+                        placeholder="e.g. 240"
+                        value={customOverride?.vesselHeadingDeg ?? ''}
+                        onChange={(e) => {
+                          const val =
+                            e.target.value !== ''
+                              ? ((Number(e.target.value) % 360) + 360) % 360
+                              : undefined;
+                          onChangeCustomOverride({ ...customOverride, vesselHeadingDeg: val });
+                        }}
+                        className="w-full px-2 py-1 rounded bg-slate-900 border border-slate-700 text-white"
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-slate-400 block text-[10px]">Max Pitch/Roll (±°)</span>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min={1}
+                        max={6}
+                        placeholder={`${maxPitchRollLimit}`}
+                        value={customOverride?.maxPitchRollDeg ?? ''}
+                        onChange={(e) => {
+                          const val = e.target.value ? Number(e.target.value) : undefined;
+                          onChangeCustomOverride({ ...customOverride, maxPitchRollDeg: val });
+                        }}
+                        className="w-full px-2 py-1 rounded bg-slate-900 border border-slate-700 text-white"
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-slate-400 block text-[10px]">Max Inclination INC (°)</span>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min={1}
+                        max={6}
+                        placeholder={`${maxInclinationLimit}`}
+                        value={customOverride?.maxInclinationDeg ?? ''}
+                        onChange={(e) => {
+                          const val = e.target.value ? Number(e.target.value) : undefined;
+                          onChangeCustomOverride({ ...customOverride, maxInclinationDeg: val });
+                        }}
+                        className="w-full px-2 py-1 rounded bg-slate-900 border border-slate-700 text-white"
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-slate-400 block text-[10px]">Max Heave SHR (m/s)</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min={0.3}
+                        max={2.5}
+                        placeholder={`${maxShrLimit}`}
+                        value={customOverride?.maxShrMs ?? ''}
+                        onChange={(e) => {
+                          const val = e.target.value ? Number(e.target.value) : undefined;
+                          onChangeCustomOverride({ ...customOverride, maxShrMs: val });
+                        }}
+                        className="w-full px-2 py-1 rounded bg-slate-900 border border-slate-700 text-white"
+                      />
+                    </label>
+                  </>
                 )}
                 <label className="flex items-center gap-2 pt-4 cursor-pointer">
                   <input
@@ -673,8 +775,8 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 </label>
               </div>
               <p className="text-[10px] text-slate-500">
-                Use this for temporary HCA HLL restrictions (lighting unserviceable, crane sector,
-                or vessel heading). Stored locally in your browser.
+                Enter your installation&apos;s exact HCA HLL or HeliMet HMS limits (wind, sea state,
+                ceiling, pitch/roll, INC, SHR, or FPSO heading). Saved locally on this device.
               </p>
             </div>
           )}
@@ -965,7 +1067,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 actual: `${waveVal} m (${wavePeriodVal}s${
                   longSwellRisk ? ' · Resonant' : activeHour?.swellWaveHeightM ? ` · Swell ${activeHour.swellWaveHeightM}m` : ''
                 })`,
-                limit: isFpso ? `Max ${maxWaveLimit} m (<10s)` : 'Max 6.5 m',
+                limit: isFpso ? `Max ${maxWaveLimit} m (<10s)` : `Max ${maxWaveLimit} m`,
                 st: waveStatus,
               },
               {
@@ -1041,6 +1143,68 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               </div>
             ))}
           </div>
+
+          {/* CAP 437 / HCA HMS Floating Deck Motion Limits & Free Wave-Derived RAO Estimator */}
+          {isFpso && (
+            <div className="p-2.5 rounded bg-slate-950/85 border border-cyan-500/30 space-y-2 font-mono text-[11px]">
+              <div className="flex flex-wrap items-center justify-between gap-1.5">
+                <span className="text-cyan-300 font-bold text-[10px]">
+                  CAP 437 / HCA HMS DECK MOTION ({preset.id} {isNightHour ? 'NIGHT' : 'DAY'} · CAT 1 FLOATING)
+                </span>
+                {fpsoMotionEstimate && (
+                  <span
+                    className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                      fpsoMotionEstimate.deckLightStatus === 'RED'
+                        ? 'bg-rose-500/30 text-rose-300 border border-rose-500/40'
+                        : fpsoMotionEstimate.deckLightStatus === 'AMBER'
+                        ? 'bg-amber-500/30 text-amber-300 border border-amber-500/40'
+                        : 'bg-emerald-500/25 text-emerald-300 border border-emerald-500/40'
+                    }`}
+                  >
+                    {fpsoMotionEstimate.summaryLabel}
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-3 gap-1.5 text-center">
+                <div className="p-1.5 rounded bg-slate-900/90 border border-slate-800">
+                  <div className="text-[9px] text-slate-400">PITCH / ROLL</div>
+                  {fpsoMotionEstimate && (
+                    <div className="text-xs font-bold text-emerald-300">
+                      Est. ±{fpsoMotionEstimate.estPitchRollDeg.toFixed(1)}°
+                    </div>
+                  )}
+                  <div className="text-[10px] font-semibold text-white">
+                    Limit ±{maxPitchRollLimit.toFixed(1)}°
+                  </div>
+                </div>
+                <div className="p-1.5 rounded bg-slate-900/90 border border-slate-800">
+                  <div className="text-[9px] text-slate-400">INCLINATION (INC)</div>
+                  {fpsoMotionEstimate && (
+                    <div className="text-xs font-bold text-emerald-300">
+                      Est. {fpsoMotionEstimate.estInclinationDeg.toFixed(1)}°
+                    </div>
+                  )}
+                  <div className="text-[10px] font-semibold text-white">
+                    Limit {maxInclinationLimit.toFixed(1)}°
+                  </div>
+                </div>
+                <div className="p-1.5 rounded bg-slate-900/90 border border-slate-800">
+                  <div className="text-[9px] text-slate-400">HEAVE RATE (SHR)</div>
+                  {fpsoMotionEstimate && (
+                    <div className="text-xs font-bold text-cyan-300">
+                      Est. {fpsoMotionEstimate.estShrMs.toFixed(2)} m/s
+                    </div>
+                  )}
+                  <div className="text-[10px] font-semibold text-white">
+                    Limit {maxShrLimit.toFixed(1)} m/s
+                  </div>
+                </div>
+              </div>
+              <p className="text-[10px] font-sans text-slate-400 leading-snug">
+                <strong className="text-emerald-300">100% Automatic (No Login Required):</strong> Estimated Pitch/Roll, Inclination (INC), and Heave Rate (SHR) are calculated automatically inside ChopperCheck from live marine wave height ({waveVal}m) &amp; swell period ({wavePeriodVal}s) against official UKCS CAP 437 / HCA limits.
+              </p>
+            </div>
+          )}
 
           {/* 1-Tap Launch Animated Streamlines on Radar Map */}
           <div className="pt-1.5 border-t border-white/10 flex flex-wrap items-center gap-1.5">

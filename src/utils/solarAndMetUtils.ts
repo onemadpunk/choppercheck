@@ -166,6 +166,9 @@ export interface EffectiveOperatingLimits {
   minVisibilityKm: number;
   minIcingFreezingLevelFt: number;
   maxFpsoWaveHeightM: number;
+  maxPitchRollDeg: number;
+  maxInclinationDeg: number;
+  maxShrMs: number;
   isNightApplied: boolean;
   isOverrideApplied: boolean;
   daylightOnlyBlocked: boolean;
@@ -174,8 +177,8 @@ export interface EffectiveOperatingLimits {
 /**
  * Computes effective operational limits based on:
  * 1) Base airframe preset (S92 / AW189 / H175 / AW139 / H160)
- * 2) Day vs Night phase (stricter night ARA ceiling/vis + tighter floating deck pitch-roll/wind margin)
- * 3) Optional user-saved local HCA/HLL override for this rig/FPSO
+ * 2) Day vs Night phase (SPA.HOFO.125 ARA 250ft Day / 300ft Night + CAP 437 / HCA HMS Night deck motion margins)
+ * 3) Optional user-saved local HCA HLL / HeliMet override for this rig/FPSO
  */
 export function deriveEffectiveLimits(
   basePreset: AirframeLimitPreset,
@@ -184,21 +187,40 @@ export function deriveEffectiveLimits(
   flightOpsMode: FlightOpsMode,
   customOverride?: CustomRigOverride | null
 ): EffectiveOperatingLimits {
-  // Stricter Night Flying Baseline (CAP 437 / Offshore Night ARA Minima)
-  let maxGust = isNight ? Math.max(35, basePreset.maxHelideckGustKts - 4) : basePreset.maxHelideckGustKts;
+  // Stricter Night Flying Baseline (CAP 437 / SPA.HOFO.125 Night ARA Minima 300ft vs 250ft Day)
+  let maxGust = isNight ? Math.max(35, basePreset.maxHelideckGustKts - 5) : basePreset.maxHelideckGustKts;
   let cautionGust = isNight ? Math.max(30, basePreset.cautionGustKts - 3) : basePreset.cautionGustKts;
-  let minCeil = isNight ? basePreset.minCloudCeilingFt + 150 : basePreset.minCloudCeilingFt;
+  let minCeil = isNight ? basePreset.minCloudCeilingFt + 50 : basePreset.minCloudCeilingFt;
   let minVis = isNight ? Number((basePreset.minVisibilityKm + 0.5).toFixed(1)) : basePreset.minVisibilityKm;
   let maxWave = isNight && isFpso ? Number((basePreset.maxFpsoWaveHeightM - 0.5).toFixed(1)) : basePreset.maxFpsoWaveHeightM;
+  let maxPitchRoll = isNight ? basePreset.maxPitchRollDegNight : basePreset.maxPitchRollDegDay;
+  let maxInclination = isNight ? basePreset.maxInclinationDegNight : basePreset.maxInclinationDegDay;
+  let maxShr = isNight ? basePreset.maxShrMsNight : basePreset.maxShrMsDay;
 
   let isOverrideApplied = false;
-  if (customOverride?.maxGustKts && customOverride.maxGustKts > 0 && customOverride.maxGustKts < maxGust) {
+  if (customOverride?.maxGustKts && customOverride.maxGustKts > 0) {
     maxGust = customOverride.maxGustKts;
     cautionGust = Math.min(cautionGust, Math.max(25, maxGust - 10));
     isOverrideApplied = true;
   }
-  if (customOverride?.maxWaveM && customOverride.maxWaveM > 0 && customOverride.maxWaveM < maxWave) {
+  if (customOverride?.maxWaveM && customOverride.maxWaveM > 0) {
     maxWave = customOverride.maxWaveM;
+    isOverrideApplied = true;
+  }
+  if (customOverride?.minCeilingFt && customOverride.minCeilingFt > 0) {
+    minCeil = customOverride.minCeilingFt;
+    isOverrideApplied = true;
+  }
+  if (customOverride?.maxPitchRollDeg && customOverride.maxPitchRollDeg > 0) {
+    maxPitchRoll = customOverride.maxPitchRollDeg;
+    isOverrideApplied = true;
+  }
+  if (customOverride?.maxInclinationDeg && customOverride.maxInclinationDeg > 0) {
+    maxInclination = customOverride.maxInclinationDeg;
+    isOverrideApplied = true;
+  }
+  if (customOverride?.maxShrMs && customOverride.maxShrMs > 0) {
+    maxShr = customOverride.maxShrMs;
     isOverrideApplied = true;
   }
   if (customOverride?.daylightOnlyDeck) {
@@ -215,6 +237,9 @@ export function deriveEffectiveLimits(
     minVisibilityKm: minVis,
     minIcingFreezingLevelFt: basePreset.minIcingFreezingLevelFt,
     maxFpsoWaveHeightM: maxWave,
+    maxPitchRollDeg: maxPitchRoll,
+    maxInclinationDeg: maxInclination,
+    maxShrMs: maxShr,
     isNightApplied: isNight,
     isOverrideApplied,
     daylightOnlyBlocked,
@@ -280,6 +305,111 @@ export function evaluateFpsoSwellRisk(
     effectivePeriodSec,
     effectiveSwellM,
     label,
+  };
+}
+
+export interface EstimatedFpsoDeckMotion {
+  estPitchRollDeg: number;
+  estInclinationDeg: number;
+  estShrMs: number;
+  encounterAngleDeg: number;
+  periodFactor: number;
+  deckLightStatus: 'GREEN' | 'AMBER' | 'RED';
+  summaryLabel: string;
+}
+
+/**
+ * Computes a wave-derived hydrodynamic RAO (Response Amplitude Operator) estimate of
+ * Category 1 Turret-Moored FPSO / Semi-Sub Helideck Motion (Pitch/Roll ±°, Inclination INC °,
+ * and Significant Heave Rate SHR m/s) from real Open-Meteo / Copernicus Marine wave height (Hs),
+ * swell height, peak swell period (Tp), and wave/swell encounter angle.
+ *
+ * This provides a free, physics-based alternative when the user does not have a HeliMet.com login
+ * to the vessel's internal MRU gyroscope.
+ */
+export function computeEstimatedFpsoDeckMotion(params: {
+  waveHeightM: number;
+  swellPeriodSec: number;
+  swellWaveHeightM?: number;
+  swellWavePeriodSec?: number;
+  swellDirDeg?: number;
+  windDirDeg?: number;
+  vesselHeadingDeg?: number;
+  maxPitchRollLimit?: number;
+  maxInclinationLimit?: number;
+  maxShrLimit?: number;
+}): EstimatedFpsoDeckMotion {
+  const hs = Math.max(0, params.waveHeightM || 0);
+  const swellH = Math.max(0, params.swellWaveHeightM ?? hs * 0.8);
+  const tp = Math.max(4, params.swellWavePeriodSec || params.swellPeriodSec || 7.5);
+  // Effective excitation wave height combines total Hs with long-period swell energy
+  const hEff = hs * 0.72 + swellH * 0.28;
+
+  // Hull RAO resonance factor (250-270m FPSO filters short <7s chop, resonates in >=10-14s Atlantic swell)
+  let periodFactor = 0.75;
+  if (tp >= 13.0) {
+    periodFactor = 1.38;
+  } else if (tp >= 11.0) {
+    periodFactor = 1.22;
+  } else if (tp >= 9.5) {
+    periodFactor = 1.05;
+  } else if (tp >= 8.0) {
+    periodFactor = 0.9;
+  }
+
+  // Relative swell encounter angle: use locked FPSO heading if provided, else turret weathervaning (~windDirDeg)
+  const refHeading =
+    typeof params.vesselHeadingDeg === 'number' && Number.isFinite(params.vesselHeadingDeg)
+      ? params.vesselHeadingDeg
+      : typeof params.windDirDeg === 'number' && Number.isFinite(params.windDirDeg)
+      ? params.windDirDeg
+      : params.swellDirDeg ?? 0;
+  const swellDir =
+    typeof params.swellDirDeg === 'number' && Number.isFinite(params.swellDirDeg)
+      ? params.swellDirDeg
+      : refHeading;
+  const rawDiff = Math.abs(((swellDir - refHeading + 540) % 360) - 180);
+  // Turret-moored FPSO typically aligns within 0-90° of dominant wind/wave
+  const encounterAngleDeg = Math.round(Math.min(90, rawDiff));
+  const beamSwellFactor = 1 + 0.32 * Math.sin((encounterAngleDeg * Math.PI) / 180);
+
+  const estPitchRollDeg = Number(
+    Math.min(6.0, 0.43 * hEff * periodFactor * beamSwellFactor).toFixed(1)
+  );
+  const estInclinationDeg = Number(
+    Math.min(6.8, estPitchRollDeg * 1.15 + (hEff > 0.3 ? 0.1 : 0)).toFixed(1)
+  );
+  const estShrMs = Number(
+    Math.min(2.5, 0.2 * hEff * periodFactor * (1 + 0.15 * Math.sin((encounterAngleDeg * Math.PI) / 180))).toFixed(2)
+  );
+
+  const maxPR = params.maxPitchRollLimit ?? 3.0;
+  const maxInc = params.maxInclinationLimit ?? 3.5;
+  const maxShr = params.maxShrLimit ?? 1.3;
+
+  const prRatio = estPitchRollDeg / maxPR;
+  const incRatio = estInclinationDeg / maxInc;
+  const shrRatio = estShrMs / maxShr;
+  const peakRatio = Math.max(prRatio, incRatio, shrRatio);
+
+  const deckLightStatus: 'GREEN' | 'AMBER' | 'RED' =
+    peakRatio >= 1.0 ? 'RED' : peakRatio >= 0.78 ? 'AMBER' : 'GREEN';
+
+  const summaryLabel =
+    deckLightStatus === 'RED'
+      ? 'EST. RED DECK (Wave/Swell RAO Exceeds Limit)'
+      : deckLightStatus === 'AMBER'
+      ? 'EST. AMBER DECK (Moderate Wave/Swell Motion)'
+      : 'EST. GREEN DECK (Stable Wave/Swell RAO)';
+
+  return {
+    estPitchRollDeg,
+    estInclinationDeg,
+    estShrMs,
+    encounterAngleDeg,
+    periodFactor,
+    deckLightStatus,
+    summaryLabel,
   };
 }
 
@@ -349,10 +479,12 @@ export function evaluateHourWithLimits(
       limits,
     };
   }
-  if (isFpso && waveHeightM >= limits.maxFpsoWaveHeightM) {
+  if (waveHeightM >= limits.maxFpsoWaveHeightM) {
     return {
       status: 'HOLD',
-      reason: `NO-GO (${phaseLabel} FPSO): Wave Hs ${waveHeightM}m exceeds ${limits.maxFpsoWaveHeightM}m ${phaseLabel.toLowerCase()} deck motion limit`,
+      reason: isFpso
+        ? `NO-GO (${phaseLabel} FPSO): Wave Hs ${waveHeightM}m exceeds ${limits.maxFpsoWaveHeightM}m ${phaseLabel.toLowerCase()} deck motion limit`
+        : `NO-GO (${phaseLabel} Sea State): Wave Hs ${waveHeightM}m exceeds ${limits.maxFpsoWaveHeightM}m ${phaseLabel.toLowerCase()} offshore ditching limit`,
       limits,
     };
   }
@@ -386,8 +518,7 @@ export function evaluateHourWithLimits(
     approachShearCaution ||
     snap.cloudCeilingFt < limits.minCloudCeilingFt + 350 ||
     snap.visibilityKm < limits.minVisibilityKm + 2.0 ||
-    (isFpso && waveHeightM >= limits.maxFpsoWaveHeightM - 1.2) ||
-    (!isFpso && waveHeightM >= 5.2)
+    waveHeightM >= limits.maxFpsoWaveHeightM - 1.2
   ) {
     if (snap.lightningRisk === 'MODERATE') {
       const ltLabel =
