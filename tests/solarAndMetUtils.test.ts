@@ -18,6 +18,7 @@ import {
   AIRFRAME_PRESETS,
   classifyNorthSeaConvection,
   computeMinus10IsothermFt,
+  evaluateCorridorLightningBypass,
   WEATHER_MODELS_META,
 } from '../src/services/multiModelWeatherService.ts';
 import { resolveHeliAdminStopCode } from '../src/data/installationsAndAirports.ts';
@@ -132,6 +133,19 @@ test('North Sea triggered-lightning physics separates winter triggered setup fro
   });
   assert.equal(naturalTs.risk, 'HIGH');
   assert.equal(naturalTs.type, 'NATURAL_TS');
+
+  // Dry cold air (precip = 0, showers = 0) must NEVER be flagged as Amber/Moderate triggered lightning
+  const dryColdAir = classifyNorthSeaConvection({
+    cape: 140,
+    wmo: 2,
+    precip: 0,
+    showers: 0,
+    freezeFt: 2200,
+    minus10Ft: minus10,
+    sstMinus500C: 37,
+  });
+  assert.equal(dryColdAir.risk, 'LOW');
+  assert.equal(dryColdAir.type, 'NONE');
 });
 
 test('UKMO UKV 2km is registered as 5th model and handles convection-permitting precipitation', () => {
@@ -284,4 +298,93 @@ test('Blackpool EGNH, Irish Sea, Southern North Sea & UK SAR bases resolve and c
   });
   assert.equal(stormMotion.deckLightStatus, 'RED');
   assert.ok(stormMotion.estPitchRollDeg >= 3.0);
+
+  // Verify Triggered-Lightning Corridor & 18 NM Fly-Around Dog-Leg Bypass between EGPB Sumburgh and GL Glen Lyon
+  const sumburgh = { lat: 59.8789, lon: -1.2956, code: 'EGPB' };
+  const glenLyon = { lat: 60.3589, lon: -4.0652, code: 'GL' };
+  const midLat = (sumburgh.lat + glenLyon.lat) / 2;
+  const midLon = (sumburgh.lon + glenLyon.lon) / 2;
+
+  const baseGridPt = {
+    windSpeed10mKts: 22,
+    windDir10mDeg: 250,
+    windGust10mKts: 30,
+    windSpeed950hPaKts: 28,
+    windDir950hPaDeg: 255,
+    windSpeed850hPaKts: 34,
+    windDir850hPaDeg: 260,
+    freezingLevelFt: 2400,
+    cloudCeilingFt: 2800,
+    visibilityKm: 25,
+    waveHeightM: 2.6,
+    waveDirDeg: 250,
+    seaSurfaceTempC: 9.5,
+    precipMmHr: 0,
+    capeJkg: 40,
+    lightningRisk: 'LOW' as const,
+    lightningType: 'NONE' as const,
+  };
+
+  // Case 1: Clear corridor
+  const clearGrid = [
+    { ...baseGridPt, lat: midLat, lon: midLon },
+    { ...baseGridPt, lat: midLat + 0.45, lon: midLon },
+    { ...baseGridPt, lat: midLat - 0.45, lon: midLon },
+  ];
+  const clearBypass = evaluateCorridorLightningBypass(
+    sumburgh,
+    glenLyon,
+    clearGrid,
+    AIRFRAME_PRESETS.S92
+  );
+  assert.equal(clearBypass.directRisk, 'LOW');
+  assert.equal(clearBypass.recommendedRoute, 'DIRECT');
+
+  // Case 2: High triggered-lightning cell directly on the EGPB -> GL midpoint, but clear 18 NM North
+  const cellOnTrackGrid = [
+    {
+      ...baseGridPt,
+      lat: sumburgh.lat,
+      lon: sumburgh.lon,
+      lightningRisk: 'LOW' as const,
+    },
+    {
+      ...baseGridPt,
+      lat: glenLyon.lat,
+      lon: glenLyon.lon,
+      lightningRisk: 'LOW' as const,
+    },
+    {
+      ...baseGridPt,
+      lat: midLat,
+      lon: midLon,
+      lightningRisk: 'HIGH' as const,
+      lightningType: 'TRIGGERED_WINTER' as const,
+      precipMmHr: 2.4,
+      capeJkg: 260,
+    },
+    {
+      ...baseGridPt,
+      lat: midLat + 0.3,
+      lon: midLon + 0.1,
+      lightningRisk: 'LOW' as const,
+    },
+    {
+      ...baseGridPt,
+      lat: midLat - 0.3,
+      lon: midLon - 0.1,
+      lightningRisk: 'MODERATE' as const,
+    },
+  ];
+  const dogLegBypass = evaluateCorridorLightningBypass(
+    sumburgh,
+    glenLyon,
+    cellOnTrackGrid,
+    AIRFRAME_PRESETS.S92
+  );
+  assert.equal(dogLegBypass.directRisk, 'HIGH');
+  assert.equal(dogLegBypass.northBypassRisk, 'LOW');
+  assert.equal(dogLegBypass.recommendedRoute, 'BYPASS_NORTH');
+  assert.ok(dogLegBypass.summaryText.includes('NORTH'));
 });
+

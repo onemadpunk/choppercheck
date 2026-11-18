@@ -20,6 +20,7 @@ import {
   AIRFRAME_PRESETS,
   RainViewerRadarFrame,
   WEATHER_MODELS_META,
+  evaluateCorridorLightningBypass,
   fetchRainViewerRadarFrames,
   interpolateSpotWeatherAtLatLon,
 } from '../services/multiModelWeatherService';
@@ -311,6 +312,25 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         activePreset
       ),
     [cursorCoords.lat, cursorCoords.lon, spatialGrid, activePreset]
+  );
+
+  const shoreBaseFacility = useMemo(
+    () =>
+      installations.find((x) => x.code === activeFacility.primaryShoreBase) ||
+      installations.find((x) => x.code === 'EGPD') ||
+      activeFacility,
+    [installations, activeFacility]
+  );
+
+  const corridorBypass = useMemo(
+    () =>
+      evaluateCorridorLightningBypass(
+        shoreBaseFacility,
+        activeFacility,
+        spatialGrid,
+        activePreset
+      ),
+    [shoreBaseFacility, activeFacility, spatialGrid, activePreset]
   );
 
   // Initialize Leaflet Map once with key-free OpenStreetMap / Esri tiles
@@ -700,7 +720,46 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         gridPoints={spatialGrid}
         overlayMode={weatherOverlayMode}
         preset={activePreset}
+        activeFacility={activeFacility}
+        shoreBaseFacility={shoreBaseFacility}
       />
+
+      {/* Triggered-Lightning & Fly-Around Corridor Legend Pill when ⚡ Lightning overlay is active */}
+      {weatherOverlayMode === 'triggered_lightning' && (
+        <div className="
+          absolute top-12 left-1/2 -translate-x-1/2 z-[400]
+          bg-slate-950/94 backdrop-blur-md border border-amber-500/50 rounded-xl px-3 py-1.5
+          pointer-events-auto shadow-xl max-w-[92vw] sm:max-w-xl
+          flex flex-col items-center gap-1 text-[10px] font-mono
+        ">
+          <div className="flex flex-wrap items-center justify-center gap-2.5 text-slate-200">
+            <span className="font-bold text-amber-300">⚡ TRIGGERED LIGHTNING (HTLI) MAP:</span>
+            <span className="flex items-center gap-1">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block" />
+              <span className="text-emerald-300">Clear Fly-Around Air</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block" />
+              <span className="text-amber-300">Mod Band (0°C ≤ 3,500ft + Showers)</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block" />
+              <span className="text-rose-300">High Cell (Avoid / Dog-Leg)</span>
+            </span>
+          </div>
+          <div
+            className={`font-semibold text-center ${
+              corridorBypass.directRisk === 'LOW'
+                ? 'text-emerald-300'
+                : corridorBypass.recommendedRoute === 'HOLD_WIDESPREAD'
+                ? 'text-rose-300'
+                : 'text-amber-300'
+            }`}
+          >
+            {corridorBypass.summaryText}
+          </div>
+        </div>
+      )}
 
       {/* Top-Left Active Helideck / Airport Lock HUD */}
       <div className="map-reference-card absolute top-2.5 left-2.5 z-[400] bg-slate-950/92 backdrop-blur-md border border-slate-800 rounded-xl p-2 sm:p-2.5 w-[calc(100vw-72px)] sm:w-auto max-w-[300px] sm:max-w-xs pointer-events-auto shadow-xl">
@@ -929,6 +988,21 @@ export const RadarMap: React.FC<RadarMapProps> = ({
           </button>
 
           <button
+            onClick={() =>
+              onChangeWeatherOverlayMode(
+                weatherOverlayMode === 'triggered_lightning' ? 'go_nogo_matrix' : 'triggered_lightning'
+              )
+            }
+            className={`min-h-[38px] px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold border whitespace-nowrap shrink-0 cursor-pointer ${
+              weatherOverlayMode === 'triggered_lightning'
+                ? 'bg-amber-400 text-slate-950 border-amber-300 font-bold'
+                : 'bg-slate-900 text-amber-300 border-amber-500/40'
+            }`}
+          >
+            {weatherOverlayMode === 'triggered_lightning' ? '⚡ LTNG ON' : '⚡ Ltng'}
+          </button>
+
+          <button
             onClick={() => setShowRainRadar((prev) => !prev)}
             className={`min-h-[38px] px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold border whitespace-nowrap shrink-0 cursor-pointer ${
               showRainRadar
@@ -1028,12 +1102,14 @@ export const RadarMap: React.FC<RadarMapProps> = ({
                 ? ([
                     { id: 'off', label: 'Off' },
                     { id: 'go_nogo_matrix', label: 'Flight Status Map' },
+                    { id: 'triggered_lightning', label: '⚡ Lightning' },
                     { id: 'wind_surface', label: 'Wind' },
                     { id: 'wave_swell', label: 'Waves' },
                   ] as Array<{ id: WeatherOverlayMode; label: string }>)
                 : ([
                     { id: 'off', label: 'Off' },
                     { id: 'go_nogo_matrix', label: 'Go/No-Go Matrix' },
+                    { id: 'triggered_lightning', label: '⚡ Triggered Lightning' },
                     { id: 'wind_surface', label: '10m Wind' },
                     { id: 'wind_950hpa', label: '950hPa (1,800ft)' },
                     { id: 'wind_850hpa', label: '850hPa (5,000ft)' },
@@ -1046,7 +1122,11 @@ export const RadarMap: React.FC<RadarMapProps> = ({
                   onClick={() => onChangeWeatherOverlayMode(m.id)}
                   className={`px-2 py-1.5 sm:py-0.5 rounded text-[10px] font-mono whitespace-nowrap transition-colors cursor-pointer ${
                     weatherOverlayMode === m.id
-                      ? 'bg-cyan-500 text-slate-950 font-bold'
+                      ? m.id === 'triggered_lightning'
+                        ? 'bg-amber-400 text-slate-950 font-bold border border-amber-300'
+                        : 'bg-cyan-500 text-slate-950 font-bold'
+                      : m.id === 'triggered_lightning'
+                      ? 'bg-amber-950/60 hover:bg-amber-900/60 text-amber-300 border border-amber-500/50'
                       : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800'
                   }`}
                 >
@@ -1179,6 +1259,17 @@ export const RadarMap: React.FC<RadarMapProps> = ({
             </span>
             <span className="text-purple-300 tabular-nums">
               0°C {spotWeather.freezingLevelFt.toLocaleString()}ft
+            </span>
+            <span
+              className={`tabular-nums font-semibold ${
+                spotWeather.lightningRisk === 'HIGH'
+                  ? 'text-rose-400'
+                  : spotWeather.lightningRisk === 'MODERATE'
+                  ? 'text-amber-300'
+                  : 'text-emerald-400'
+              }`}
+            >
+              ⚡ {spotWeather.lightningRisk}
             </span>
           </>
         ) : (

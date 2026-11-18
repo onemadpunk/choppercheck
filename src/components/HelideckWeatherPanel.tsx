@@ -753,6 +753,42 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             {plainEnglishSummary}
           </p>
 
+          {/* Explain why Night hours show stricter limits (55kt / 5.5m / 300ft) than Tomorrow's 11:00 UTC Daytime hour (60kt / 6.0m / 250ft) */}
+          {isNightHour && (
+            <div className="p-2.5 rounded-lg bg-indigo-950/80 border border-indigo-400/40 text-xs text-indigo-100 flex flex-wrap items-center justify-between gap-2">
+              <div className="space-y-0.5">
+                <div className="font-bold text-indigo-200 flex items-center gap-1.5">
+                  <Moon className="w-3.5 h-3.5 text-indigo-300 shrink-0" />
+                  <span>
+                    Why Today&apos;s limits look different right now ({activeHour?.hourLabel || 'Night'} UTC is after sunset):
+                  </span>
+                </div>
+                <p className="text-[11px] text-indigo-200/90 leading-snug">
+                  You are viewing a <strong>Night hour</strong>, which automatically uses stricter CAA Night Limits (
+                  <strong>55 kt</strong> wind · <strong>5.5 m</strong> waves · <strong>300 ft</strong> cloud ·{' '}
+                  <strong>±2.0°</strong> pitch/roll). Future days in the 7-day calendar default to{' '}
+                  <strong>11:00 UTC (Daylight)</strong> which uses standard Daytime Limits (
+                  <strong>60 kt · 6.0 m · 250 ft · ±3.0°</strong>).
+                </p>
+              </div>
+              {(() => {
+                const daylightHr =
+                  activeDayHours.find((h) => h.hourLabel.startsWith('11:')) ||
+                  activeDayHours.find((h) => !h.isNight) ||
+                  hourlyForecast.find((h) => h.hourLabel.startsWith('11:') && !h.isNight);
+                if (!daylightHr) return null;
+                return (
+                  <button
+                    onClick={() => onChangeSelectedHourIdx(daylightHr.hourIndex)}
+                    className="px-2.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-mono font-bold text-[11px] shrink-0 cursor-pointer"
+                  >
+                    ☀ View {daylightHr.dayNameShort} 11:00 UTC (Day Limits)
+                  </button>
+                );
+              })()}
+            </div>
+          )}
+
           {/* 4 Simple Plain-English Weather Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
             <div className="p-2.5 rounded-lg bg-slate-950/85 border border-white/10 space-y-1">
@@ -773,7 +809,9 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 </span>
               </div>
               <div className="text-sm font-bold text-white font-mono">{gustVal} kt gusts</div>
-              <div className="text-[10px] text-slate-400">Max limit: {maxGustLimit} kt</div>
+              <div className="text-[10px] text-slate-400">
+                Max: {maxGustLimit} kt ({isNightHour ? 'Night · 60kt Day' : 'Day'})
+              </div>
             </div>
 
             <div className="p-2.5 rounded-lg bg-slate-950/85 border border-white/10 space-y-1">
@@ -795,9 +833,9 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               </div>
               <div className="text-sm font-bold text-white font-mono">{waveVal} m waves</div>
               <div className="text-[10px] text-slate-400">
-                Max limit: {maxWaveLimit} m
+                Max: {maxWaveLimit} m ({isNightHour ? 'Night · 6m Day' : 'Day'})
                 {isFpso && fpsoMotionEstimate
-                  ? ` · Deck ${fpsoMotionEstimate.deckLightStatus}`
+                  ? ` · ${fpsoMotionEstimate.deckLightStatus}`
                   : ''}
               </div>
             </div>
@@ -827,7 +865,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 {ceilVal.toLocaleString()} ft cloud
               </div>
               <div className="text-[10px] text-slate-400">
-                Min limit: {minCeilLimit} ft · Vis {visVal} km
+                Min: {minCeilLimit} ft ({isNightHour ? 'Night · 250ft Day' : 'Day'}) · Vis {visVal} km
               </div>
             </div>
 
@@ -904,6 +942,25 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               </div>
             </div>
           )}
+
+          {/* 1-Tap Triggered Lightning & Fly-Around Corridor Map Button (visible in both Simple & Pro View) */}
+          <div className="pt-2 border-t border-white/10 flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[11px] text-slate-300 flex items-center gap-1.5">
+              <CloudLightning className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span>
+                Triggered Lightning &amp; Fly-Around Corridor ({shoreBaseFacility.code} → {facility.code}):
+              </span>
+            </span>
+            <button
+              onClick={() => {
+                onChangeWeatherOverlayMode('triggered_lightning');
+                onSwitchToMapWithOverlay('triggered_lightning');
+              }}
+              className="px-2.5 py-1 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-mono font-bold text-[11px] flex items-center gap-1 cursor-pointer shadow-sm"
+            >
+              <span>⚡ Open Lightning &amp; Fly-Around Map →</span>
+            </button>
+          </div>
         </div>
 
         {/* 0. Astronomical Daylight Window & Auto Day/Night Flight Mode Selector (Shown in Heli-Admin / Pro View) */}
@@ -1465,7 +1522,9 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                       }`
                     : '1. Helideck Wind & Gusts',
                 actual: `${deckWindVal}G${gustVal} kt`,
-                limit: `Max ${maxGustLimit} kt`,
+                limit: isNightHour
+                  ? `Max ${maxGustLimit} kt (Night · 60kt Day)`
+                  : `Max ${maxGustLimit} kt (Day)`,
                 st: gustStatus,
               },
               {
@@ -1475,19 +1534,27 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 actual: `${waveVal} m (${wavePeriodVal}s${
                   longSwellRisk ? ' · Resonant' : activeHour?.swellWaveHeightM ? ` · Swell ${activeHour.swellWaveHeightM}m` : ''
                 })`,
-                limit: isFpso ? `Max ${maxWaveLimit} m (<10s)` : `Max ${maxWaveLimit} m`,
+                limit: isFpso
+                  ? isNightHour
+                    ? `Max ${maxWaveLimit} m (Night · 6.0m Day)`
+                    : `Max ${maxWaveLimit} m (Day <10s)`
+                  : `Max ${maxWaveLimit} m`,
                 st: waveStatus,
               },
               {
                 label: `3. Cloud Ceiling (${isNightHour ? 'Night' : 'Day'} ARA)`,
                 actual: `${ceilVal.toLocaleString()} ft`,
-                limit: `Min ${minCeilLimit} ft`,
+                limit: isNightHour
+                  ? `Min ${minCeilLimit} ft (Night · 250ft Day)`
+                  : `Min ${minCeilLimit} ft (Day)`,
                 st: ceilStatus,
               },
               {
                 label: `4. Horizontal Visibility (${isNightHour ? 'Night' : 'Day'})`,
                 actual: `${visVal} km`,
-                limit: `Min ${minVisLimit} km`,
+                limit: isNightHour
+                  ? `Min ${minVisLimit} km (Night · 0.8km Day)`
+                  : `Min ${minVisLimit} km (Day)`,
                 st: visStatus,
               },
               {
@@ -1622,6 +1689,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             {(
               [
                 { id: 'go_nogo_matrix', label: 'Go/No-Go Matrix' },
+                { id: 'triggered_lightning', label: '⚡ Triggered Lightning' },
                 { id: 'wind_950hpa', label: '950hPa (1,800ft) Wind' },
                 { id: 'wave_swell', label: 'Waves (Hs)' },
                 { id: 'freezing_icing', label: '0°C Icing' },
@@ -1635,7 +1703,11 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 }}
                 className={`px-2 py-0.5 rounded text-[10px] font-mono transition-colors cursor-pointer ${
                   weatherOverlayMode === btn.id
-                    ? 'bg-cyan-400 text-slate-950 font-bold'
+                    ? btn.id === 'triggered_lightning'
+                      ? 'bg-amber-400 text-slate-950 font-bold'
+                      : 'bg-cyan-400 text-slate-950 font-bold'
+                    : btn.id === 'triggered_lightning'
+                    ? 'bg-amber-950/70 hover:bg-amber-900/70 text-amber-300 border border-amber-500/50'
                     : 'bg-slate-950/80 hover:bg-slate-900 text-cyan-300 border border-slate-700'
                 }`}
               >

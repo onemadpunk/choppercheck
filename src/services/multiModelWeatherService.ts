@@ -225,17 +225,21 @@ export function evaluateGridPointStatus(
   pt: SpatialWeatherGridPoint,
   preset: AirframeLimitPreset
 ): 'GO' | 'CAUTION' | 'HOLD' {
-  return evaluateAirframeLimits(
+  const base = evaluateAirframeLimits(
     pt.windSpeed10mKts,
     pt.windGust10mKts,
     pt.cloudCeilingFt,
     pt.visibilityKm,
     pt.freezingLevelFt,
     pt.waveHeightM,
-    0,
+    pt.precipMmHr ?? 0,
     true,
     preset
   ).status;
+
+  if (pt.lightningRisk === 'HIGH') return 'HOLD';
+  if (pt.lightningRisk === 'MODERATE' && base === 'GO') return 'CAUTION';
+  return base;
 }
 
 /**
@@ -255,6 +259,10 @@ export function interpolateSpotWeatherAtLatLon(
   freezingLevelFt: number;
   cloudCeilingFt: number;
   seaSurfaceTempC: number;
+  precipMmHr: number;
+  capeJkg: number;
+  lightningRisk: 'LOW' | 'MODERATE' | 'HIGH';
+  lightningType: 'NONE' | 'TRIGGERED_WINTER' | 'CONVECTIVE_SHOWER' | 'NATURAL_TS';
   status: 'GO' | 'CAUTION' | 'HOLD';
 } | null {
   if (gridPoints.length === 0) return null;
@@ -268,11 +276,21 @@ export function interpolateSpotWeatherAtLatLon(
   let freeze = 0;
   let ceil = 0;
   let sst = 0;
+  let precip = 0;
+  let cape = 0;
+  let ltScore = 0;
+  let nearestPt = gridPoints[0];
+  let nearestDistSq = Infinity;
 
   for (const pt of gridPoints) {
     const dLat = lat - pt.lat;
     const dLon = (lon - pt.lon) * 0.56;
-    const dSq = dLat * dLat + dLon * dLon + 0.02;
+    const rawDSq = dLat * dLat + dLon * dLon;
+    if (rawDSq < nearestDistSq) {
+      nearestDistSq = rawDSq;
+      nearestPt = pt;
+    }
+    const dSq = rawDSq + 0.004;
     const w = 1 / (dSq * dSq);
     wSum += w;
     ws10 += pt.windSpeed10mKts * w;
@@ -283,6 +301,11 @@ export function interpolateSpotWeatherAtLatLon(
     freeze += pt.freezingLevelFt * w;
     ceil += pt.cloudCeilingFt * w;
     sst += pt.seaSurfaceTempC * w;
+    precip += (pt.precipMmHr ?? 0) * w;
+    cape += (pt.capeJkg ?? 0) * w;
+    const ptRiskScore =
+      pt.lightningRisk === 'HIGH' ? 2 : pt.lightningRisk === 'MODERATE' ? 1 : 0;
+    ltScore += ptRiskScore * w;
   }
 
   if (wSum === 0) return null;
@@ -295,6 +318,19 @@ export function interpolateSpotWeatherAtLatLon(
   const finalFreeze = Math.round(freeze / wSum);
   const finalCeil = Math.round(ceil / wSum);
   const finalSst = Number((sst / wSum).toFixed(1));
+  const finalPrecip = Number((precip / wSum).toFixed(1));
+  const finalCape = Math.round(cape / wSum);
+  const normLt = ltScore / wSum;
+  const lightningRisk: 'LOW' | 'MODERATE' | 'HIGH' =
+    normLt >= 1.35 ? 'HIGH' : normLt >= 0.45 ? 'MODERATE' : 'LOW';
+  const lightningType =
+    lightningRisk === 'LOW'
+      ? 'NONE'
+      : nearestPt.lightningType && nearestPt.lightningType !== 'NONE'
+      ? nearestPt.lightningType
+      : finalFreeze <= 3500
+      ? 'TRIGGERED_WINTER'
+      : 'CONVECTIVE_SHOWER';
 
   const ev = evaluateAirframeLimits(
     finalWs10,
@@ -303,10 +339,17 @@ export function interpolateSpotWeatherAtLatLon(
     15,
     finalFreeze,
     finalWave,
-    0,
+    finalPrecip,
     true,
     preset
   );
+
+  const status: 'GO' | 'CAUTION' | 'HOLD' =
+    lightningRisk === 'HIGH'
+      ? 'HOLD'
+      : lightningRisk === 'MODERATE' && ev.status === 'GO'
+      ? 'CAUTION'
+      : ev.status;
 
   return {
     windSpeed10mKts: finalWs10,
@@ -317,7 +360,133 @@ export function interpolateSpotWeatherAtLatLon(
     freezingLevelFt: finalFreeze,
     cloudCeilingFt: finalCeil,
     seaSurfaceTempC: finalSst,
-    status: ev.status,
+    precipMmHr: finalPrecip,
+    capeJkg: finalCape,
+    lightningRisk,
+    lightningType,
+    status,
+  };
+}
+
+export interface CorridorLightningBypassAssessment {
+  directRisk: 'LOW' | 'MODERATE' | 'HIGH';
+  northBypassRisk: 'LOW' | 'MODERATE' | 'HIGH';
+  southBypassRisk: 'LOW' | 'MODERATE' | 'HIGH';
+  directMidpoint: { lat: number; lon: number };
+  northMidpoint: { lat: number; lon: number };
+  southMidpoint: { lat: number; lon: number };
+  offsetNm: number;
+  recommendedRoute: 'DIRECT' | 'BYPASS_NORTH' | 'BYPASS_SOUTH' | 'HOLD_WIDESPREAD';
+  summaryText: string;
+}
+
+/**
+ * Evaluates whether the direct Shore Base -> Rig flight corridor intersects a Triggered-Lightning
+ * or Convective Cell on the 2D spatial grid, and checks 18 NM North/South dog-leg bypass corridors
+ * so pilots and marine crew can immediately see if there is a clear fly-around track.
+ */
+export function evaluateCorridorLightningBypass(
+  shoreBase: { lat: number; lon: number; code: string },
+  targetRig: { lat: number; lon: number; code: string },
+  gridPoints: SpatialWeatherGridPoint[],
+  preset: AirframeLimitPreset
+): CorridorLightningBypassAssessment {
+  const midLat = (shoreBase.lat + targetRig.lat) / 2;
+  const midLon = (shoreBase.lon + targetRig.lon) / 2;
+
+  // Compute perpendicular unit vector in degrees for an ~18 NM (0.30 deg lat) lateral dog-leg offset
+  const dLat = targetRig.lat - shoreBase.lat;
+  const dLon = (targetRig.lon - shoreBase.lon) * 0.56;
+  const len = Math.hypot(dLat, dLon) || 1;
+  // Perpendicular vector (-dLon, dLat)
+  let perpLat = -dLon / len;
+  let perpLon = dLat / len / 0.56;
+
+  // Ensure "North" midpoint always has higher latitude than "South" midpoint
+  if (perpLat < 0) {
+    perpLat = -perpLat;
+    perpLon = -perpLon;
+  }
+
+  const offsetDegLat = 0.3; // ~18 NM lateral dog-leg
+  const northMidpoint = {
+    lat: Number((midLat + perpLat * offsetDegLat).toFixed(3)),
+    lon: Number((midLon + perpLon * offsetDegLat).toFixed(3)),
+  };
+  const southMidpoint = {
+    lat: Number((midLat - perpLat * offsetDegLat).toFixed(3)),
+    lon: Number((midLon - perpLon * offsetDegLat).toFixed(3)),
+  };
+  const directMidpoint = {
+    lat: Number(midLat.toFixed(3)),
+    lon: Number(midLon.toFixed(3)),
+  };
+
+  const rank = (r: 'LOW' | 'MODERATE' | 'HIGH') =>
+    r === 'HIGH' ? 2 : r === 'MODERATE' ? 1 : 0;
+  const fromRank = (n: number): 'LOW' | 'MODERATE' | 'HIGH' =>
+    n >= 2 ? 'HIGH' : n === 1 ? 'MODERATE' : 'LOW';
+
+  const sampleTrackRisk = (mid: { lat: number; lon: number }): 'LOW' | 'MODERATE' | 'HIGH' => {
+    if (gridPoints.length === 0) return 'LOW';
+    const samples = [
+      {
+        lat: shoreBase.lat * 0.75 + mid.lat * 0.25,
+        lon: shoreBase.lon * 0.75 + mid.lon * 0.25,
+      },
+      mid,
+      {
+        lat: mid.lat * 0.25 + targetRig.lat * 0.75,
+        lon: mid.lon * 0.25 + targetRig.lon * 0.75,
+      },
+    ];
+    let worst = 0;
+    for (const s of samples) {
+      const sp = interpolateSpotWeatherAtLatLon(s.lat, s.lon, gridPoints, preset);
+      if (sp) {
+        worst = Math.max(worst, rank(sp.lightningRisk));
+      }
+    }
+    return fromRank(worst);
+  };
+
+  const directRisk = sampleTrackRisk(directMidpoint);
+  const northBypassRisk = sampleTrackRisk(northMidpoint);
+  const southBypassRisk = sampleTrackRisk(southMidpoint);
+
+  let recommendedRoute: CorridorLightningBypassAssessment['recommendedRoute'] = 'DIRECT';
+  let summaryText = `${shoreBase.code} → ${targetRig.code}: Direct track clear of triggered lightning`;
+
+  if (directRisk !== 'LOW') {
+    const dRank = rank(directRisk);
+    const nRank = rank(northBypassRisk);
+    const sRank = rank(southBypassRisk);
+
+    if (nRank < dRank && nRank <= sRank) {
+      recommendedRoute = 'BYPASS_NORTH';
+      summaryText = `⚡ Cell on ${shoreBase.code} → ${targetRig.code} direct track · Clear 18 NM NORTH Dog-Leg Bypass available`;
+    } else if (sRank < dRank) {
+      recommendedRoute = 'BYPASS_SOUTH';
+      summaryText = `⚡ Cell on ${shoreBase.code} → ${targetRig.code} direct track · Clear 18 NM SOUTH Dog-Leg Bypass available`;
+    } else if (directRisk === 'MODERATE') {
+      recommendedRoute = 'DIRECT';
+      summaryText = `⚡ Broad Moderate Triggered-Lightning Band across ${shoreBase.code} → ${targetRig.code} (Stay below 0°C isotherm / radar avoidance)`;
+    } else {
+      recommendedRoute = 'HOLD_WIDESPREAD';
+      summaryText = `⚡ Widespread High Triggered-Lightning Squall Band across ${shoreBase.code} → ${targetRig.code} corridor`;
+    }
+  }
+
+  return {
+    directRisk,
+    northBypassRisk,
+    southBypassRisk,
+    directMidpoint,
+    northMidpoint,
+    southMidpoint,
+    offsetNm: 18,
+    recommendedRoute,
+    summaryText,
   };
 }
 
@@ -435,14 +604,23 @@ export function classifyNorthSeaConvection(params: {
   if (wmo !== null && [95, 96, 99].includes(wmo)) {
     return { risk: 'HIGH', type: 'NATURAL_TS' };
   }
-  if (cape !== null && cape >= 500) {
+  if (cape !== null && cape >= 500 && (precip >= 0.25 || showers >= 0.15)) {
     return { risk: 'HIGH', type: 'NATURAL_TS' };
   }
 
   const isShowerWmo = wmo !== null && [80, 81, 82, 85, 86].includes(wmo);
+  // Triggered lightning ONLY occurs inside active precipitating convective cells/showers (graupel + ice crystal collisions).
+  // Dry cold air outside of shower cells has zero triggered-lightning risk and provides clear fly-around corridors.
+  const hasPrecipCell = isShowerWmo || showers >= 0.2 || precip >= 0.35;
+  if (!hasPrecipCell) {
+    return { risk: 'LOW', type: 'NONE' };
+  }
+
   // Convection-permitting models like UKMO UKV 2km place showers directly in precipitation rather than splitting showers
   const hasActiveShowers =
-    isShowerWmo || showers >= 0.3 || (precip >= 1.0 && cape !== null && cape >= 120);
+    isShowerWmo ||
+    showers >= 0.3 ||
+    (precip >= 0.8 && ((cape !== null && cape >= 80) || sstMinus500C >= 32));
   const coldTopStrong = sstMinus500C >= 34 && minus10Ft <= 10500;
   const coldTopMod = sstMinus500C >= 31 && minus10Ft <= 11500;
 
@@ -457,12 +635,12 @@ export function classifyNorthSeaConvection(params: {
 
   if (
     freezeFt <= 3500 &&
-    (hasActiveShowers || (cape !== null && cape >= 120) || coldTopMod)
+    (hasActiveShowers || (cape !== null && cape >= 80) || (coldTopMod && precip >= 0.35))
   ) {
     return { risk: 'MODERATE', type: 'TRIGGERED_WINTER' };
   }
 
-  if (hasActiveShowers || (cape !== null && cape >= 300) || precip >= 4.0) {
+  if (hasActiveShowers || (cape !== null && cape >= 300) || precip >= 3.5) {
     return { risk: 'MODERATE', type: 'CONVECTIVE_SHOWER' };
   }
 
@@ -1131,15 +1309,16 @@ const spatialGridRawCache = new Map<
 >();
 
 /**
- * Fetches a 5x5 (25-point) 2D spatial weather & marine grid across the UK, North Sea & West of Shetland
- * across all 7 forecast days so the Animated Streamlines & Go/No-Go Matrix work for both NOW and any future day (e.g. Monday).
+ * Fetches an 8x6 (48-point) higher-density 2D spatial weather & marine grid across Scotland, the North Sea,
+ * West of Shetland & Irish Sea across all 7 forecast days so localized convective shower cells and clear fly-around
+ * corridors can be resolved cleanly on the map.
  */
 export async function fetchSpatialWeatherGrid(
   modelId: WeatherModelId,
   selectedHourIso?: string
 ): Promise<SpatialWeatherGridPoint[]> {
-  const latSteps = [51.0, 53.75, 56.5, 59.0, 61.5];
-  const lonSteps = [-5.5, -3.0, -0.5, 2.0, 4.5];
+  const latSteps = [51.5, 53.3, 55.0, 56.4, 57.6, 58.8, 60.0, 61.3];
+  const lonSteps = [-6.0, -4.2, -2.5, -1.0, 0.6, 2.4];
 
   const coords: Array<{ lat: number; lon: number }> = [];
   for (const lat of latSteps) {
@@ -1154,7 +1333,7 @@ export async function fetchSpatialWeatherGrid(
     const lats = coords.map((c) => c.lat.toFixed(2)).join(',');
     const lons = coords.map((c) => c.lon.toFixed(2)).join(',');
 
-    const wxUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,wind_speed_950hPa,wind_direction_950hPa,wind_speed_925hPa,wind_direction_925hPa,temperature_925hPa,geopotential_height_925hPa,wind_speed_850hPa,wind_direction_850hPa,temperature_850hPa,geopotential_height_850hPa,temperature_2m,dew_point_2m,cloud_cover_low,visibility,freezing_level_height&models=${modelId}&wind_speed_unit=kn&forecast_days=7`;
+    const wxUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,wind_speed_950hPa,wind_direction_950hPa,wind_speed_925hPa,wind_direction_925hPa,temperature_925hPa,geopotential_height_925hPa,wind_speed_850hPa,wind_direction_850hPa,temperature_850hPa,geopotential_height_850hPa,temperature_700hPa,geopotential_height_700hPa,temperature_500hPa,geopotential_height_500hPa,temperature_2m,dew_point_2m,cloud_cover_low,visibility,freezing_level_height,precipitation,showers,cape,weather_code&models=${modelId}&wind_speed_unit=kn&forecast_days=7`;
     const marUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${lats}&longitude=${lons}&hourly=wave_height,wave_direction,sea_surface_temperature&forecast_days=7`;
 
     try {
@@ -1226,6 +1405,10 @@ export async function fetchSpatialWeatherGrid(
     const z925 = pickRaw('geopotential_height_925hPa') ?? 720;
     const t850 = pickRaw('temperature_850hPa') ?? 0.5;
     const z850 = pickRaw('geopotential_height_850hPa') ?? 1420;
+    const t700 = pickRaw('temperature_700hPa') ?? t850 - 7.5;
+    const z700 = pickRaw('geopotential_height_700hPa') ?? 2950;
+    const t500 = pickRaw('temperature_500hPa') ?? t700 - 15.0;
+    const z500 = pickRaw('geopotential_height_500hPa') ?? 5480;
 
     const freezingLevelFt = computeNativeFreezingLevelFt(
       pickRaw('freezing_level_height'),
@@ -1234,6 +1417,14 @@ export async function fetchSpatialWeatherGrid(
       z925,
       t850,
       z850
+    );
+    const minus10IsothermFt = computeMinus10IsothermFt(
+      t850,
+      z850,
+      t700,
+      z700,
+      t500,
+      z500
     );
 
     const rawVis = pickRaw('visibility');
@@ -1249,6 +1440,22 @@ export async function fetchSpatialWeatherGrid(
     const seaSurfaceTempC = Number(
       Number(marHourly.sea_surface_temperature?.[hr] ?? 9.5).toFixed(1)
     );
+
+    const precipMmHr = Number((pickRaw('precipitation') ?? 0).toFixed(1));
+    const showersMm = Number((pickRaw('showers') ?? 0).toFixed(1));
+    const rawCape = pickRaw('cape');
+    const rawWmo = pickRaw('weather_code');
+    const sstMinus500C = Number((seaSurfaceTempC - t500).toFixed(1));
+
+    const conv = classifyNorthSeaConvection({
+      cape: rawCape,
+      wmo: rawWmo,
+      precip: precipMmHr,
+      showers: showersMm,
+      freezeFt: freezingLevelFt,
+      minus10Ft: minus10IsothermFt,
+      sstMinus500C,
+    });
 
     return {
       lat: c.lat,
@@ -1266,6 +1473,12 @@ export async function fetchSpatialWeatherGrid(
       waveHeightM,
       waveDirDeg,
       seaSurfaceTempC,
+      precipMmHr,
+      capeJkg: rawCape !== null ? Math.round(rawCape) : 0,
+      wmoWeatherCode: rawWmo !== null ? Math.round(rawWmo) : 0,
+      minus10IsothermFt,
+      lightningRisk: conv.risk,
+      lightningType: conv.type,
     };
   });
 }

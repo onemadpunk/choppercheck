@@ -4,14 +4,20 @@ import {
   SpatialWeatherGridPoint,
   WeatherOverlayMode,
   AirframeLimitPreset,
+  InstallationOrAirport,
 } from '../types/radar';
-import { evaluateGridPointStatus } from '../services/multiModelWeatherService';
+import {
+  evaluateCorridorLightningBypass,
+  evaluateGridPointStatus,
+} from '../services/multiModelWeatherService';
 
 interface WeatherStreamlineCanvasProps {
   map: L.Map | null;
   gridPoints: SpatialWeatherGridPoint[];
   overlayMode: WeatherOverlayMode;
   preset: AirframeLimitPreset;
+  activeFacility?: InstallationOrAirport;
+  shoreBaseFacility?: InstallationOrAirport;
 }
 
 interface Particle {
@@ -52,19 +58,26 @@ function interpolateGrid(
   let rSum = 0;
   let gSum = 0;
   let bSum = 0;
+  let aSum = 0;
 
   for (let i = 0; i < gridPoints.length; i++) {
     const pt = gridPoints[i];
     const dLat = lat - pt.lat;
     const dLon = (lon - pt.lon) * 0.56; // cos(57 deg) aspect correction
-    const distSq = dLat * dLat + dLon * dLon + 0.04;
-    if (distSq > 16) continue; // Ignore very distant points
-    const w = 1 / (distSq * distSq);
+    const rawDistSq = dLat * dLat + dLon * dLon;
+    const maxDistSq = overlayMode === 'triggered_lightning' ? 2.8 : 16;
+    if (rawDistSq > maxDistSq) continue;
+    const eps = overlayMode === 'triggered_lightning' ? 0.008 : 0.04;
+    const distSq = rawDistSq + eps;
+    const w =
+      overlayMode === 'triggered_lightning'
+        ? 1 / (distSq * distSq * distSq)
+        : 1 / (distSq * distSq);
 
     // Determine U/V wind or wave vector for this grid node
     let windSpd = pt.windSpeed10mKts;
     let windDir = pt.windDir10mDeg;
-    if (overlayMode === 'wind_950hpa') {
+    if (overlayMode === 'wind_950hpa' || overlayMode === 'triggered_lightning') {
       windSpd = pt.windSpeed950hPaKts;
       windDir = pt.windDir950hPaDeg;
     } else if (overlayMode === 'wind_850hpa') {
@@ -85,6 +98,7 @@ function interpolateGrid(
     let r = 16;
     let g = 185;
     let b = 129;
+    let ptAlpha = 0.24;
     let scalar = windSpd;
 
     if (overlayMode === 'go_nogo_matrix') {
@@ -104,6 +118,27 @@ function interpolateGrid(
         g = 185;
         b = 129; // Emerald GO
         scalar = 18;
+      }
+    } else if (overlayMode === 'triggered_lightning') {
+      const ltRisk = pt.lightningRisk || 'LOW';
+      if (ltRisk === 'HIGH') {
+        r = 244;
+        g = 63;
+        b = 94; // High Triggered-Lightning / Squall Cell (Rose/Magenta)
+        ptAlpha = 0.44;
+        scalar = 52;
+      } else if (ltRisk === 'MODERATE') {
+        r = 245;
+        g = 158;
+        b = 11; // Moderate Triggered-Lightning Shower Band (Amber)
+        ptAlpha = 0.34;
+        scalar = 36;
+      } else {
+        r = 16;
+        g = 185;
+        b = 129; // Clear Fly-Around Air Corridor (Emerald)
+        ptAlpha = 0.13;
+        scalar = 16;
       }
     } else if (
       overlayMode === 'wind_surface' ||
@@ -171,6 +206,7 @@ function interpolateGrid(
     rSum += r * w;
     gSum += g * w;
     bSum += b * w;
+    aSum += ptAlpha * w;
   }
 
   if (weightSum === 0) {
@@ -184,8 +220,41 @@ function interpolateGrid(
     r: Math.round(rSum / weightSum),
     g: Math.round(gSum / weightSum),
     b: Math.round(bSum / weightSum),
-    a: 0.24,
+    a: aSum / weightSum,
   };
+}
+
+function drawPillLabel(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  text: string,
+  bgColor: string,
+  borderColor: string,
+  textColor: string
+) {
+  ctx.save();
+  ctx.font = 'bold 10px "JetBrains Mono", monospace';
+  const metrics = ctx.measureText(text);
+  const padX = 7;
+  const boxW = metrics.width + padX * 2;
+  const boxH = 19;
+  const left = x - boxW / 2;
+  const top = y - boxH / 2;
+
+  ctx.fillStyle = bgColor;
+  ctx.strokeStyle = borderColor;
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  ctx.roundRect(left, top, boxW, boxH, 5);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = textColor;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x, y + 0.5);
+  ctx.restore();
 }
 
 export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = ({
@@ -193,6 +262,8 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
   gridPoints,
   overlayMode,
   preset,
+  activeFacility,
+  shoreBaseFacility,
 }) => {
   const heatmapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const particleCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -212,6 +283,194 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
     const heatCtx = heatCanvas.getContext('2d');
     const partCtx = partCanvas.getContext('2d');
     if (!heatCtx || !partCtx) return;
+
+    const drawTriggeredLightningAnnotations = () => {
+      if (overlayMode !== 'triggered_lightning') return;
+
+      // 1. Draw Convective / Triggered-Lightning Cell Badges at active grid nodes
+      for (const pt of gridPoints) {
+        const risk = pt.lightningRisk || 'LOW';
+        if (risk === 'LOW') continue;
+
+        const screenPt = map.latLngToContainerPoint([pt.lat, pt.lon]);
+        if (
+          screenPt.x < -60 ||
+          screenPt.x > heatCanvas.width + 60 ||
+          screenPt.y < -60 ||
+          screenPt.y > heatCanvas.height + 60
+        ) {
+          continue;
+        }
+
+        const isHigh = risk === 'HIGH';
+        const radius = isHigh ? 34 : 26;
+
+        heatCtx.save();
+        heatCtx.beginPath();
+        heatCtx.arc(screenPt.x, screenPt.y, radius, 0, Math.PI * 2);
+        heatCtx.fillStyle = isHigh
+          ? 'rgba(244, 63, 94, 0.24)'
+          : 'rgba(245, 158, 11, 0.20)';
+        heatCtx.fill();
+        heatCtx.setLineDash([4, 3]);
+        heatCtx.lineWidth = isHigh ? 1.8 : 1.4;
+        heatCtx.strokeStyle = isHigh ? '#fb7185' : '#fbbf24';
+        heatCtx.stroke();
+        heatCtx.restore();
+
+        const precipTag =
+          typeof pt.precipMmHr === 'number' && pt.precipMmHr > 0
+            ? ` · ${pt.precipMmHr}mm/h`
+            : '';
+        const label = isHigh
+          ? `⚡ HIGH CELL · 0°C ${pt.freezingLevelFt}ft${precipTag}`
+          : `⚡ SHOWER CELL · 0°C ${pt.freezingLevelFt}ft${precipTag}`;
+
+        drawPillLabel(
+          heatCtx,
+          screenPt.x,
+          screenPt.y,
+          label,
+          isHigh ? 'rgba(136, 19, 55, 0.92)' : 'rgba(120, 53, 15, 0.92)',
+          isHigh ? '#fb7185' : '#fbbf24',
+          isHigh ? '#ffe4e6' : '#fef3c7'
+        );
+      }
+
+      // 2. Draw Shore Base -> Rig Flight Corridor & 18 NM Fly-Around Dog-Leg Bypass Route
+      if (
+        activeFacility &&
+        shoreBaseFacility &&
+        activeFacility.id !== shoreBaseFacility.id
+      ) {
+        const assessment = evaluateCorridorLightningBypass(
+          shoreBaseFacility,
+          activeFacility,
+          gridPoints,
+          preset
+        );
+
+        const pBase = map.latLngToContainerPoint([
+          shoreBaseFacility.lat,
+          shoreBaseFacility.lon,
+        ]);
+        const pRig = map.latLngToContainerPoint([
+          activeFacility.lat,
+          activeFacility.lon,
+        ]);
+        const pDirectMid = map.latLngToContainerPoint([
+          assessment.directMidpoint.lat,
+          assessment.directMidpoint.lon,
+        ]);
+        const pNorthMid = map.latLngToContainerPoint([
+          assessment.northMidpoint.lat,
+          assessment.northMidpoint.lon,
+        ]);
+        const pSouthMid = map.latLngToContainerPoint([
+          assessment.southMidpoint.lat,
+          assessment.southMidpoint.lon,
+        ]);
+
+        // Draw Direct Track (Shore Base -> Rig)
+        heatCtx.save();
+        heatCtx.beginPath();
+        heatCtx.moveTo(pBase.x, pBase.y);
+        heatCtx.lineTo(pRig.x, pRig.y);
+
+        if (assessment.directRisk === 'LOW') {
+          heatCtx.strokeStyle = '#10b981';
+          heatCtx.lineWidth = 2.8;
+          heatCtx.setLineDash([8, 5]);
+          heatCtx.stroke();
+          heatCtx.restore();
+
+          // Also draw subtle 18 NM North & South alternate corridor boundaries so pilots see corridor width
+          for (const altPt of [pNorthMid, pSouthMid]) {
+            heatCtx.save();
+            heatCtx.beginPath();
+            heatCtx.moveTo(pBase.x, pBase.y);
+            heatCtx.lineTo(altPt.x, altPt.y);
+            heatCtx.lineTo(pRig.x, pRig.y);
+            heatCtx.strokeStyle = 'rgba(34, 211, 238, 0.35)';
+            heatCtx.lineWidth = 1.3;
+            heatCtx.setLineDash([4, 6]);
+            heatCtx.stroke();
+            heatCtx.restore();
+          }
+
+          drawPillLabel(
+            heatCtx,
+            pDirectMid.x,
+            pDirectMid.y - 12,
+            `✓ ${shoreBaseFacility.code} → ${activeFacility.code} DIRECT TRACK CLEAR`,
+            'rgba(6, 78, 59, 0.92)',
+            '#34d399',
+            '#d1fae5'
+          );
+        } else {
+          // Direct track has Moderate or High Triggered-Lightning Cell!
+          heatCtx.strokeStyle =
+            assessment.directRisk === 'HIGH' ? '#f43f5e' : '#f59e0b';
+          heatCtx.lineWidth = 2.4;
+          heatCtx.setLineDash([5, 5]);
+          heatCtx.stroke();
+          heatCtx.restore();
+
+          drawPillLabel(
+            heatCtx,
+            pDirectMid.x,
+            pDirectMid.y,
+            `⚡ DIRECT TRACK: ${assessment.directRisk} LIGHTNING RISK`,
+            assessment.directRisk === 'HIGH'
+              ? 'rgba(136, 19, 55, 0.94)'
+              : 'rgba(120, 53, 15, 0.94)',
+            assessment.directRisk === 'HIGH' ? '#fb7185' : '#fbbf24',
+            '#ffffff'
+          );
+
+          // Highlight the recommended 18 NM North or South Fly-Around Dog-Leg Bypass Corridor
+          const useNorth =
+            assessment.recommendedRoute === 'BYPASS_NORTH' ||
+            (assessment.recommendedRoute !== 'BYPASS_SOUTH' &&
+              assessment.northBypassRisk !== 'HIGH');
+          const bypassPt = useNorth ? pNorthMid : pSouthMid;
+          const bypassDirLabel = useNorth ? '18 NM NORTH BYPASS' : '18 NM SOUTH BYPASS';
+          const bypassRisk = useNorth
+            ? assessment.northBypassRisk
+            : assessment.southBypassRisk;
+
+          heatCtx.save();
+          heatCtx.beginPath();
+          heatCtx.moveTo(pBase.x, pBase.y);
+          heatCtx.lineTo(bypassPt.x, bypassPt.y);
+          heatCtx.lineTo(pRig.x, pRig.y);
+          heatCtx.strokeStyle =
+            bypassRisk === 'LOW'
+              ? '#10b981'
+              : bypassRisk === 'MODERATE'
+              ? '#22d3ee'
+              : '#fb7185';
+          heatCtx.lineWidth = 3.0;
+          heatCtx.setLineDash([9, 4]);
+          heatCtx.stroke();
+          heatCtx.restore();
+
+          drawPillLabel(
+            heatCtx,
+            bypassPt.x,
+            bypassPt.y + (useNorth ? -14 : 14),
+            bypassRisk === 'LOW'
+              ? `✓ FLY-AROUND: ${bypassDirLabel} (CLEAR)`
+              : `↪ ${bypassDirLabel} (${bypassRisk})`,
+            bypassRisk === 'LOW'
+              ? 'rgba(6, 78, 59, 0.94)'
+              : 'rgba(15, 23, 42, 0.94)',
+            bypassRisk === 'LOW' ? '#34d399' : '#38bdf8',
+            bypassRisk === 'LOW' ? '#d1fae5' : '#bae6fd'
+          );
+        }
+      }
+    };
 
     const resizeAndRenderHeatmap = () => {
       const size = map.getSize();
@@ -269,6 +528,8 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
       heatCtx.imageSmoothingEnabled = true;
       heatCtx.imageSmoothingQuality = 'high';
       heatCtx.drawImage(offscreen, 0, 0, w, h, 0, 0, size.x, size.y);
+
+      drawTriggeredLightningAnnotations();
     };
 
     // Initialize particles inside UK / North Sea bounds
@@ -358,13 +619,15 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
       map.off('moveend zoomend resize', handleMapMove);
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [map, gridPoints, overlayMode, preset]);
+  }, [map, gridPoints, overlayMode, preset, activeFacility, shoreBaseFacility]);
 
   if (overlayMode === 'off') return null;
 
   const modeTitle =
     overlayMode === 'go_nogo_matrix'
       ? `${preset.id} Go/No-Go Threshold Matrix + Wind Streamlines`
+      : overlayMode === 'triggered_lightning'
+      ? 'Triggered Lightning (HTLI) Cells & Fly-Around Transit Corridors (950 hPa Flow)'
       : overlayMode === 'wind_surface'
       ? '10m Surface Wind Vectors & Speed Heatmap'
       : overlayMode === 'wind_950hpa'
@@ -392,3 +655,4 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
     </div>
   );
 };
+

@@ -176,7 +176,8 @@ export type WeatherOverlayMode =
   | 'wind_950hpa'
   | 'wind_850hpa'
   | 'wave_swell'
-  | 'freezing_icing';
+  | 'freezing_icing'
+  | 'triggered_lightning';
 
 export type AirframePresetId = 'S92' | 'AW189' | 'H175' | 'AW139' | 'H160';
 
@@ -356,6 +357,12 @@ export interface SpatialWeatherGridPoint {
   waveHeightM: number;
   waveDirDeg: number;
   seaSurfaceTempC: number;
+  precipMmHr?: number;
+  capeJkg?: number;
+  wmoWeatherCode?: number;
+  minus10IsothermFt?: number;
+  lightningRisk?: 'LOW' | 'MODERATE' | 'HIGH';
+  lightningType?: 'NONE' | 'TRIGGERED_WINTER' | 'CONVECTIVE_SHOWER' | 'NATURAL_TS';
 }
 
 export interface HeliportTerminal {
