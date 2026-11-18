@@ -278,7 +278,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     0;
   const approachShearKts = activeModelSnapshot?.approachShearKts ?? 0;
   const gustStatus =
-    gustVal >= maxGustLimit
+    Math.max(gustVal, deckWindVal) > maxGustLimit
       ? 'HOLD'
       : gustVal >= cautionGustLimit || approachShearKts >= 20
       ? 'CAUTION'
@@ -295,14 +295,14 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   );
   const longSwellRisk = swellRisk.isResonantSwell;
   const waveStatus = isFpso
-    ? waveVal >= maxWaveLimit
+    ? waveVal > maxWaveLimit
       ? 'HOLD'
       : waveVal >= maxWaveLimit - 1.2 || longSwellRisk
       ? 'CAUTION'
       : 'GO'
-    : waveVal >= 6.5
+    : waveVal > maxWaveLimit
     ? 'HOLD'
-    : waveVal >= 5.2
+    : waveVal >= maxWaveLimit - 0.8
     ? 'CAUTION'
     : 'GO';
 
@@ -965,7 +965,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 actual: `${waveVal} m (${wavePeriodVal}s${
                   longSwellRisk ? ' · Resonant' : activeHour?.swellWaveHeightM ? ` · Swell ${activeHour.swellWaveHeightM}m` : ''
                 })`,
-                limit: isFpso ? `Max ${maxWaveLimit} m (<10s)` : 'Max 6.5 m',
+                limit: `Max ${maxWaveLimit} m Hs`,
                 st: waveStatus,
               },
               {

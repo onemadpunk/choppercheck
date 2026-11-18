@@ -184,12 +184,13 @@ export function deriveEffectiveLimits(
   flightOpsMode: FlightOpsMode,
   customOverride?: CustomRigOverride | null
 ): EffectiveOperatingLimits {
-  // Stricter Night Flying Baseline (CAP 437 / Offshore Night ARA Minima)
-  let maxGust = isNight ? Math.max(35, basePreset.maxHelideckGustKts - 4) : basePreset.maxHelideckGustKts;
+  // Wind (SPA.HOFO.135, 60 kt incl. gusts) and sea state (CAA 6 m Hs) are the same day and night.
+  // Night only raises the cloud/visibility margins (ARA MDH is 300 ft at night vs 200 ft by day).
+  let maxGust = basePreset.maxHelideckGustKts;
   let cautionGust = isNight ? Math.max(30, basePreset.cautionGustKts - 3) : basePreset.cautionGustKts;
   let minCeil = isNight ? basePreset.minCloudCeilingFt + 150 : basePreset.minCloudCeilingFt;
   let minVis = isNight ? Number((basePreset.minVisibilityKm + 0.5).toFixed(1)) : basePreset.minVisibilityKm;
-  let maxWave = isNight && isFpso ? Number((basePreset.maxFpsoWaveHeightM - 0.5).toFixed(1)) : basePreset.maxFpsoWaveHeightM;
+  let maxWave = basePreset.maxFpsoWaveHeightM;
 
   let isOverrideApplied = false;
   if (customOverride?.maxGustKts && customOverride.maxGustKts > 0 && customOverride.maxGustKts < maxGust) {
@@ -339,20 +340,17 @@ export function evaluateHourWithLimits(
       limits,
     };
   }
-  if (
-    effGust >= limits.maxHelideckGustKts ||
-    effWind >= limits.maxHelideckGustKts - 5
-  ) {
+  if (Math.max(effWind, effGust) > limits.maxHelideckGustKts) {
     return {
       status: 'HOLD',
-      reason: `NO-GO (${phaseLabel}): Deck gusts ${effGust} kt exceed ${basePreset.id} ${limits.maxHelideckGustKts} kt ${phaseLabel.toLowerCase()} limit`,
+      reason: `NO-GO (${phaseLabel}): Deck wind ${effWind}G${effGust} kt exceeds ${limits.maxHelideckGustKts} kt helideck wind limit`,
       limits,
     };
   }
-  if (isFpso && waveHeightM >= limits.maxFpsoWaveHeightM) {
+  if (waveHeightM > limits.maxFpsoWaveHeightM) {
     return {
       status: 'HOLD',
-      reason: `NO-GO (${phaseLabel} FPSO): Wave Hs ${waveHeightM}m exceeds ${limits.maxFpsoWaveHeightM}m ${phaseLabel.toLowerCase()} deck motion limit`,
+      reason: `NO-GO (Sea State): Wave Hs ${waveHeightM}m exceeds ${limits.maxFpsoWaveHeightM}m CAA limit`,
       limits,
     };
   }
@@ -387,7 +385,7 @@ export function evaluateHourWithLimits(
     snap.cloudCeilingFt < limits.minCloudCeilingFt + 350 ||
     snap.visibilityKm < limits.minVisibilityKm + 2.0 ||
     (isFpso && waveHeightM >= limits.maxFpsoWaveHeightM - 1.2) ||
-    (!isFpso && waveHeightM >= 5.2)
+    (!isFpso && waveHeightM >= limits.maxFpsoWaveHeightM - 0.8)
   ) {
     if (snap.lightningRisk === 'MODERATE') {
       const ltLabel =

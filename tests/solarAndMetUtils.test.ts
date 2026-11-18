@@ -33,15 +33,41 @@ test('Glen Lyon winter daylight window is much shorter than summer daylight', ()
   assert.equal(isCaaNightForHour('2026-11-14T12:00', winter), false);
 });
 
-test('Night operating limits tighten ceiling, visibility, gust and FPSO wave margins automatically', () => {
+test('Night tightens ceiling/visibility but keeps the CAA 60 kt wind and 6 m sea state limits', () => {
   const s92 = AIRFRAME_PRESETS.S92;
   const day = deriveEffectiveLimits(s92, false, true, '24h_ops');
   const night = deriveEffectiveLimits(s92, true, true, '24h_ops');
 
   assert.ok(night.minCloudCeilingFt > day.minCloudCeilingFt);
   assert.ok(night.minVisibilityKm > day.minVisibilityKm);
-  assert.ok(night.maxHelideckGustKts < day.maxHelideckGustKts);
-  assert.ok(night.maxFpsoWaveHeightM < day.maxFpsoWaveHeightM);
+  assert.equal(day.maxHelideckGustKts, 60);
+  assert.equal(night.maxHelideckGustKts, 60);
+  assert.equal(day.maxFpsoWaveHeightM, 6);
+  assert.equal(night.maxFpsoWaveHeightM, 6);
+  for (const preset of Object.values(AIRFRAME_PRESETS)) {
+    assert.equal(preset.maxHelideckGustKts, 60);
+    assert.equal(preset.maxFpsoWaveHeightM, 6);
+  }
+
+  const calm = { cloudCeilingFt: 2500, visibilityKm: 15, freezingLevelFt: 4500, precipMmHr: 0 };
+  // 60 kt including gusts is still within limits; 61 kt is not.
+  assert.notEqual(
+    evaluateHourWithLimits({ ...calm, windSpeed10mKts: 45, windGust10mKts: 60 }, 2, 8, true, false, AIRFRAME_PRESETS.AW139, '24h_ops').status,
+    'HOLD'
+  );
+  assert.equal(
+    evaluateHourWithLimits({ ...calm, windSpeed10mKts: 45, windGust10mKts: 61 }, 2, 8, true, false, AIRFRAME_PRESETS.AW139, '24h_ops').status,
+    'HOLD'
+  );
+  // 6 m Hs is the limit for fixed platforms too, not only FPSOs.
+  assert.notEqual(
+    evaluateHourWithLimits({ ...calm, windSpeed10mKts: 15, windGust10mKts: 20 }, 6.0, 8, false, false, s92, '24h_ops').status,
+    'HOLD'
+  );
+  assert.equal(
+    evaluateHourWithLimits({ ...calm, windSpeed10mKts: 15, windGust10mKts: 20 }, 6.1, 8, false, false, s92, '24h_ops').status,
+    'HOLD'
+  );
 
   const blockedDaylightOnly = evaluateHourWithLimits(
     {

@@ -19,56 +19,67 @@ import {
 } from '../utils/solarAndMetUtils';
 import { FLIGHT_API_ORIGIN } from './radarService';
 
+/**
+ * UK regulatory offshore limits that apply to every helicopter type, day and night.
+ * - Wind: UK Reg (EU) 965/2012 SPA.HOFO.135 — helideck wind "not more than 60 knots including gusts".
+ * - Sea state: UK CAA (CAP 1145 / Safety Directive, in force since 2014) — no offshore flights when
+ *   significant wave height exceeds 6 m en route or at the offshore location (or the type's
+ *   certificated ditching performance, if lower).
+ * Individual decks can be more restrictive via the HCA Helideck Limitations List (use the rig override).
+ */
+export const CAA_MAX_HELIDECK_WIND_KTS = 60;
+export const CAA_MAX_SIGNIFICANT_WAVE_HEIGHT_M = 6.0;
+
 export const AIRFRAME_PRESETS: Record<AirframePresetId, AirframeLimitPreset> = {
   S92: {
     id: 'S92',
     name: 'Sikorsky S-92A (Bristow / CHC)',
-    maxHelideckGustKts: 60,
+    maxHelideckGustKts: CAA_MAX_HELIDECK_WIND_KTS,
     cautionGustKts: 45,
     minCloudCeilingFt: 400,
     minVisibilityKm: 1.0,
     minIcingFreezingLevelFt: 1800,
-    maxFpsoWaveHeightM: 5.8,
+    maxFpsoWaveHeightM: CAA_MAX_SIGNIFICANT_WAVE_HEIGHT_M,
   },
   AW189: {
     id: 'AW189',
     name: 'Leonardo AW189 (Bristow / CHC / SAR)',
-    maxHelideckGustKts: 55,
+    maxHelideckGustKts: CAA_MAX_HELIDECK_WIND_KTS,
     cautionGustKts: 43,
     minCloudCeilingFt: 450,
     minVisibilityKm: 1.2,
     minIcingFreezingLevelFt: 2000,
-    maxFpsoWaveHeightM: 5.5,
+    maxFpsoWaveHeightM: CAA_MAX_SIGNIFICANT_WAVE_HEIGHT_M,
   },
   H175: {
     id: 'H175',
     name: 'Airbus H175 (NHV / OHS)',
-    maxHelideckGustKts: 55,
+    maxHelideckGustKts: CAA_MAX_HELIDECK_WIND_KTS,
     cautionGustKts: 43,
     minCloudCeilingFt: 450,
     minVisibilityKm: 1.2,
     minIcingFreezingLevelFt: 2200,
-    maxFpsoWaveHeightM: 5.5,
+    maxFpsoWaveHeightM: CAA_MAX_SIGNIFICANT_WAVE_HEIGHT_M,
   },
   AW139: {
     id: 'AW139',
     name: 'Leonardo AW139 (SNS / Irish Sea)',
-    maxHelideckGustKts: 52,
+    maxHelideckGustKts: CAA_MAX_HELIDECK_WIND_KTS,
     cautionGustKts: 42,
     minCloudCeilingFt: 500,
     minVisibilityKm: 1.5,
     minIcingFreezingLevelFt: 2500,
-    maxFpsoWaveHeightM: 5.0,
+    maxFpsoWaveHeightM: CAA_MAX_SIGNIFICANT_WAVE_HEIGHT_M,
   },
   H160: {
     id: 'H160',
     name: 'Airbus H160 Offshore',
-    maxHelideckGustKts: 50,
+    maxHelideckGustKts: CAA_MAX_HELIDECK_WIND_KTS,
     cautionGustKts: 40,
     minCloudCeilingFt: 500,
     minVisibilityKm: 1.5,
     minIcingFreezingLevelFt: 2500,
-    maxFpsoWaveHeightM: 5.0,
+    maxFpsoWaveHeightM: CAA_MAX_SIGNIFICANT_WAVE_HEIGHT_M,
   },
 };
 
@@ -126,19 +137,16 @@ export function evaluateAirframeLimits(
     freezingLevelFt < preset.minIcingFreezingLevelFt &&
     (cloudCeilingFt < 2500 || precipMmHr > 0.2);
 
-  if (
-    windGust10mKts >= preset.maxHelideckGustKts ||
-    windSpeed10mKts >= preset.maxHelideckGustKts - 5
-  ) {
+  if (Math.max(windSpeed10mKts, windGust10mKts) > preset.maxHelideckGustKts) {
     return {
       status: 'HOLD',
-      reason: `NO-GO: Gusts ${windGust10mKts} kt exceed ${preset.id} ${preset.maxHelideckGustKts} kt rotor limit`,
+      reason: `NO-GO: Gusts ${windGust10mKts} kt exceed ${preset.id} ${preset.maxHelideckGustKts} kt helideck wind limit (SPA.HOFO.135)`,
     };
   }
-  if (isFpso && waveHeightM >= preset.maxFpsoWaveHeightM) {
+  if (waveHeightM > preset.maxFpsoWaveHeightM) {
     return {
       status: 'HOLD',
-      reason: `NO-GO: Wave Hs ${waveHeightM}m exceeds FPSO helideck motion limit (${preset.maxFpsoWaveHeightM}m)`,
+      reason: `NO-GO: Wave Hs ${waveHeightM}m exceeds CAA ${preset.maxFpsoWaveHeightM}m sea state limit`,
     };
   }
   if (
@@ -162,8 +170,8 @@ export function evaluateAirframeLimits(
     icingHazard ||
     cloudCeilingFt < preset.minCloudCeilingFt + 350 ||
     visibilityKm < preset.minVisibilityKm + 2.0 ||
-    (isFpso && waveHeightM >= preset.maxFpsoWaveHeightM - 1.3) ||
-    (!isFpso && waveHeightM >= 5.2)
+    (isFpso && waveHeightM >= preset.maxFpsoWaveHeightM - 1.2) ||
+    (!isFpso && waveHeightM >= preset.maxFpsoWaveHeightM - 0.8)
   ) {
     if (icingHazard) {
       return {
@@ -171,10 +179,10 @@ export function evaluateAirframeLimits(
         reason: `ICING CAUTION: 0°C Freezing Level at ${freezingLevelFt.toLocaleString()} ft (Transit Band)`,
       };
     }
-    if (isFpso && waveHeightM >= preset.maxFpsoWaveHeightM - 1.3) {
+    if (isFpso && waveHeightM >= preset.maxFpsoWaveHeightM - 1.2) {
       return {
         status: 'CAUTION',
-        reason: `FPSO DECK MOTION CAUTION: Wave Hs ${waveHeightM}m near ${preset.maxFpsoWaveHeightM}m pitch/roll limit`,
+        reason: `FPSO DECK MOTION CAUTION: Wave Hs ${waveHeightM}m near ${preset.maxFpsoWaveHeightM}m sea state limit (check HLL pitch/roll/heave)`,
       };
     }
     return {
