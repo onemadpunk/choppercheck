@@ -21,6 +21,7 @@ import {
   parseSeaStateFromMetar,
 } from '../utils/solarAndMetUtils';
 import { FLIGHT_API_ORIGIN } from './radarService';
+import { buildTerrainSamplePoints, summariseTerrain, type TerrainSummary } from '../utils/baseOutlook';
 
 /**
  * Moving-deck landing limits for Category 1 helidecks (semi-subs, FPSOs, tankers) from the
@@ -1913,4 +1914,58 @@ export async function fetchNearbyOffshoreOrUpwindMetars(
 
   nearbyMetarCache.set(cacheKey, { fetchedAt: Date.now(), stations });
   return stations;
+}
+
+// ============================================================================
+// Terrain around a shore base (free Open-Meteo elevation API, Copernicus 90 m DEM)
+// ============================================================================
+
+const terrainMemoryCache = new Map<string, TerrainSummary | null>();
+
+/**
+ * Samples ground height on rings out to 25 NM around a base and returns the highest ground.
+ * Terrain does not change, so results are cached in memory and in localStorage. The 90 m data
+ * smooths summits slightly, so the real tops can be a little higher; returns null on failure.
+ */
+export async function fetchTerrainAroundBase(lat: number, lon: number): Promise<TerrainSummary | null> {
+  const key = `${lat.toFixed(3)},${lon.toFixed(3)}`;
+  if (terrainMemoryCache.has(key)) return terrainMemoryCache.get(key) ?? null;
+  const storageKey = `choppercheck_terrain_v1_${key}`;
+  try {
+    const cached = localStorage.getItem(storageKey);
+    if (cached) {
+      const parsed = JSON.parse(cached) as TerrainSummary;
+      if (parsed?.highest && typeof parsed.highest.heightFt === 'number') {
+        terrainMemoryCache.set(key, parsed);
+        return parsed;
+      }
+    }
+  } catch {
+    // storage unavailable
+  }
+  const points = buildTerrainSamplePoints(lat, lon);
+  const url = `https://api.open-meteo.com/v1/elevation?latitude=${points
+    .map((p) => p.lat.toFixed(4))
+    .join(',')}&longitude=${points.map((p) => p.lon.toFixed(4)).join(',')}`;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return null;
+    const json = await res.json();
+    const elevations: Array<number | null> = Array.isArray(json?.elevation)
+      ? json.elevation.map((v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null))
+      : [];
+    if (elevations.length !== points.length) return null;
+    const summary = summariseTerrain(points, elevations);
+    terrainMemoryCache.set(key, summary);
+    if (summary) {
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(summary));
+      } catch {
+        // storage full or blocked
+      }
+    }
+    return summary;
+  } catch {
+    return null;
+  }
 }

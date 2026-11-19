@@ -19,6 +19,7 @@ import {
   applyReportedCeilingToWaypoint,
 } from '../services/multiModelWeatherService';
 import { calculateBearingDeg, calculateDistanceNm } from '../data/aircraftDecoder';
+import { BaseOutlookCard, SHORE_BASE_ASSET_TYPES } from './BaseOutlookCard';
 import {
   buildContextAwareSevenDaySummaries,
   computeBestRunwayWind,
@@ -750,6 +751,19 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               ))}
             </div>
           </div>
+        )}
+
+        {/* Shore base / heliport: 48 h outlook with cloud base against the surrounding hills */}
+        {SHORE_BASE_ASSET_TYPES.has(facility.assetType) && (
+          <BaseOutlookCard
+            facility={facility}
+            hourlyForecast={hourlyForecast}
+            weatherModelId={weatherModelId}
+            modelShortName={
+              WEATHER_MODELS_META.find((m) => m.id === weatherModelId)?.shortName ?? weatherModelId
+            }
+            weather={weather}
+          />
         )}
 
         {/* Simple Crew View vs Detailed Heli-Admin View Switcher */}
