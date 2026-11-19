@@ -196,6 +196,10 @@ export interface AirframeLimitPreset {
   maxInclinationDegNight: number;
   maxShrMsDay: number;
   maxShrMsNight: number;
+  /** HCA night limits for Category 1 semi-submersibles (less restrictive than other Cat 1 vessels such as FPSOs). */
+  maxPitchRollDegNightSemiSub: number;
+  maxInclinationDegNightSemiSub: number;
+  maxShrMsNightSemiSub: number;
 }
 
 export type FlightOpsMode = '24h_ops' | 'daylight_only';

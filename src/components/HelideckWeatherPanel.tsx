@@ -27,6 +27,7 @@ import {
   computeWindOverDeckSector,
   decodeRawTafHighlights,
   evaluateFpsoSwellRisk,
+  deriveEffectiveLimits,
   evaluateHourWithLimits,
   formatCrewOutlookSummary,
 } from '../utils/solarAndMetUtils';
@@ -164,6 +165,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
 
   const preset = AIRFRAME_PRESETS[airframePresetId];
   const isFpso = facility.assetType === 'FPSO' || facility.assetType === 'Semi-Sub';
+  const isSemiSub = facility.assetType === 'Semi-Sub';
 
   // Compute 7-Day Crew-Change Flight Window Summaries using dynamic Day/Night limits & overrides
   const daySummaries = useMemo(
@@ -211,9 +213,11 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
       isFpso,
       preset,
       flightOpsMode,
-      customOverride
+      customOverride,
+      isSemiSub
     );
   }, [
+    isSemiSub,
     activeModelSnapshot,
     activeHour,
     isNightHour,
@@ -294,14 +298,17 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   const minCeilLimit = effLimits?.minCloudCeilingFt ?? preset.minCloudCeilingFt;
   const minVisLimit = effLimits?.minVisibilityKm ?? preset.minVisibilityKm;
   const maxWaveLimit = effLimits?.maxFpsoWaveHeightM ?? preset.maxFpsoWaveHeightM;
-  const maxPitchRollLimit =
-    effLimits?.maxPitchRollDeg ??
-    (isNightHour ? preset.maxPitchRollDegNight : preset.maxPitchRollDegDay);
-  const maxInclinationLimit =
-    effLimits?.maxInclinationDeg ??
-    (isNightHour ? preset.maxInclinationDegNight : preset.maxInclinationDegDay);
-  const maxShrLimit =
-    effLimits?.maxShrMs ?? (isNightHour ? preset.maxShrMsNight : preset.maxShrMsDay);
+  const fallbackLimits = deriveEffectiveLimits(
+    preset,
+    isNightHour,
+    isFpso,
+    flightOpsMode,
+    customOverride,
+    isSemiSub
+  );
+  const maxPitchRollLimit = effLimits?.maxPitchRollDeg ?? fallbackLimits.maxPitchRollDeg;
+  const maxInclinationLimit = effLimits?.maxInclinationDeg ?? fallbackLimits.maxInclinationDeg;
+  const maxShrLimit = effLimits?.maxShrMs ?? fallbackLimits.maxShrMs;
 
   const deckWindVal =
     activeModelSnapshot?.deckWindSpeedKts ??
@@ -315,7 +322,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     0;
   const approachShearKts = activeModelSnapshot?.approachShearKts ?? 0;
   const gustStatus =
-    gustVal >= maxGustLimit
+    Math.max(gustVal, deckWindVal) > maxGustLimit
       ? 'HOLD'
       : gustVal >= cautionGustLimit || approachShearKts >= 20
       ? 'CAUTION'
@@ -332,7 +339,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   );
   const longSwellRisk = swellRisk.isResonantSwell;
   const waveStatus =
-    waveVal >= maxWaveLimit
+    waveVal > maxWaveLimit
       ? 'HOLD'
       : waveVal >= maxWaveLimit - 1.2 || longSwellRisk
       ? 'CAUTION'
@@ -753,7 +760,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             {plainEnglishSummary}
           </p>
 
-          {/* Explain why Night hours show stricter limits (55kt / 5.5m / 300ft) than Tomorrow's 11:00 UTC Daytime hour (60kt / 6.0m / 250ft) */}
+          {/* Explain why Night hours show stricter cloud and deck-motion limits than daytime hours */}
           {isNightHour && (
             <div className="p-2.5 rounded-lg bg-indigo-950/80 border border-indigo-400/40 text-xs text-indigo-100 flex flex-wrap items-center justify-between gap-2">
               <div className="space-y-0.5">
@@ -764,11 +771,15 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                   </span>
                 </div>
                 <p className="text-[11px] text-indigo-200/90 leading-snug">
-                  You are viewing a <strong>Night hour</strong>, which automatically uses stricter CAA Night Limits (
-                  <strong>55 kt</strong> wind · <strong>5.5 m</strong> waves · <strong>300 ft</strong> cloud ·{' '}
-                  <strong>±2.0°</strong> pitch/roll). Future days in the 7-day calendar default to{' '}
-                  <strong>11:00 UTC (Daylight)</strong> which uses standard Daytime Limits (
-                  <strong>60 kt · 6.0 m · 250 ft · ±3.0°</strong>).
+                  You are viewing a <strong>Night hour</strong>. Wind ({maxGustLimit} kt) and sea state ({maxWaveLimit} m) limits
+                  are the same day and night, but night uses a higher cloud minimum (<strong>{minCeilLimit} ft</strong>)
+                  {isFpso ? (
+                    <>
+                      {' '}and tighter deck motion limits (<strong>±{maxPitchRollLimit.toFixed(1)}°</strong> pitch/roll)
+                    </>
+                  ) : null}
+                  . Future days in the 7-day calendar default to{' '}
+                  <strong>11:00 UTC (Daylight)</strong>, which uses the daytime limits.
                 </p>
               </div>
               {(() => {
@@ -865,7 +876,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 {ceilVal.toLocaleString()} ft cloud
               </div>
               <div className="text-[10px] text-slate-400">
-                Min: {minCeilLimit} ft ({isNightHour ? 'Night · 250ft Day' : 'Day'}) · Vis {visVal} km
+                Min: {minCeilLimit} ft ({isNightHour ? `Night · ${preset.minCloudCeilingFt}ft Day` : 'Day'}) · Vis {visVal} km
               </div>
             </div>
 
@@ -1054,7 +1065,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                   onClick={() => onChangeCustomOverride(null)}
                   className="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-emerald-300 cursor-pointer"
                 >
-                  Standard CAP 437 (60kt · 6m · 250ft)
+                  Standard UK rules (60kt · 6m · 200ft)
                 </button>
                 <button
                   onClick={() =>
@@ -1351,7 +1362,8 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                           isFpso,
                           preset,
                           flightOpsMode,
-                          customOverride
+                          customOverride,
+                          isSemiSub
                         )
                       : null;
                     const st = hrEval?.status || snap?.status || 'GO';
@@ -1545,7 +1557,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 label: `3. Cloud Ceiling (${isNightHour ? 'Night' : 'Day'} ARA)`,
                 actual: `${ceilVal.toLocaleString()} ft`,
                 limit: isNightHour
-                  ? `Min ${minCeilLimit} ft (Night · 250ft Day)`
+                  ? `Min ${minCeilLimit} ft (Night · ${preset.minCloudCeilingFt}ft Day)`
                   : `Min ${minCeilLimit} ft (Day)`,
                 st: ceilStatus,
               },
@@ -1676,7 +1688,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 </div>
               </div>
               <p className="text-[10px] font-sans text-slate-400 leading-snug">
-                <strong className="text-emerald-300">100% Automatic (No Login Required):</strong> Estimated Pitch/Roll, Inclination (INC), and Heave Rate (SHR) are calculated automatically inside ChopperCheck from live marine wave height ({waveVal}m) &amp; swell period ({wavePeriodVal}s) against official UKCS CAP 437 / HCA limits.
+                <strong className="text-emerald-300">Estimates only (No Login Required):</strong> Pitch/Roll, Inclination (INC), and Heave Rate (SHR) are estimated inside ChopperCheck from live marine wave height ({waveVal}m) &amp; swell period ({wavePeriodVal}s), not measured by the deck&apos;s HMS. They are compared with the HCA Category 1 limits for this helicopter type; the HLL / HeliMet reading is what counts.
               </p>
             </div>
           )}
@@ -1754,7 +1766,8 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                       isFpso,
                       preset,
                       flightOpsMode,
-                      customOverride
+                      customOverride,
+                      isSemiSub
                     );
                     return (
                       <tr

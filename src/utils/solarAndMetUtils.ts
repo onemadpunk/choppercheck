@@ -159,6 +159,20 @@ export function isCaaNightForHour(
   return utcMin < solar.caaDayStartUtcMin || utcMin > solar.caaDayEndUtcMin;
 }
 
+/**
+ * UK offshore limits that apply to every helicopter type, day and night:
+ * - Wind: UK Reg 965/2012 SPA.HOFO.135 — helideck wind "not more than 60 knots including gusts".
+ * - Sea state: UK CAA (CAP 1145 / safety directive, 2014) — no flights when significant wave height
+ *   is greater than 6 m en route or at the offshore location (or the type's certificated ditching
+ *   performance, if lower).
+ * - Cloud: AMC1 SPA.HOFO.125 ARA minimum descent height "not lower than 200 ft by day; or 300 ft by night".
+ * Individual decks can be more restrictive via the HCA Helideck Limitations List (use the rig override).
+ */
+export const CAA_MAX_HELIDECK_WIND_KTS = 60;
+export const CAA_MAX_SIGNIFICANT_WAVE_HEIGHT_M = 6.0;
+export const ARA_MIN_DESCENT_HEIGHT_DAY_FT = 200;
+export const ARA_MIN_DESCENT_HEIGHT_NIGHT_FT = 300;
+
 export interface EffectiveOperatingLimits {
   maxHelideckGustKts: number;
   cautionGustKts: number;
@@ -177,7 +191,7 @@ export interface EffectiveOperatingLimits {
 /**
  * Computes effective operational limits based on:
  * 1) Base airframe preset (S92 / AW189 / H175 / AW139 / H160)
- * 2) Day vs Night phase (SPA.HOFO.125 ARA 250ft Day / 300ft Night + CAP 437 / HCA HMS Night deck motion margins)
+ * 2) Day vs Night phase (AMC1 SPA.HOFO.125 ARA MDH 200ft Day / 300ft Night + HCA HMS Rev 9c night deck motion limits)
  * 3) Optional user-saved local HCA HLL / HeliMet override for this rig/FPSO
  */
 export function deriveEffectiveLimits(
@@ -185,17 +199,32 @@ export function deriveEffectiveLimits(
   isNight: boolean,
   isFpso: boolean,
   flightOpsMode: FlightOpsMode,
-  customOverride?: CustomRigOverride | null
+  customOverride?: CustomRigOverride | null,
+  isSemiSub = false
 ): EffectiveOperatingLimits {
-  // Stricter Night Flying Baseline (CAP 437 / SPA.HOFO.125 Night ARA Minima 300ft vs 250ft Day)
-  let maxGust = isNight ? Math.max(35, basePreset.maxHelideckGustKts - 5) : basePreset.maxHelideckGustKts;
+  // Wind (SPA.HOFO.135, 60 kt incl. gusts) and sea state (CAA, 6 m Hs) are the same day and night.
+  // Night raises the ARA cloud minimum to 300 ft (AMC1 SPA.HOFO.125) and uses the HCA night
+  // deck-motion limits, which differ for semi-submersibles and other Category 1 vessels.
+  let maxGust = basePreset.maxHelideckGustKts;
   let cautionGust = isNight ? Math.max(30, basePreset.cautionGustKts - 3) : basePreset.cautionGustKts;
-  let minCeil = isNight ? basePreset.minCloudCeilingFt + 50 : basePreset.minCloudCeilingFt;
+  let minCeil = isNight ? ARA_MIN_DESCENT_HEIGHT_NIGHT_FT : basePreset.minCloudCeilingFt;
   let minVis = isNight ? Number((basePreset.minVisibilityKm + 0.5).toFixed(1)) : basePreset.minVisibilityKm;
-  let maxWave = isNight && isFpso ? Number((basePreset.maxFpsoWaveHeightM - 0.5).toFixed(1)) : basePreset.maxFpsoWaveHeightM;
-  let maxPitchRoll = isNight ? basePreset.maxPitchRollDegNight : basePreset.maxPitchRollDegDay;
-  let maxInclination = isNight ? basePreset.maxInclinationDegNight : basePreset.maxInclinationDegDay;
-  let maxShr = isNight ? basePreset.maxShrMsNight : basePreset.maxShrMsDay;
+  let maxWave = basePreset.maxFpsoWaveHeightM;
+  let maxPitchRoll = !isNight
+    ? basePreset.maxPitchRollDegDay
+    : isSemiSub
+    ? basePreset.maxPitchRollDegNightSemiSub
+    : basePreset.maxPitchRollDegNight;
+  let maxInclination = !isNight
+    ? basePreset.maxInclinationDegDay
+    : isSemiSub
+    ? basePreset.maxInclinationDegNightSemiSub
+    : basePreset.maxInclinationDegNight;
+  let maxShr = !isNight
+    ? basePreset.maxShrMsDay
+    : isSemiSub
+    ? basePreset.maxShrMsNightSemiSub
+    : basePreset.maxShrMsNight;
 
   let isOverrideApplied = false;
   if (customOverride?.maxGustKts && customOverride.maxGustKts > 0) {
@@ -393,7 +422,7 @@ export function computeEstimatedFpsoDeckMotion(params: {
   const peakRatio = Math.max(prRatio, incRatio, shrRatio);
 
   const deckLightStatus: 'GREEN' | 'AMBER' | 'RED' =
-    peakRatio >= 1.0 ? 'RED' : peakRatio >= 0.78 ? 'AMBER' : 'GREEN';
+    peakRatio > 1.0 ? 'RED' : peakRatio >= 0.78 ? 'AMBER' : 'GREEN';
 
   const summaryLabel =
     deckLightStatus === 'RED'
@@ -435,9 +464,10 @@ export function evaluateHourWithLimits(
   isFpso: boolean,
   basePreset: AirframeLimitPreset,
   flightOpsMode: FlightOpsMode,
-  customOverride?: CustomRigOverride | null
+  customOverride?: CustomRigOverride | null,
+  isSemiSub = false
 ): { status: 'GO' | 'CAUTION' | 'HOLD'; reason: string; limits: EffectiveOperatingLimits } {
-  const limits = deriveEffectiveLimits(basePreset, isNight, isFpso, flightOpsMode, customOverride);
+  const limits = deriveEffectiveLimits(basePreset, isNight, isFpso, flightOpsMode, customOverride, isSemiSub);
   const phaseLabel = isNight ? 'NIGHT' : 'DAY';
   const effWind = snap.deckWindSpeedKts ?? snap.windSpeed10mKts;
   const effGust = snap.deckWindGustKts ?? snap.windGust10mKts;
@@ -469,22 +499,17 @@ export function evaluateHourWithLimits(
       limits,
     };
   }
-  if (
-    effGust >= limits.maxHelideckGustKts ||
-    effWind >= limits.maxHelideckGustKts - 5
-  ) {
+  if (Math.max(effWind, effGust) > limits.maxHelideckGustKts) {
     return {
       status: 'HOLD',
-      reason: `NO-GO (${phaseLabel}): Deck gusts ${effGust} kt exceed ${basePreset.id} ${limits.maxHelideckGustKts} kt ${phaseLabel.toLowerCase()} limit`,
+      reason: `NO-GO (${phaseLabel}): Deck wind ${effWind}G${effGust} kt exceeds ${limits.maxHelideckGustKts} kt helideck wind limit`,
       limits,
     };
   }
-  if (waveHeightM >= limits.maxFpsoWaveHeightM) {
+  if (waveHeightM > limits.maxFpsoWaveHeightM) {
     return {
       status: 'HOLD',
-      reason: isFpso
-        ? `NO-GO (${phaseLabel} FPSO): Wave Hs ${waveHeightM}m exceeds ${limits.maxFpsoWaveHeightM}m ${phaseLabel.toLowerCase()} deck motion limit`
-        : `NO-GO (${phaseLabel} Sea State): Wave Hs ${waveHeightM}m exceeds ${limits.maxFpsoWaveHeightM}m ${phaseLabel.toLowerCase()} offshore ditching limit`,
+      reason: `NO-GO (${phaseLabel} Sea State): Wave Hs ${waveHeightM}m exceeds ${limits.maxFpsoWaveHeightM}m CAA sea state limit`,
       limits,
     };
   }
