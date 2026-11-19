@@ -275,6 +275,7 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
   const particleCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const particlesRef = useRef<Particle[]>([]);
   const animFrameRef = useRef<number | null>(null);
+  const layerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!map || overlayMode === 'off' || gridPoints.length === 0) {
@@ -519,14 +520,60 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
 
     resizeAndRenderHeatmap();
 
-    const handleMapMove = () => {
+    // Keep the overlay locked to the map:
+    // - while dragging or pinch-zooming, Leaflet fires move/zoom continuously, so redraw on the
+    //   next animation frame (at most once per frame);
+    // - for animated zooms (double tap, +/- buttons, end of a pinch), Leaflet slides the map with
+    //   a CSS transform and fires no move events, so apply the same transform to the overlay and
+    //   redraw at the new view when the animation ends.
+    let redrawFrame: number | null = null;
+    let zoomAnimating = false;
+    const layer = layerRef.current;
+    const clearZoomTransform = () => {
+      if (!layer) return;
+      layer.style.transition = '';
+      layer.style.transform = '';
+    };
+    const redrawNow = () => {
+      redrawFrame = null;
       partCtx.clearRect(0, 0, partCanvas.width, partCanvas.height);
       resizeAndRenderHeatmap();
     };
+    const scheduleRedraw = () => {
+      if (zoomAnimating) return;
+      if (redrawFrame === null) redrawFrame = requestAnimationFrame(redrawNow);
+    };
+    const handleZoomAnim = (e: L.ZoomAnimEvent) => {
+      if (!layer) return;
+      zoomAnimating = true;
+      const size = map.getSize();
+      const scale = map.getZoomScale(e.zoom, map.getZoom());
+      // Where the overlay's top-left corner will be once the map reaches the new view
+      const topLeft = map.containerPointToLatLng([0, 0]);
+      const newTopLeft = map
+        .project(topLeft, e.zoom)
+        .subtract(map.project(e.center, e.zoom))
+        .add(size.divideBy(2));
+      layer.style.transformOrigin = '0 0';
+      layer.style.transition = 'transform 0.25s cubic-bezier(0,0,0.25,1)';
+      layer.style.transform = `translate(${newTopLeft.x}px, ${newTopLeft.y}px) scale(${scale})`;
+    };
+    const handleMoveEnd = () => {
+      zoomAnimating = false;
+      clearZoomTransform();
+      if (redrawFrame !== null) cancelAnimationFrame(redrawFrame);
+      redrawNow();
+    };
 
-    map.on('moveend zoomend resize', handleMapMove);
+    map.on('move zoom', scheduleRedraw);
+    map.on('zoomanim', handleZoomAnim as L.LeafletEventHandlerFn);
+    map.on('moveend zoomend resize', handleMoveEnd);
 
     const animateParticles = () => {
+      if (zoomAnimating) {
+        animFrameRef.current = requestAnimationFrame(animateParticles);
+        return;
+      }
       // Fade previous frame slightly to create smooth glowing streamline trails
       partCtx.globalCompositeOperation = 'destination-in';
       partCtx.fillStyle = 'rgba(0, 0, 0, 0.91)';
@@ -589,7 +636,11 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
     animFrameRef.current = requestAnimationFrame(animateParticles);
 
     return () => {
-      map.off('moveend zoomend resize', handleMapMove);
+      map.off('move zoom', scheduleRedraw);
+      map.off('zoomanim', handleZoomAnim as L.LeafletEventHandlerFn);
+      map.off('moveend zoomend resize', handleMoveEnd);
+      if (redrawFrame !== null) cancelAnimationFrame(redrawFrame);
+      clearZoomTransform();
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
   }, [map, gridPoints, overlayMode, preset, activeFacility, shoreBaseFacility, corridorAssessment]);
@@ -597,7 +648,7 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
   if (overlayMode === 'off') return null;
 
   return (
-    <div className="pointer-events-none absolute inset-0 z-[350] overflow-hidden">
+    <div ref={layerRef} className="pointer-events-none absolute inset-0 z-[350] overflow-hidden">
       <canvas
         ref={heatmapCanvasRef}
         className="absolute inset-0 w-full h-full mix-blend-screen"
