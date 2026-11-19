@@ -623,21 +623,6 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
 
   if (overlayMode === 'off') return null;
 
-  const modeTitle =
-    overlayMode === 'go_nogo_matrix'
-      ? `${preset.id} Go/No-Go Threshold Matrix + Wind Streamlines`
-      : overlayMode === 'triggered_lightning'
-      ? 'Triggered Lightning (HTLI) Cells & Fly-Around Transit Corridors (950 hPa Flow)'
-      : overlayMode === 'wind_surface'
-      ? '10m Surface Wind Vectors & Speed Heatmap'
-      : overlayMode === 'wind_950hpa'
-      ? '950 hPa (~1,800 ft Transit Altitude) Wind Streamlines'
-      : overlayMode === 'wind_850hpa'
-      ? '850 hPa (~5,000 ft Upper Level) Wind Streamlines'
-      : overlayMode === 'wave_swell'
-      ? 'Significant Wave Height (Hs) & Swell Direction Vectors'
-      : '0°C Freezing Level Altitude & Rotor Icing Hazard Zone';
-
   return (
     <div className="pointer-events-none absolute inset-0 z-[350] overflow-hidden">
       <canvas
@@ -648,10 +633,6 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
         ref={particleCanvasRef}
         className="absolute inset-0 w-full h-full"
       />
-      <div className="hidden sm:flex absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-slate-950/90 border border-cyan-500/50 text-[11px] font-mono text-cyan-300 items-center gap-2 shadow-lg">
-        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-        <span>LIVE GRIB OVERLAY: {modeTitle}</span>
-      </div>
     </div>
   );
 };

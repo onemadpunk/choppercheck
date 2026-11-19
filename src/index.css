@@ -97,6 +97,12 @@
   display: none;
 }
 
+/* "Hide boxes" clean-map mode: only the toggle button stays on top of the map. */
+.radar-map-root[data-clean-map='true'] .map-floating,
+.radar-map-root[data-clean-map='true'] .map-controls > button:not([data-clean-map-toggle]) {
+  display: none !important;
+}
+
 /* Keep the map usable on phones: compact reference card, non-colliding top-right controls, and safe-area insets. */
 .app-shell {
   height: 100vh;
@@ -111,7 +117,7 @@ a {
 }
 @media (max-width: 1023px) {
   .map-reference-card {
-    max-width: calc(100% - 72px);
+    max-width: 100%;
     padding: 8px 10px;
   }
   .map-controls {
