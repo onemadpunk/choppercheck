@@ -549,7 +549,7 @@ export function evaluateHourWithLimits(
     if (snap.lightningRisk === 'MODERATE') {
       const ltLabel =
         snap.lightningType === 'TRIGGERED_WINTER'
-          ? 'TRIGGERED-LIGHTNING CAUTION: flight-level temperature and freezing level in the Met Office risk band, with showers at the “Low” level'
+          ? 'TRIGGERED-LIGHTNING CAUTION: flight-level temperature (−6 to 0°C at 2–3,000 ft) and freezing level in the risk band, with showers at the “Low” level'
           : 'CONVECTIVE SQUALL CAUTION: Heavy showers / instability forecast';
       return {
         status: 'CAUTION',

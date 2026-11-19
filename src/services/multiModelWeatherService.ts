@@ -697,12 +697,20 @@ export function computeMinus10IsothermFt(
  * ft) for the original 2011 system; the published paper's bands are used here.
  *
  * ChopperCheck maps Met Office Low -> MODERATE (caution) and Medium/High -> HIGH (hold).
+ *
+ * Source 3: Langvatn (2020), "Helicopter Triggered Lightning in Norway", MSc thesis, University of
+ * Oslo. MET Norway's Helicopter Trigger Index scores temperature at about 2,500 ft as non-zero from
+ * 0 to -6 C, and Norwegian strike cases clustered at -3 to 0 C (one helicopter strike forecast at
+ * -0.7 C). So a layer average between -1 and 0 C (warmBandMaxC) is treated as a caution band: it
+ * can raise the Low level but never Medium/High, which stay on the Met Office bands.
  */
 export const TRIGGERED_LIGHTNING_CRITERIA = {
   layerBottomFt: 2000,
   layerTopFt: 3000,
   layerTempMinC: -6,
   layerTempMaxC: -1,
+  /** Caution-only band above layerTempMaxC, from the Norwegian strike cases (Langvatn 2020). */
+  warmBandMaxC: 0,
   freezeMinFt: 1000,
   freezeMaxFt: 4500,
   precipMmHr: {
@@ -797,6 +805,12 @@ export function classifyNorthSeaConvection(params: {
     if (totalPrecip >= table.high) return { risk: 'HIGH', type: 'TRIGGERED_WINTER', triggeredLevel: 'HIGH' };
     if (totalPrecip >= table.medium) return { risk: 'HIGH', type: 'TRIGGERED_WINTER', triggeredLevel: 'MEDIUM' };
     if (totalPrecip >= table.low) return { risk: 'MODERATE', type: 'TRIGGERED_WINTER', triggeredLevel: 'LOW' };
+  }
+  // -1 to 0 C: outside the Met Office band but inside the Norwegian one, so caution only
+  const warmBandOk =
+    layerTempC !== null && layerTempC > C.layerTempMaxC && layerTempC <= C.warmBandMaxC;
+  if (warmBandOk && freezeOk && totalPrecip >= table.low) {
+    return { risk: 'MODERATE', type: 'TRIGGERED_WINTER', triggeredLevel: 'LOW' };
   }
 
   const isShowerWmo = wmo !== null && [80, 81, 82, 85, 86].includes(wmo);

@@ -207,8 +207,13 @@ test('triggered lightning follows the Met Office (Wilkinson et al. 2013) criteri
   const nearMiss = classifyNorthSeaConvection({ ...base, precip: 1.6, layerTempC: -3 });
   assert.equal(nearMiss.risk, 'MODERATE');
   assert.equal(nearMiss.type, 'TRIGGERED_WINTER');
-  // Layer too warm (0 C) or too cold (-8 C): not a triggered setup
-  assert.notEqual(classifyNorthSeaConvection({ ...base, precip: 5, layerTempC: 0 }).type, 'TRIGGERED_WINTER');
+  // -1 to 0 C (Norwegian strike cases, Langvatn 2020): caution only, never a hold
+  const warmBand = classifyNorthSeaConvection({ ...base, precip: 12, layerTempC: -0.7 });
+  assert.equal(warmBand.risk, 'MODERATE');
+  assert.equal(warmBand.triggeredLevel, 'LOW');
+  assert.notEqual(classifyNorthSeaConvection({ ...base, precip: 1, layerTempC: -0.5, gridKm: 2 }).type, 'TRIGGERED_WINTER');
+  // Layer too warm (+0.5 C) or too cold (-8 C): not a triggered setup
+  assert.notEqual(classifyNorthSeaConvection({ ...base, precip: 5, layerTempC: 0.5 }).type, 'TRIGGERED_WINTER');
   assert.notEqual(classifyNorthSeaConvection({ ...base, precip: 5, layerTempC: -8 }).type, 'TRIGGERED_WINTER');
   // Freezing level below 1,000 ft or above 4,500 ft: not a triggered setup
   assert.notEqual(
