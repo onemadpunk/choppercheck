@@ -740,7 +740,14 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
           <div className="px-3 py-2 rounded-lg bg-amber-950/40 border border-amber-500/45 text-amber-200 text-xs font-mono flex items-center justify-between gap-2">
             <span>
               Weak / Offline Signal — Showing saved forecast from{' '}
-              {cachedForecastSavedAt.slice(11, 16)} UTC
+              {(() => {
+                const d = new Date(cachedForecastSavedAt);
+                const ageH = Math.max(0, Math.round((Date.now() - d.getTime()) / 3600_000));
+                const sameDay = new Date().toDateString() === d.toDateString();
+                return `${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${
+                  sameDay ? '' : ` ${d.toLocaleDateString([], { weekday: 'short' })}`
+                } (${ageH < 1 ? 'under an hour' : `${ageH} h`} old)`;
+              })()}
             </span>
             <button
               onClick={onRefresh}
@@ -847,6 +854,15 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             )}
           </div>
 
+          {(activeModelSnapshot?.filledData?.length || activeHour?.seaDataNote) && (
+            <p className="text-[11px] text-slate-300 leading-snug">
+              {activeModelSnapshot?.filledData?.length
+                ? `${WEATHER_MODELS_META.find((m) => m.id === weatherModelId)?.shortName ?? 'This model'} had gaps this hour, so these come from another model: ${activeModelSnapshot.filledData.join(', ')}.`
+                : ''}
+              {activeModelSnapshot?.filledData?.length && activeHour?.seaDataNote ? ' ' : ''}
+              {activeHour?.seaDataNote ? `${activeHour.seaDataNote}.` : ''}
+            </p>
+          )}
           <p className="text-xs sm:text-sm text-white/95 leading-relaxed font-sans">
             {plainEnglishSummary}
           </p>
