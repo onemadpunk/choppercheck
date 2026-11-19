@@ -1812,14 +1812,12 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               {
                 label:
                   facility.elevationFt > 45
-                    ? `1. Helideck Wind (~${facility.elevationFt}ft)${
+                    ? `1. Helideck Wind (est. at ~${facility.elevationFt}ft from 10 m/80 m model wind)${
                         approachShearKts >= 20 ? ` · Shear +${approachShearKts}kt` : ''
                       }`
                     : '1. Helideck Wind & Gusts',
                 actual: `${nd(deckWindVal)}G${ndU(gustVal, ' kt')}`,
-                limit: isNightHour
-                  ? `Max ${maxGustLimit} kt (Night · 60kt Day)`
-                  : `Max ${maxGustLimit} kt (Day)`,
+                limit: `Max ${maxGustLimit} kt incl. gusts (day & night)`,
                 st: gustStatus,
               },
               {
@@ -1827,17 +1825,15 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                   ? '2. FPSO Sea State & Swell Period'
                   : '2. Significant Wave Height (Hs)',
                 actual: `${ndU(waveVal, ' m')} (${nd(wavePeriodVal)}s${
-                  longSwellRisk ? ' · Resonant' : activeHour?.swellWaveHeightM ? ` · Swell ${activeHour.swellWaveHeightM}m` : ''
+                  longSwellRisk ? ' · long swell (ChopperCheck caution)' : activeHour?.swellWaveHeightM ? ` · Swell ${activeHour.swellWaveHeightM}m` : ''
                 })`,
-                limit: isFpso
-                  ? isNightHour
-                    ? `Max ${maxWaveLimit} m (Night · 6.0m Day)`
-                    : `Max ${maxWaveLimit} m (Day <10s)`
-                  : `Max ${maxWaveLimit} m`,
+                limit: `Max ${maxWaveLimit} m Hs (CAA, day & night)`,
                 st: waveStatus,
               },
               {
-                label: `3. Cloud Ceiling (${isNightHour ? 'Night' : 'Day'} ARA)`,
+                label: `3. Cloud Ceiling (${isNightHour ? 'Night' : 'Day'} ARA)${
+                  facilityHasReportedCeiling ? ' · METAR' : ' · est. from dew point'
+                }`,
                 actual: `${ndFt(ceilVal)}`,
                 limit: isNightHour
                   ? `Min ${minCeilLimit} ft (Night · ${preset.minCloudCeilingFt}ft Day)`
@@ -1847,33 +1843,27 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               {
                 label: `4. Horizontal Visibility (${isNightHour ? 'Night' : 'Day'})`,
                 actual: `${ndU(visVal, ' km')}`,
-                limit: isNightHour
-                  ? `Min ${minVisLimit} km (Night · 0.8km Day)`
-                  : `Min ${minVisLimit} km (Day)`,
+                limit: `Min ${minVisLimit} km (ChopperCheck figure, not an official limit)`,
                 st: visStatus,
               },
               {
                 label: '5. 0°C Rotor Icing Altitude',
                 actual: `${ndFt(freezeVal)}`,
-                limit: `Safe > ${preset.minIcingFreezingLevelFt} ft`,
+                limit: `Caution below ${preset.minIcingFreezingLevelFt} ft (ChopperCheck rule of thumb)`,
                 st: iceStatus,
               },
               {
                 label: '6. Triggered & Natural Lightning',
                 actual: `${lightningRisk}${
                   lightningType !== 'NONE' ? ` · ${lightningTypeLabel}` : ''
-                }${
-                  typeof activeModelSnapshot?.capeJkg === 'number'
-                    ? ` (${activeModelSnapshot.capeJkg} J/kg)`
-                    : ''
-                }`,
-                limit: 'No TS / Low-0°C CAPE',
+                } (estimate)`,
+                limit: 'Met Office triggered-lightning criteria',
                 st: lightningStatus,
               },
               {
                 label: '7. Sea Haar / Fog Dewpoint Spread',
                 actual: `T-Td ${ndU(dewSpreadVal, '°C')} (${fogSpreadRisk})`,
-                limit: 'Safe > 2.2°C',
+                limit: 'Caution at 2.2°C or less (rule of thumb)',
                 st: fogStatus,
               },
             ].map((item, idx) => (

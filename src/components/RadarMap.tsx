@@ -1016,8 +1016,9 @@ export const RadarMap: React.FC<RadarMapProps> = ({
                 {corridorBypass.summaryText}
               </div>
               <div className="text-slate-400 font-sans leading-snug">
-                ChopperCheck&apos;s own estimate from forecast models (freezing level, showers, instability), not
-                an official triggered-lightning forecast or live lightning data. Check the live rain radar and
+                ChopperCheck&apos;s own estimate: the published Met Office triggered-lightning criteria (temperature
+                at 2–3,000 ft, freezing level and rain rate) applied to the forecast model for the hour shown. Not
+                the official forecast or live lightning data. Check the live rain radar and
                 the operator&apos;s own briefing.
               </div>
             </div>
