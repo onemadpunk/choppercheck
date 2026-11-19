@@ -16,7 +16,7 @@ function weatherJson(hours: number, drop: Record<string, string[]>) {
   const base: Record<string, number> = {
     wind_speed_10m: 15, wind_direction_10m: 240, wind_gusts_10m: 22, temperature_2m: 8, dew_point_2m: 4,
     cloud_cover_low: 30, freezing_level_height: 1500, temperature_925hPa: 3, geopotential_height_925hPa: 760,
-    temperature_850hPa: -1, geopotential_height_850hPa: 1450, pressure_msl: 1008, precipitation: 0,
+    temperature_850hPa: -1, geopotential_height_850hPa: 1450, pressure_msl: 1008, precipitation: 0, visibility: 25000,
   };
   const hourly: Record<string, unknown[]> = { time };
   for (const m of MODELS) {

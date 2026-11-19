@@ -210,3 +210,25 @@ test('simple view gives a plain answer and plain words', async () => {
   assert.equal(windWords(10), 'Light wind');
   assert.equal(seaWords(null, true), 'Not at sea');
 });
+
+test('sourced icing, visibility and fog rules replace the old rules of thumb', async () => {
+  const { assessIcing, HOFO_MIN_VISIBILITY_NIGHT_KM, deriveEffectiveLimits } = await import(
+    '../src/utils/solarAndMetUtils.ts'
+  );
+  // SPA.HOFO.130: 800 m day, 1,500 m night
+  assert.equal(deriveEffectiveLimits(preset, false, false, '24h_ops').minVisibilityKm, 0.8);
+  assert.equal(deriveEffectiveLimits(preset, true, false, '24h_ops').minVisibilityKm, HOFO_MIN_VISIBILITY_NIGHT_KM);
+  // CAA Paper 96009 band: 0 to -10 C in cloud
+  const base = { freezingLevelFt: 1500, cloudCeilingFt: 1200, precipMmHr: 0, fullIceProtection: false };
+  assert.equal(assessIcing({ ...base, transitTempC: -3 }).level, 'CAUTION');
+  assert.equal(assessIcing({ ...base, transitTempC: 2 }).level, 'NONE');
+  assert.equal(assessIcing({ ...base, transitTempC: -14 }).level, 'NONE');
+  assert.equal(assessIcing({ ...base, transitTempC: -3, cloudCeilingFt: 4000 }).level, 'NONE');
+  // No ice-free layer below: HOLD, unless the type has full ice protection
+  assert.equal(assessIcing({ ...base, freezingLevelFt: 600, transitTempC: -4 }).level, 'HOLD');
+  assert.equal(assessIcing({ ...base, freezingLevelFt: 600, transitTempC: -4, fullIceProtection: true }).level, 'CAUTION');
+  // No transit temperature: freezing level below the transit level stands in
+  assert.equal(assessIcing({ ...base, transitTempC: null }).level, 'CAUTION');
+  // A long swell alone no longer raises CAUTION; the deck motion estimate handles it
+  assert.equal(evaluateHourWithLimits(snap(), 3, 12, false, true, preset, '24h_ops').status, 'GO');
+});

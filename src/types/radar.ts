@@ -201,7 +201,8 @@ export interface AirframeLimitPreset {
   cautionGustKts: number;
   minCloudCeilingFt: number;
   minVisibilityKm: number;
-  minIcingFreezingLevelFt: number;
+  /** Certified for flight in icing conditions (full ice protection): S-92A, AW189 FIPS. */
+  fullIceProtection: boolean;
   maxFpsoWaveHeightM: number;
   maxPitchRollDegDay: number;
   maxPitchRollDegNight: number;
@@ -242,7 +243,8 @@ export interface ModelPointSnapshot {
   approachShearKts?: number;
   windSpeed950hPaKts: number;
   windDir950hPaDeg: number;
-  temp950hPaC: number;
+  /** Model temperature at 950 hPa (about 1,800 ft, the usual transit level); null when no model has it. */
+  temp950hPaC: number | null;
   windSpeed850hPaKts: number;
   windDir850hPaDeg: number;
   freezingLevelFt: number;

@@ -13,6 +13,8 @@ import {
 import { calculateBearingDeg, calculateDistanceNm } from '../data/aircraftDecoder';
 import {
   ARA_MIN_DESCENT_HEIGHT_DAY_FT,
+  assessIcing,
+  HOFO_MIN_VISIBILITY_DAY_KM,
   CAA_MAX_HELIDECK_WIND_KTS,
   CAA_MAX_SIGNIFICANT_WAVE_HEIGHT_M,
   computeDeckHeightWind,
@@ -55,7 +57,7 @@ const COMMON_LIMITS = {
   maxHelideckGustKts: CAA_MAX_HELIDECK_WIND_KTS,
   cautionGustKts: 48,
   minCloudCeilingFt: ARA_MIN_DESCENT_HEIGHT_DAY_FT,
-  minVisibilityKm: 0.8,
+  minVisibilityKm: HOFO_MIN_VISIBILITY_DAY_KM, // SPA.HOFO.130
   maxFpsoWaveHeightM: CAA_MAX_SIGNIFICANT_WAVE_HEIGHT_M,
 };
 
@@ -64,21 +66,21 @@ export const AIRFRAME_PRESETS: Record<AirframePresetId, AirframeLimitPreset> = {
     id: 'S92',
     name: 'Sikorsky S-92A (Bristow / CHC)',
     ...COMMON_LIMITS,
-    minIcingFreezingLevelFt: 1800,
+    fullIceProtection: true, // FAA/EASA full icing certification
     ...HCA_CAT_A_MOTION,
   },
   AW189: {
     id: 'AW189',
     name: 'Leonardo AW189 (Bristow / CHC / SAR)',
     ...COMMON_LIMITS,
-    minIcingFreezingLevelFt: 2000,
+    fullIceProtection: true, // EASA Full Ice Protection System, 2016
     ...HCA_CAT_A_MOTION,
   },
   H175: {
     id: 'H175',
     name: 'Airbus H175 (NHV / OHS)',
     ...COMMON_LIMITS,
-    minIcingFreezingLevelFt: 2000,
+    fullIceProtection: false,
     // HCA lists the H175 (EC175) as Category B.
     ...HCA_CAT_B_MOTION,
   },
@@ -86,14 +88,14 @@ export const AIRFRAME_PRESETS: Record<AirframePresetId, AirframeLimitPreset> = {
     id: 'AW139',
     name: 'Leonardo AW139 (SNS / Irish Sea)',
     ...COMMON_LIMITS,
-    minIcingFreezingLevelFt: 2200,
+    fullIceProtection: false,
     ...HCA_CAT_B_MOTION,
   },
   H160: {
     id: 'H160',
     name: 'Airbus H160 Offshore',
     ...COMMON_LIMITS,
-    minIcingFreezingLevelFt: 2200,
+    fullIceProtection: false,
     // Not named in the HCA list; treated as Category B like the AS365/EC155 it replaces.
     ...HCA_CAT_B_MOTION,
   },
@@ -157,15 +159,21 @@ export function evaluateAirframeLimits(
   precipMmHr: number,
   isFpso: boolean,
   preset: AirframeLimitPreset,
-  missingData: string[] = []
+  missingData: string[] = [],
+  transitTempC?: number | null
 ): { status: 'GO' | 'CAUTION' | 'HOLD'; reason: string } {
   const hasWave = typeof waveHeightM === 'number' && Number.isFinite(waveHeightM);
   const wave = hasWave ? (waveHeightM as number) : 0;
   const waveTxt = hasWave ? `Wave ${wave}m` : 'no sea data';
-  const icingHazard =
-    freezingLevelFt > 0 &&
-    freezingLevelFt < preset.minIcingFreezingLevelFt &&
-    (cloudCeilingFt < 2500 || precipMmHr > 0.2);
+  // Grid and route points have no transit-level temperature, so the freezing level stands in for it
+  const icing = assessIcing({
+    freezingLevelFt,
+    transitTempC: transitTempC ?? null,
+    cloudCeilingFt,
+    precipMmHr,
+    fullIceProtection: preset.fullIceProtection,
+  });
+  const icingHazard = icing.level !== 'NONE';
 
   if (Math.max(windSpeed10mKts, windGust10mKts) > preset.maxHelideckGustKts) {
     return {
@@ -190,11 +198,8 @@ export function evaluateAirframeLimits(
       reason: `NO-GO (Haar/Low Cloud): Ceiling ${cloudCeilingFt} ft / Vis ${visibilityKm} km below ARA minima`,
     };
   }
-  if (icingHazard && freezingLevelFt < 1000) {
-    return {
-      status: 'HOLD',
-      reason: `NO-GO (Severe Rotor Icing): 0°C Freezing Level at ${freezingLevelFt} ft with active moisture`,
-    };
+  if (icing.level === 'HOLD') {
+    return { status: 'HOLD', reason: icing.reason };
   }
 
   if (
@@ -206,10 +211,7 @@ export function evaluateAirframeLimits(
     (hasWave && !isFpso && wave >= preset.maxFpsoWaveHeightM - 0.8)
   ) {
     if (icingHazard) {
-      return {
-        status: 'CAUTION',
-        reason: `ICING CAUTION: 0°C Freezing Level at ${freezingLevelFt.toLocaleString()} ft (Transit Band)`,
-      };
+      return { status: 'CAUTION', reason: icing.reason };
     }
     if (hasWave && isFpso && wave >= preset.maxFpsoWaveHeightM - 1.2) {
       return {
@@ -1032,13 +1034,17 @@ export async function fetchMultiModelRigForecast(
     const entries: MultiModelHourEntry[] = [];
     const solarCache = new Map<string, ReturnType<typeof computeSolarTimesUtc>>();
 
-    const classifyFogSpread = (
-      spreadC: number,
+    // Fog from real forecast values only:
+    // - HIGH: forecast visibility under 1 km (the WMO / Met Office definition of fog);
+    // - MODERATE: sea-fog (haar) set-up, when the air's dew point is at or above the sea temperature,
+    //   so air moving over the sea is cooled to saturation (Met Office: warm moist air over a colder sea).
+    const classifyFog = (
       visKm: number,
-      lowCloudPct: number
+      dewPointC: number,
+      sstC: number | null
     ): 'LOW' | 'MODERATE' | 'HIGH' => {
-      if (visKm < 1.5 || (spreadC <= 1.2 && lowCloudPct >= 65)) return 'HIGH';
-      if (visKm < 4.0 || spreadC <= 2.2) return 'MODERATE';
+      if (visKm < 1.0) return 'HIGH';
+      if (sstC !== null && dewPointC >= sstC) return 'MODERATE';
       return 'LOW';
     };
 
@@ -1150,13 +1156,14 @@ export async function fetchMultiModelRigForecast(
             rawVal('wind_direction_925hPa') ??
             wd10
         );
-        const t950 = Number(
-          (
-            rawVal('temperature_950hPa') ??
-            rawVal('temperature_925hPa') ??
-            4.5
-          ).toFixed(1)
-        );
+        // Transit-level temperature (icing check): this model's 950 hPa or 925 hPa value, else
+        // another model's 950 hPa value; null when no model has one (icing then uses the freezing level)
+        const t950Raw =
+          rawVal('temperature_950hPa') ??
+          rawVal('temperature_925hPa') ??
+          fromOthers('temperature_950hPa')?.v ??
+          null;
+        const t950 = t950Raw === null ? null : Number(t950Raw.toFixed(1));
         const ws850 = Math.round(
           rawVal('wind_speed_850hPa') ?? Math.round(ws950 * 1.15)
         );
@@ -1180,7 +1187,7 @@ export async function fetchMultiModelRigForecast(
             missingData.push('freezing level');
           }
         }
-        const t925 = rawVal('temperature_925hPa') ?? t950;
+        const t925 = rawVal('temperature_925hPa') ?? t950 ?? temp2mC - 5;
         const z925 = rawVal('geopotential_height_925hPa') ?? 720;
         const t850 = rawVal('temperature_850hPa') ?? t925 - 4.0;
         const z850 = rawVal('geopotential_height_850hPa') ?? 1420;
@@ -1217,20 +1224,9 @@ export async function fetchMultiModelRigForecast(
         const capeVal = rawVal('cape');
         const wmoCode = rawVal('weather_code');
 
-        // Visibility: direct from model (ICON/GFS) or derived from physical RH / precipitation / mist when not in ECMWF/GEM surface table
-        const directVisMeters = rawVal('visibility');
-        let visibilityKm = 20.0;
-        if (directVisMeters !== null) {
-          visibilityKm = Number(
-            Math.min(50, Math.max(0.2, directVisMeters / 1000)).toFixed(1)
-          );
-        } else {
-          if (dewSpreadC <= 0.6 && lowCloudPct >= 85) visibilityKm = 0.8;
-          else if (dewSpreadC <= 1.2) visibilityKm = 3.5;
-          else if (precipMmHr >= 2.0) visibilityKm = 4.5;
-          else if (precipMmHr > 0.2) visibilityKm = 9.0;
-          else visibilityKm = Number(Math.min(35, 12 + dewSpreadC * 4).toFixed(1));
-        }
+        // Visibility: this model's forecast, else another model's (labelled); never made up
+        const directVisMeters = core('visibility', 'visibility', 20000);
+        const visibilityKm = Number(Math.min(50, Math.max(0.2, directVisMeters / 1000)).toFixed(1));
 
         const cloudCeilingFt = computePhysicalCloudCeilingFt(
           temp2mC,
@@ -1260,7 +1256,7 @@ export async function fetchMultiModelRigForecast(
         });
         const lightningRisk = conv.risk;
         const lightningType = conv.type;
-        const fogSpreadRisk = classifyFogSpread(dewSpreadC, visibilityKm, lowCloudPct);
+        const fogSpreadRisk = classifyFog(visibilityKm, dewPoint2mC, seaSurfaceTempC);
 
         const evalResult = evaluateAirframeLimits(
           deckWindSpeedKts,
@@ -1272,7 +1268,8 @@ export async function fetchMultiModelRigForecast(
           precipMmHr,
           isFpso,
           preset,
-          missingData
+          missingData,
+          t950
         );
 
         modelsRecord[m] = {
@@ -1580,12 +1577,8 @@ export async function fetchFlightCorridorProfile(
 
     const freezingLevelFt = computeNativeFreezingLevelFt(rawFreeze, t2m, t925, z925, t850, z850);
 
-    const rawVisM = rawT('visibility');
-    const dewGap = Math.max(0, t2m - dp2m);
-    const visKm =
-      rawVisM !== null
-        ? Number(Math.min(50, Math.max(0.2, rawVisM / 1000)).toFixed(1))
-        : Number(Math.min(35, Math.max(1.5, 10 + dewGap * 4)).toFixed(1));
+    // Visibility from the model only; a gap is marked, never made up
+    const visKm = Number(Math.min(50, Math.max(0.2, core('visibility', 'visibility', 20000) / 1000)).toFixed(1));
     const lowCloud = core('cloud_cover_low', 'low cloud', 0);
     const cloudCeilingFt = computePhysicalCloudCeilingFt(t2m, dp2m, lowCloud, visKm);
     // No sea-state limit at an airfield, and no made-up waves where there is no sea data
@@ -1861,11 +1854,8 @@ export async function fetchWeatherPointsAt(
       z500
     );
 
-    const rawVis = pickRaw('visibility');
-    const visKm =
-      rawVis !== null
-        ? Number(Math.min(50, Math.max(0.2, rawVis / 1000)).toFixed(1))
-        : Number(Math.min(35, Math.max(1.5, 10 + (t2m - dp2m) * 4)).toFixed(1));
+    // Visibility from the model only; a gap is marked, never made up
+    const visKm = Number(Math.min(50, Math.max(0.2, core('visibility', 'visibility', 20000) / 1000)).toFixed(1));
     const lowCloud = core('cloud_cover_low', 'low cloud', 0);
     const cloudCeilingFt = computePhysicalCloudCeilingFt(t2m, dp2m, lowCloud, visKm);
 

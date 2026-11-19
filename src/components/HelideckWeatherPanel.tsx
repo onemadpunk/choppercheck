@@ -33,6 +33,7 @@ import {
   computeWindOverDeckSector,
   decodeRawTafHighlights,
   evaluateFpsoSwellRisk,
+  assessIcing,
   deriveEffectiveLimits,
   evaluateHourWithLimits,
   evaluateFacilityHour,
@@ -423,13 +424,12 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     activeHour?.swellWavePeriodSec,
     isFpso && waveVal !== null
   );
-  const longSwellRisk = swellRisk.isResonantSwell;
   const waveStatus =
     waveVal === null
       ? 'NODATA'
       : waveVal > maxWaveLimit
       ? 'HOLD'
-      : waveVal >= maxWaveLimit - 1.2 || longSwellRisk
+      : waveVal >= maxWaveLimit - 1.2
       ? 'CAUTION'
       : 'GO';
 
@@ -472,19 +472,19 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
 
   const freezeVal: number | null = fromSnap(activeModelSnapshot?.freezingLevelFt, 'freezing level');
   const precipVal = activeModelSnapshot?.precipMmHr ?? 0;
-  const icingActive =
-    freezeVal !== null &&
-    freezeVal > 0 &&
-    freezeVal < preset.minIcingFreezingLevelFt &&
-    ((ceilVal ?? 99999) < 2500 || precipVal > 0.2);
-  const iceStatus =
+  const transitTempVal = activeModelSnapshot?.temp950hPaC ?? null;
+  const icingLevel =
     freezeVal === null
-      ? 'NODATA'
-      : icingActive && freezeVal < 1000
-      ? 'HOLD'
-      : icingActive
-      ? 'CAUTION'
-      : 'GO';
+      ? null
+      : assessIcing({
+          freezingLevelFt: freezeVal,
+          transitTempC: transitTempVal,
+          cloudCeilingFt: ceilVal ?? 99999,
+          precipMmHr: precipVal,
+          fullIceProtection: preset.fullIceProtection,
+        }).level;
+  const iceStatus =
+    icingLevel === null ? 'NODATA' : icingLevel === 'HOLD' ? 'HOLD' : icingLevel === 'CAUTION' ? 'CAUTION' : 'GO';
   /** Formats a value for display, or "no data" when the forecast did not supply it */
   const nd = (v: number | null, f: (n: number) => string = (n) => String(n)) => (v === null ? 'no data' : f(v));
   /** Value with its unit, or "no data" */
@@ -507,6 +507,10 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     lightningRisk === 'HIGH' ? 'HOLD' : lightningRisk === 'MODERATE' ? 'CAUTION' : 'GO';
 
   const dewSpreadVal: number | null = fromSnap(activeModelSnapshot?.dewSpreadC, 'temperature', 'dew point');
+  const dewPointVal: number | null =
+    dewSpreadVal === null || activeModelSnapshot?.temp2mC == null
+      ? null
+      : Number((activeModelSnapshot.temp2mC - dewSpreadVal).toFixed(1));
   const fogSpreadRisk = activeModelSnapshot?.fogSpreadRisk ?? 'LOW';
   const fogStatus =
     fogSpreadRisk === 'HIGH' ? 'CAUTION' : fogSpreadRisk === 'MODERATE' ? 'CAUTION' : 'GO';
@@ -1825,7 +1829,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                   ? '2. FPSO Sea State & Swell Period'
                   : '2. Significant Wave Height (Hs)',
                 actual: `${ndU(waveVal, ' m')} (${nd(wavePeriodVal)}s${
-                  longSwellRisk ? ' · long swell (ChopperCheck caution)' : activeHour?.swellWaveHeightM ? ` · Swell ${activeHour.swellWaveHeightM}m` : ''
+                  activeHour?.swellWaveHeightM ? ` · Swell ${activeHour.swellWaveHeightM}m` : ''
                 })`,
                 limit: `Max ${maxWaveLimit} m Hs (CAA, day & night)`,
                 st: waveStatus,
@@ -1843,13 +1847,15 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               {
                 label: `4. Horizontal Visibility (${isNightHour ? 'Night' : 'Day'})`,
                 actual: `${ndU(visVal, ' km')}`,
-                limit: `Min ${minVisLimit} km (ChopperCheck figure, not an official limit)`,
+                limit: `Min ${minVisLimit} km (SPA.HOFO.130, rig in sight)`,
                 st: visStatus,
               },
               {
-                label: '5. 0°C Rotor Icing Altitude',
-                actual: `${ndFt(freezeVal)}`,
-                limit: `Caution below ${preset.minIcingFreezingLevelFt} ft (ChopperCheck rule of thumb)`,
+                label: '5. Icing at transit level (~1,800 ft)',
+                actual: `${transitTempVal === null ? '' : `${transitTempVal}°C · `}0°C at ${ndFt(freezeVal)}`,
+                limit: `Icing band 0 to −10°C in cloud/rain (CAA Paper 96009)${
+                  preset.fullIceProtection ? ` · ${preset.id} has full ice protection` : ''
+                }`,
                 st: iceStatus,
               },
               {
@@ -1861,9 +1867,11 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 st: lightningStatus,
               },
               {
-                label: '7. Sea Haar / Fog Dewpoint Spread',
-                actual: `T-Td ${ndU(dewSpreadVal, '°C')} (${fogSpreadRisk})`,
-                limit: 'Caution at 2.2°C or less (rule of thumb)',
+                label: '7. Sea Haar / Fog',
+                actual: `Vis ${ndU(visVal, ' km')} · dew point ${
+                  dewPointVal === null ? 'no data' : `${dewPointVal}°C`
+                } vs sea ${activeHour?.seaSurfaceTempC == null ? 'n/a' : `${activeHour.seaSurfaceTempC}°C`}`,
+                limit: 'Fog under 1 km; haar possible when dew point ≥ sea temp (Met Office)',
                 st: fogStatus,
               },
             ].map((item, idx) => (

@@ -172,13 +172,54 @@ export const CAA_MAX_HELIDECK_WIND_KTS = 60;
 export const CAA_MAX_SIGNIFICANT_WAVE_HEIGHT_M = 6.0;
 export const ARA_MIN_DESCENT_HEIGHT_DAY_FT = 200;
 export const ARA_MIN_DESCENT_HEIGHT_NIGHT_FT = 300;
+/**
+ * SPA.HOFO.130 (VFR between offshore locations, two pilots): 2 km day / 5 km night, reducible to
+ * 800 m by day and 1,500 m at night when the destination or an intermediate structure stays in sight.
+ */
+export const HOFO_MIN_VISIBILITY_DAY_KM = 0.8;
+export const HOFO_MIN_VISIBILITY_NIGHT_KM = 1.5;
+
+/**
+ * Icing, after CAA Paper 96009 (helicopter icing clearances): icing is most likely in cloud or
+ * precipitation at 0 to -10 C, and a helicopter needs a non-icing layer of 500-1,000 ft above its
+ * minimum altitude to escape into. ChopperCheck checks the model temperature at the 950 hPa transit
+ * level (about 1,800 ft), or the freezing level when that temperature is missing.
+ * - CAUTION: transit level in the 0 to -10 C band with cloud below 2,500 ft or rain.
+ * - HOLD: the same, with the freezing level below 1,000 ft (no ice-free layer to descend into),
+ *   for types without full ice protection. Types certified for icing (S-92A, AW189) get CAUTION only.
+ */
+export const ICING_BAND_MIN_C = -10;
+export const ICING_TRANSIT_LEVEL_FT = 1800;
+export function assessIcing(p: {
+  freezingLevelFt: number;
+  transitTempC?: number | null;
+  cloudCeilingFt: number;
+  precipMmHr: number;
+  fullIceProtection: boolean;
+}): { level: 'NONE' | 'CAUTION' | 'HOLD'; reason: string } {
+  const moisture = p.cloudCeilingFt < 2500 || p.precipMmHr > 0.2;
+  const t = typeof p.transitTempC === 'number' && Number.isFinite(p.transitTempC) ? p.transitTempC : null;
+  const inBand =
+    t !== null
+      ? t <= 0 && t >= ICING_BAND_MIN_C
+      : p.freezingLevelFt > 0 && p.freezingLevelFt < ICING_TRANSIT_LEVEL_FT;
+  if (!inBand || !moisture) return { level: 'NONE', reason: '' };
+  const tempTxt = t !== null ? `${t}°C at transit level` : `freezing level ${p.freezingLevelFt.toLocaleString()} ft`;
+  if (p.freezingLevelFt < 1000 && !p.fullIceProtection) {
+    return {
+      level: 'HOLD',
+      reason: `NO-GO (Icing): ${tempTxt} in cloud/rain, freezing level ${p.freezingLevelFt.toLocaleString()} ft leaves no ice-free layer below`,
+    };
+  }
+  return { level: 'CAUTION', reason: `ICING CAUTION: ${tempTxt} in cloud/rain (0 to −10°C icing band)` };
+}
 
 export interface EffectiveOperatingLimits {
   maxHelideckGustKts: number;
   cautionGustKts: number;
   minCloudCeilingFt: number;
   minVisibilityKm: number;
-  minIcingFreezingLevelFt: number;
+  fullIceProtection: boolean;
   maxFpsoWaveHeightM: number;
   maxPitchRollDeg: number;
   maxInclinationDeg: number;
@@ -208,7 +249,7 @@ export function deriveEffectiveLimits(
   let maxGust = basePreset.maxHelideckGustKts;
   let cautionGust = isNight ? Math.max(30, basePreset.cautionGustKts - 3) : basePreset.cautionGustKts;
   let minCeil = isNight ? ARA_MIN_DESCENT_HEIGHT_NIGHT_FT : basePreset.minCloudCeilingFt;
-  let minVis = isNight ? Number((basePreset.minVisibilityKm + 0.5).toFixed(1)) : basePreset.minVisibilityKm;
+  let minVis = isNight ? Math.max(basePreset.minVisibilityKm, HOFO_MIN_VISIBILITY_NIGHT_KM) : basePreset.minVisibilityKm;
   let maxWave = basePreset.maxFpsoWaveHeightM;
   let maxPitchRoll = !isNight
     ? basePreset.maxPitchRollDegDay
@@ -264,7 +305,7 @@ export function deriveEffectiveLimits(
     cautionGustKts: cautionGust,
     minCloudCeilingFt: minCeil,
     minVisibilityKm: minVis,
-    minIcingFreezingLevelFt: basePreset.minIcingFreezingLevelFt,
+    fullIceProtection: basePreset.fullIceProtection,
     maxFpsoWaveHeightM: maxWave,
     maxPitchRollDeg: maxPitchRoll,
     maxInclinationDeg: maxInclination,
@@ -324,11 +365,11 @@ export function evaluateFpsoSwellRisk(
     Math.max(swellPeriodSec || 0, swellWavePeriodSec || 0).toFixed(1)
   );
   const effectiveSwellM = Number((swellWaveHeightM ?? waveHeightM).toFixed(1));
-  const isResonantSwell =
-    isFpso && effectivePeriodSec >= 10.0 && (effectiveSwellM >= 1.5 || waveHeightM >= 2.5);
-  const label = isResonantSwell
-    ? `Resonant Atlantic swell (${effectiveSwellM}m @ ${effectivePeriodSec}s)`
-    : `${effectiveSwellM}m @ ${effectivePeriodSec}s`;
+  // No fixed "resonant" period: FPSO roll periods are typically 20 s or more and depend on the
+  // vessel and loading, so swell effects come from the deck motion estimate instead.
+  void isFpso;
+  const isResonantSwell = false;
+  const label = `${effectiveSwellM}m @ ${effectivePeriodSec}s`;
   return {
     isResonantSwell,
     effectivePeriodSec,
@@ -458,6 +499,7 @@ export function evaluateHourWithLimits(
     lightningType?: 'NONE' | 'TRIGGERED_WINTER' | 'CONVECTIVE_SHOWER' | 'NATURAL_TS';
     fogSpreadRisk?: 'LOW' | 'MODERATE' | 'HIGH';
     dewSpreadC?: number;
+    temp950hPaC?: number | null;
     missingData?: string[];
   },
   /** null = no sea data or not applicable (shore base); sea-state checks are then skipped. */
@@ -489,10 +531,14 @@ export function evaluateHourWithLimits(
     };
   }
 
-  const icingHazard =
-    snap.freezingLevelFt > 0 &&
-    snap.freezingLevelFt < limits.minIcingFreezingLevelFt &&
-    (snap.cloudCeilingFt < 2500 || snap.precipMmHr > 0.2);
+  const icing = assessIcing({
+    freezingLevelFt: snap.freezingLevelFt,
+    transitTempC: snap.temp950hPaC,
+    cloudCeilingFt: snap.cloudCeilingFt,
+    precipMmHr: snap.precipMmHr,
+    fullIceProtection: limits.fullIceProtection,
+  });
+  const icingHazard = icing.level !== 'NONE';
 
   if (snap.lightningRisk === 'HIGH') {
     const ltLabel =
@@ -529,15 +575,13 @@ export function evaluateHourWithLimits(
       limits,
     };
   }
-  if (icingHazard && snap.freezingLevelFt < 1000) {
-    return {
-      status: 'HOLD',
-      reason: `NO-GO (Severe Rotor Icing): 0°C at ${snap.freezingLevelFt} ft with active moisture`,
-      limits,
-    };
+  if (icing.level === 'HOLD') {
+    return { status: 'HOLD', reason: icing.reason, limits };
   }
 
-  const longPeriodSwellCaution = isFpso && hasWave && (swellPeriodSec ?? 0) >= 10.0 && wave >= 2.5;
+  // Long swell on FPSOs/semi-subs is handled by the wave-derived deck motion estimate
+  // (evaluateFacilityHour), which uses the swell period and direction.
+  void swellPeriodSec;
   const approachShearCaution = (snap.approachShearKts ?? 0) >= 20;
 
   if (
@@ -545,7 +589,6 @@ export function evaluateHourWithLimits(
     icingHazard ||
     snap.lightningRisk === 'MODERATE' ||
     snap.fogSpreadRisk === 'HIGH' ||
-    longPeriodSwellCaution ||
     approachShearCaution ||
     snap.cloudCeilingFt < limits.minCloudCeilingFt + 350 ||
     snap.visibilityKm < limits.minVisibilityKm + 2.0 ||
@@ -563,18 +606,7 @@ export function evaluateHourWithLimits(
       };
     }
     if (icingHazard) {
-      return {
-        status: 'CAUTION',
-        reason: `ICING CAUTION: 0°C Freezing Level at ${snap.freezingLevelFt.toLocaleString()} ft (Transit Band)`,
-        limits,
-      };
-    }
-    if (longPeriodSwellCaution) {
-      return {
-        status: 'CAUTION',
-        reason: `FPSO SWELL PERIOD CAUTION: ${wave}m @ ${swellPeriodSec}s long Atlantic swell (Pitch/Roll risk)`,
-        limits,
-      };
+      return { status: 'CAUTION', reason: icing.reason, limits };
     }
     if (approachShearCaution) {
       return {
@@ -586,7 +618,7 @@ export function evaluateHourWithLimits(
     if (snap.fogSpreadRisk === 'HIGH') {
       return {
         status: 'CAUTION',
-        reason: `SEA HAAR / FOG CAUTION: Temp–Dewpoint spread ${snap.dewSpreadC ?? 1.0}°C`,
+        reason: `SEA HAAR / FOG CAUTION: forecast visibility ${snap.visibilityKm} km (fog is under 1 km)`,
         limits,
       };
     }

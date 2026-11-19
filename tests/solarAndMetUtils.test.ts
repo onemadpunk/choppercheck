@@ -249,7 +249,8 @@ test('Deck-height wind, FPSO long-swell risk, runway crosswind, WMO sea-state an
   assert.ok(deckWind.deckWindGustKts >= 21);
 
   const swell = evaluateFpsoSwellRisk(2.8, 11.5, 2.4, 11.5, true);
-  assert.equal(swell.isResonantSwell, true);
+  assert.equal(swell.isResonantSwell, false); // no fixed resonant period any more
+  assert.equal(swell.label, '2.4m @ 11.5s');
 
   const rwy = computeBestRunwayWind('EGPD', 250, 22, 34);
   assert.ok(rwy !== null);
