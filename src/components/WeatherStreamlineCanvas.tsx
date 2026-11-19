@@ -9,6 +9,7 @@ import {
 import {
   evaluateGridPointStatus,
   CorridorLightningBypassAssessment,
+  gridPointUsableForLayer,
 } from '../services/multiModelWeatherService';
 
 interface WeatherStreamlineCanvasProps {
@@ -63,8 +64,9 @@ function interpolateGrid(
 
   for (let i = 0; i < gridPoints.length; i++) {
     const pt = gridPoints[i];
-    // Skip points with gaps (never blend in placeholder values) and land points on the wave layer
-    if (pt.missingData && pt.missingData.length > 0) continue;
+    // Skip points missing this layer's own inputs (never blend in placeholder values), and land
+    // points on the wave layer
+    if (!gridPointUsableForLayer(pt, overlayMode)) continue;
     if (overlayMode === 'wave_swell' && pt.waveHeightM === null) continue;
     const dLat = lat - pt.lat;
     const dLon = (lon - pt.lon) * 0.56; // cos(57 deg) aspect correction
@@ -298,6 +300,7 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
       for (const pt of gridPoints) {
         const risk = pt.lightningRisk || 'LOW';
         if (risk === 'LOW') continue;
+        if (!gridPointUsableForLayer(pt, 'triggered_lightning')) continue;
 
         const screenPt = map.latLngToContainerPoint([pt.lat, pt.lon]);
         if (

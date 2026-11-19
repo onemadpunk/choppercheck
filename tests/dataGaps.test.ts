@@ -165,3 +165,14 @@ test('map spot readout ignores points with gaps and shows no waves over land', (
   assert.equal(land.windSpeed10mKts, 10);
   assert.equal(interpolateSpotWeatherAtLatLon(56, -4, [{ ...base, missingData: ['wind'] }], preset), null);
 });
+
+test('a gap in one value only hides the map layers that use it', async () => {
+  const { gridPointUsableForLayer } = await import('../src/services/multiModelWeatherService.ts');
+  const lowCloudGap = { missingData: ['low cloud', 'dew point'] };
+  assert.equal(gridPointUsableForLayer(lowCloudGap, 'triggered_lightning'), true);
+  assert.equal(gridPointUsableForLayer(lowCloudGap, 'wind_surface'), true);
+  assert.equal(gridPointUsableForLayer(lowCloudGap, 'go_nogo_matrix'), false);
+  assert.equal(gridPointUsableForLayer({ missingData: ['temperature'] }, 'triggered_lightning'), false);
+  assert.equal(gridPointUsableForLayer({ missingData: ['wind'] }, 'wind_950hpa'), false);
+  assert.equal(gridPointUsableForLayer({}, 'go_nogo_matrix'), true);
+});
