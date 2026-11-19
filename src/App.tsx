@@ -341,7 +341,22 @@ export default function App() {
         ) || resolveHeliAdminStopCode(rigParam);
       if (!matched) return;
 
+      // A shared rig link becomes this viewer's rig: it opens on that rig next time and is starred
       setActiveFacilityId(matched.id);
+      try {
+        localStorage.setItem('choppercheck_home_rig_id', matched.id);
+      } catch {
+        // ignore storage errors
+      }
+      setFavoriteFacilityIds((prev) => {
+        const next = prev.includes(matched.id) ? prev : [matched.id, ...prev];
+        try {
+          localStorage.setItem('choppercheck_favorite_rigs', JSON.stringify(next));
+        } catch {
+          // ignore storage errors
+        }
+        return next;
+      });
       setActiveSector(matched.sector);
       setQueryCenter({ lat: matched.lat, lon: matched.lon });
       setMapViewTarget((prev) => ({
@@ -1204,7 +1219,8 @@ export default function App() {
             </span>
           </button>
 
-          {/* 360° Overhead Sky Compass Button (Desktop — mobile uses bottom Compass tab) */}
+          {/* 360° Overhead Sky Compass Button (Desktop — mobile uses bottom Compass tab). Pro view only. */}
+          {viewMode !== 'simple' && (
           <button
             onClick={() => setShowSkyCompassModal(true)}
             title="Open 360° Overhead Sky Compass (Spot Helicopters & Planes From Your Rig or Home)"
@@ -1213,6 +1229,7 @@ export default function App() {
             <Compass className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
             <span className="whitespace-nowrap">Sky Compass</span>
           </button>
+          )}
 
           {/* GPS Home / Spotter Button */}
           <button
@@ -1327,6 +1344,8 @@ export default function App() {
       <div className="bg-slate-900/95 border-b border-slate-800 px-2.5 sm:px-3 py-1.5 flex items-center justify-between gap-2 overflow-x-auto no-scrollbar shrink-0 z-20">
         {/* Left: Starred Favourite Rigs 1-Tap Bar + Single-Rig Focus Toggle */}
         <div className="flex items-center gap-1.5 shrink-0">
+          {viewMode !== 'simple' && (
+          <>
           <button
             onClick={handleToggleSingleRigFocus}
             title="Hide all other rigs on the map and focus exclusively on your active rig"
@@ -1344,6 +1363,8 @@ export default function App() {
           </button>
 
           <span className="text-slate-700">|</span>
+          </>
+          )}
 
           <div className="flex items-center gap-1 shrink-0">
             <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400 shrink-0" />
@@ -1678,7 +1699,7 @@ export default function App() {
       {/* =====================================================================
           MOBILE FIXED BOTTOM TAB BAR (44x44px Thumb Targets, <= 15% Sticky Cap)
          ===================================================================== */}
-      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-[600] h-14 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 grid grid-cols-5 items-center">
+      <nav className={`lg:hidden fixed bottom-0 left-0 right-0 z-[600] h-14 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 grid ${viewMode === 'simple' ? 'grid-cols-4' : 'grid-cols-5'} items-center`}>
         <button
           onClick={() => setActiveTab('radar')}
           className={`min-h-[44px] flex flex-col items-center justify-center cursor-pointer relative ${
@@ -1713,6 +1734,7 @@ export default function App() {
           </div>
           <span className="text-[10px] font-medium mt-0.5 whitespace-nowrap">Flights</span>
         </button>
+        {viewMode !== 'simple' && (
         <button
           onClick={() => setShowSkyCompassModal(true)}
           className="min-h-[44px] flex flex-col items-center justify-center text-emerald-400 cursor-pointer"
@@ -1720,6 +1742,7 @@ export default function App() {
           <Compass className="w-4 h-4" />
           <span className="text-[10px] font-medium mt-0.5 whitespace-nowrap">Compass</span>
         </button>
+        )}
         <button
           onClick={() => {
             setActiveTab('directory');

@@ -176,3 +176,37 @@ test('a gap in one value only hides the map layers that use it', async () => {
   assert.equal(gridPointUsableForLayer({ missingData: ['wind'] }, 'wind_950hpa'), false);
   assert.equal(gridPointUsableForLayer({}, 'go_nogo_matrix'), true);
 });
+
+test('simple view gives a plain answer and plain words', async () => {
+  const { plainDayAnswer, plainCauseForHour, buildContextAwareSevenDaySummaries } = await import(
+    '../src/utils/solarAndMetUtils.ts'
+  );
+  const { ukLocalTime, windWords, seaWords } = await import('../src/utils/plainWords.ts');
+  assert.deepEqual(plainDayAnswer({ overallStatus: 'GO', plainCause: 'strong wind' }), {
+    headline: 'Likely to fly',
+    cause: null,
+  });
+  assert.equal(plainDayAnswer({ overallStatus: 'HOLD', plainCause: 'low cloud or fog' }).cause, 'low cloud or fog');
+  const limits = evaluateHourWithLimits(snap(), 1.5, 7, false, false, preset, '24h_ops').limits;
+  assert.equal(plainCauseForHour(snap(), 1.5, 'NO-GO (DAY ARA Minima): Ceiling 100 ft', limits), 'low cloud or fog');
+  assert.equal(plainCauseForHour(snap({ windGust10mKts: 50 }), 1.5, 'CAUTION (DAY): Gusts 50 kt', limits), 'strong wind');
+  assert.equal(plainCauseForHour(snap(), null, 'NO DATA: the forecast has no wind', limits), 'forecast incomplete');
+
+  // Day summary names the cause in plain words
+  const windy = snap({ windSpeed10mKts: 55, windGust10mKts: 70 });
+  const hours = [9, 10, 11, 12].map((hr, i) => ({
+    ...hour({ ukmo_seamless: windy }),
+    hourIndex: i,
+    hourIso: `2026-11-19T${hr}:00`,
+    hourLabel: `${String(hr).padStart(2, '0')}:00`,
+  }));
+  const [day] = buildContextAwareSevenDaySummaries(hours, 'ukmo_seamless', preset, false, '24h_ops');
+  assert.equal(day.overallStatus, 'HOLD');
+  assert.equal(day.plainCause, 'strong wind');
+  assert.equal(day.coversDaytime, true);
+
+  assert.equal(ukLocalTime('2026-11-19T12:00'), '12:00');
+  assert.equal(ukLocalTime('2026-07-01T12:00'), '13:00');
+  assert.equal(windWords(10), 'Light wind');
+  assert.equal(seaWords(null, true), 'Not at sea');
+});

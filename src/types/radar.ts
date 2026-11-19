@@ -308,6 +308,10 @@ export interface DayFlightWindowSummary {
   lightningHoursCount?: number;
   hasLightningRisk?: boolean;
   consensusBadge?: string;
+  /** Plain words for what drives a CAUTION or HOLD day, e.g. "strong wind" (simple view). */
+  plainCause?: string;
+  /** False when no daytime hours were left to judge (e.g. "today" late in the evening). */
+  coversDaytime?: boolean;
   primaryRiskReason: string;
 }
 

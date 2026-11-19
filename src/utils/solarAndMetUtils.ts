@@ -808,6 +808,62 @@ export function computeFiveModelConsensus(
 }
 
 /**
+ * Turns the reason behind a CAUTION or HOLD hour into a few plain words that anyone can read,
+ * such as "strong wind" or "low cloud or fog". No numbers and no aviation terms.
+ */
+export function plainCauseForHour(
+  snap: { windGust10mKts: number; deckWindGustKts?: number; cloudCeilingFt: number; visibilityKm: number },
+  waveHeightM: number | null,
+  reason: string,
+  limits: EffectiveOperatingLimits
+): string {
+  const r = reason.toUpperCase();
+  if (r.startsWith('NO DATA')) return 'forecast incomplete';
+  if (r.startsWith('NIGHT HOLD')) return 'after dark';
+  if (r.includes('THUNDERSTORM') || r.includes('LIGHTNING')) return 'lightning risk';
+  if (r.includes('SQUALL')) return 'heavy showers';
+  if (r.includes('ICING')) return 'icing risk';
+  if (r.includes('DECK MOTION') || r.includes('MOTION CAUTION') || r.includes('SWELL')) return 'deck movement';
+  if (r.includes('SEA STATE')) return 'rough seas';
+  if (r.includes('ARA MINIMA') || r.includes('HAAR') || r.includes('FOG')) return 'low cloud or fog';
+  if (r.includes('SHEAR') || r.includes('WIND')) return 'strong wind';
+  // Generic caution: work out which value is closest to its limit
+  const gust = snap.deckWindGustKts ?? snap.windGust10mKts;
+  if (gust >= limits.cautionGustKts) return 'strong wind';
+  if (snap.cloudCeilingFt < limits.minCloudCeilingFt + 350 || snap.visibilityKm < limits.minVisibilityKm + 2) {
+    return 'low cloud or fog';
+  }
+  if (waveHeightM !== null && waveHeightM >= limits.maxFpsoWaveHeightM - 1.2) return 'rough seas';
+  return 'changeable weather';
+}
+
+function topCause(causes: Map<string, number>): string | undefined {
+  let best: string | undefined;
+  let bestN = 0;
+  for (const [cause, n] of causes) {
+    if (n > bestN) {
+      best = cause;
+      bestN = n;
+    }
+  }
+  return best;
+}
+
+/** The plain-English answer for one day, for the simple view. */
+export function plainDayAnswer(day: Pick<DayFlightWindowSummary, 'overallStatus' | 'plainCause'>): {
+  headline: string;
+  cause: string | null;
+} {
+  const headline =
+    day.overallStatus === 'GO'
+      ? 'Likely to fly'
+      : day.overallStatus === 'CAUTION'
+      ? 'Some delays possible'
+      : 'Delays or cancellations likely';
+  return { headline, cause: day.overallStatus === 'GO' ? null : day.plainCause ?? null };
+}
+
+/**
  * Re-computes 7-day daily summaries using dynamic Day/Night limits, FlightOpsMode, and CustomRigOverride.
  */
 export function buildContextAwareSevenDaySummaries(
@@ -816,7 +872,8 @@ export function buildContextAwareSevenDaySummaries(
   basePreset: AirframeLimitPreset,
   isFpso: boolean,
   flightOpsMode: FlightOpsMode,
-  customOverride?: CustomRigOverride | null
+  customOverride?: CustomRigOverride | null,
+  isSemiSub = false
 ): DayFlightWindowSummary[] {
   const byDay = new Map<string, MultiModelHourEntry[]>();
   for (const h of hours) {
@@ -854,6 +911,8 @@ export function buildContextAwareSevenDaySummaries(
     let holdCount = 0;
     let lightningCount = 0;
     let worstReason = '';
+    const holdCauses = new Map<string, number>();
+    const cautionCauses = new Map<string, number>();
 
     for (const h of evalSet) {
       const snap = h.models[modelId];
@@ -861,16 +920,21 @@ export function buildContextAwareSevenDaySummaries(
       if (snap.lightningRisk === 'MODERATE' || snap.lightningRisk === 'HIGH') {
         lightningCount++;
       }
-      const ev = evaluateHourWithLimits(
+      const ev = evaluateFacilityHour({
         snap,
-        h.waveHeightM,
-        h.swellPeriodSec,
-        Boolean(h.isNight),
+        hour: h,
+        isNight: Boolean(h.isNight),
         isFpso,
-        basePreset,
+        isSemiSub,
+        preset: basePreset,
         flightOpsMode,
-        customOverride
-      );
+        customOverride,
+      });
+      if (ev.status !== 'GO') {
+        const cause = plainCauseForHour(snap, h.waveHeightM, ev.reason, ev.limits);
+        const bucket = ev.status === 'HOLD' ? holdCauses : cautionCauses;
+        bucket.set(cause, (bucket.get(cause) || 0) + 1);
+      }
 
       const gustReading = snap.deckWindGustKts ?? snap.windGust10mKts;
       if (gustReading > maxGustKts) maxGustKts = gustReading;
@@ -933,6 +997,8 @@ export function buildContextAwareSevenDaySummaries(
       lightningHoursCount: lightningCount,
       hasLightningRisk: lightningCount > 0,
       consensusBadge,
+      plainCause: topCause(holdCauses.size > 0 ? holdCauses : cautionCauses),
+      coversDaytime: daytimeWindow.length > 0 || daylightHours.length > 0,
       primaryRiskReason:
         worstReason ||
         `All ${evalSet.length} flight hours within limits (Max Gust ${maxGustKts} kt, Max Wave ${maxWaveM}m)`,
