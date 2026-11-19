@@ -1,11 +1,25 @@
 import { AircraftTarget, HelideckWeatherState, HelicopterOperator, InstallationOrAirport, TrailPoint } from '../types/radar';
 import { calculateBearingDeg, calculateDistanceNm, decodeAircraftType } from '../data/aircraftDecoder';
 import { regionsForView, ViewBounds } from '../utils/trackingRegions';
+import { INSTALLATIONS_AND_AIRPORTS } from '../data/installationsAndAirports';
+import { RecentTurnback, TurnbackTracker } from '../utils/turnbackDetection';
 
 export const FLIGHT_API_ORIGIN = import.meta.env?.DEV ? '/live-api' : 'https://choppercheck-flight-api.ornatehinny4.chatgpt.site';
 export const MAX_POSITION_AGE_MS = 45_000;
 export const MAX_PREDICTION_MS = 10_000;
 const history = new Map<string, TrailPoint[]>();
+export const turnbackTracker = new TurnbackTracker(INSTALLATIONS_AND_AIRPORTS);
+export const getRecentTurnbacks = (now = Date.now()): RecentTurnback[] => turnbackTracker.recentTurnbacks(now);
+
+/** Runs each fresh observed position through the return-to-base detector and attaches any turnback. */
+export function annotateTurnbacks(flights: AircraftTarget[]): AircraftTarget[] {
+  return flights.map(f => {
+    if (f.observedAt === undefined || !f.altitudeReported) return f;
+    const turnback = turnbackTracker.update({ hex: f.hex, callsign: f.callsign, typeCode: f.typeCode, category: f.category,
+      lat: f.reportedLat ?? f.lat, lon: f.reportedLon ?? f.lon, altFt: f.altitudeFt, speedKts: f.groundSpeedKts, timestamp: f.observedAt });
+    return turnback ? { ...f, turnback } : f;
+  });
+}
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 export interface RawAdsbAircraft {
   hex?: string; type?: string; flight?: string; r?: string; t?: string; desc?: string;
@@ -154,7 +168,7 @@ export async function fetchHybridRadarTraffic(lat: number, lon: number, facility
       } catch { invalidFeed = true; }
     }
     if (!validFeeds) throw new Error('No fresh regional positions');
-    const flights = [...unique.values()];
+    const flights = annotateTurnbacks([...unique.values()]);
     const retries = responses.map((data: any) => data.retryAfterMs).filter(finite);
     return { flights, liveCount: flights.length, feedAvailable: responses.some((data: any) => data.feedAvailable !== false),
       provider: [...new Set(responses.map((data: any) => data.source).filter(Boolean))].join(' + ') || undefined,

@@ -16,6 +16,7 @@ import {
   WeatherOverlayMode,
 } from '../types/radar';
 import { FIELD_OPERATOR_COLORS } from '../data/installationsAndAirports';
+import { describeTurnback } from '../utils/turnbackDetection';
 import {
   AIRFRAME_PRESETS,
   RainViewerRadarFrame,
@@ -139,6 +140,7 @@ function createAircraftIconHtml(
     isSelected ||
     isPinned ||
     isSar ||
+    !!flight.turnback ||
     (isHeli && currentZoom >= 7) ||
     (showAllLabels && currentZoom >= 8);
 
@@ -156,8 +158,16 @@ function createAircraftIconHtml(
       </div>`
     : '';
 
+  // Return-to-base badge: always shown, at every zoom, so a turnback stands out on the map.
+  const rtbHtml = flight.turnback
+    ? `<div style="margin-bottom:1px;padding:1px 5px;border-radius:3px;font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:800;line-height:1.25;white-space:nowrap;letter-spacing:0.04em;background:#dc2626;color:#fff;border:1px solid #fecaca;box-shadow:0 0 6px rgba(220,38,38,0.8);">
+        RTB${flight.turnback.status === 'landed' ? ' · BACK' : ' → ' + escapeHtml(flight.turnback.baseCode)}
+      </div>`
+    : '';
+
   return `
     <div style="display:flex;flex-direction:column;align-items:center;transform:translate(-50%,-50%);cursor:pointer;">
+      ${rtbHtml}
       ${flight.trackReported === false ? `<svg width="22" height="22"><circle cx="11" cy="11" r="6" fill="${color}" /></svg>` : svg}
       ${labelHtml}
     </div>
@@ -648,7 +658,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
           ),
           iconSize: [0, 0],
         }),
-        zIndexOffset: isSelected ? 1000 : isPinned ? 900 : 400,
+        zIndexOffset: isSelected ? 1000 : isPinned ? 900 : flight.turnback ? 800 : 400,
       });
 
       marker.bindTooltip(
@@ -659,7 +669,8 @@ export const RadarMap: React.FC<RadarMapProps> = ({
             ' · ' +
             reported(flight.altitudeReported, flight.altitudeFt, ' ft') +
             ' · ' +
-            positionLabel(flight)
+            positionLabel(flight) +
+            (flight.turnback ? ' · ' + describeTurnback(flight.turnback) : '')
         ),
         {
           direction: 'top',

@@ -8,7 +8,11 @@ import {
 } from '../types/radar';
 import { reported, positionLabel } from '../utils/dataQuality';
 import { OperatorStatusLinks } from './OperatorStatusLinks';
-import { ArrowRight, Pin, Search, ShieldAlert } from 'lucide-react';
+import { ArrowRight, Pin, Search, ShieldAlert, Undo2 } from 'lucide-react';
+import { getRecentTurnbacks } from '../services/radarService';
+import { describeTurnback } from '../utils/turnbackDetection';
+
+const hhmm = (t: number) => new Date(t).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 
 interface CrewAndFlightBoardProps {
   flights: AircraftTarget[];
@@ -63,6 +67,9 @@ export const CrewAndFlightBoard: React.FC<CrewAndFlightBoardProps> = ({
       return true;
     });
   }, [flights, categoryFilter, heliOpFilter, searchQuery, activeFacility]);
+
+  // Re-read whenever the flight list refreshes.
+  const recentTurnbacks = useMemo(() => getRecentTurnbacks(), [flights]);
 
   const heliOperators: Array<'all' | HelicopterOperator> = [
     'all',
@@ -133,6 +140,34 @@ export const CrewAndFlightBoard: React.FC<CrewAndFlightBoardProps> = ({
         </div>
       </div>
 
+      {/* Recent air-turnbacks (return to base), kept after the aircraft lands and drops off the feed */}
+      {recentTurnbacks.length > 0 && (
+        <div className="p-3 border-b border-red-900/60 bg-red-950/30 space-y-1.5">
+          <p className="text-xs font-semibold text-red-300 flex items-center gap-1.5">
+            <Undo2 className="w-3.5 h-3.5" /> Turned back to base · last 3 hours
+          </p>
+          {recentTurnbacks.map((t) => {
+            const live = flights.find((f) => f.hex === t.hex);
+            return (
+              <button
+                key={t.hex}
+                onClick={() => live && onSelectFlight(live)}
+                disabled={!live}
+                className="w-full text-left min-h-[36px] px-2 py-1.5 rounded-md bg-slate-950/70 border border-red-900/50 text-[11px] text-slate-300 enabled:hover:border-red-500 enabled:cursor-pointer"
+              >
+                <span className="font-mono font-bold text-white">{t.callsign}</span>
+                <span className="text-slate-500"> · {t.typeCode} · </span>
+                {describeTurnback(t)}
+                <span className="text-slate-500"> · {t.status === 'landed' && t.backAt ? 'back ' + hhmm(t.backAt) : 'turned ' + hhmm(t.turnedAt)}</span>
+              </button>
+            );
+          })}
+          <p className="text-[10px] text-slate-500">
+            Spotted from the live track while this page is open. The reason isn't published: it could be a technical fault, weather or a planned check flight.
+          </p>
+        </div>
+      )}
+
       {/* Flight Board List */}
       <div className="flex-1 overflow-y-auto divide-y divide-slate-800/80">
         {filteredFlights.length === 0 ? (
@@ -176,6 +211,14 @@ export const CrewAndFlightBoard: React.FC<CrewAndFlightBoardProps> = ({
                     <span className="font-mono font-bold text-white whitespace-nowrap">
                       {flight.callsign}
                     </span>
+                    {flight.turnback && (
+                      <span
+                        title={describeTurnback(flight.turnback)}
+                        className="px-1.5 py-0.5 rounded bg-red-600 text-white text-[10px] font-bold tracking-wide whitespace-nowrap"
+                      >
+                        RTB
+                      </span>
+                    )}
                     <span aria-hidden="true" className="text-slate-600">·</span>
                     <span className="text-cyan-400 font-medium truncate">
                       {flight.typeFullName}
@@ -187,7 +230,11 @@ export const CrewAndFlightBoard: React.FC<CrewAndFlightBoardProps> = ({
                   </div>
 
                   <div className="text-xs text-slate-400 mt-1">{flight.operator}</div>
-                  <div className="text-[11px] text-slate-400 mt-1">Route & times not reported · {positionLabel(flight)}</div>
+                  {flight.turnback ? (
+                    <div className="text-[11px] text-red-300 mt-1">{describeTurnback(flight.turnback)} · {positionLabel(flight)}</div>
+                  ) : (
+                    <div className="text-[11px] text-slate-400 mt-1">Route & times not reported · {positionLabel(flight)}</div>
+                  )}
                 </div>
 
                 {/* Right Column: Live Speed/Alt & Pin Button */}

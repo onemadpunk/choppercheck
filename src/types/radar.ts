@@ -90,6 +90,16 @@ export interface TrailPoint {
   timestamp: number;
 }
 
+export interface TurnbackInfo {
+  status: 'returning' | 'landed'; // heading back to base, or seen back at base
+  baseCode: string;
+  baseName: string;
+  maxDistanceNm: number; // furthest distance from base before turning
+  turnedAt: number; // time at the furthest point
+  detectedAt: number;
+  backAt?: number;
+}
+
 export interface AircraftTarget {
   observedAt?: number;
   provider?: string;
@@ -132,6 +142,7 @@ export interface AircraftTarget {
   etaToRefMinutes: number | null;
   source: 'live_adsb' | 'dead_reckoning';
   trail: TrailPoint[];
+  turnback?: TurnbackInfo; // air-turnback / return-to-base seen in the live track
 }
 
 export interface HelideckWeatherState {
@@ -390,6 +401,6 @@ export interface FlightAlertEvent {
   timestamp: string;
   callsign: string;
   typeFullName: string;
-  triggerType: 'AIRBORNE_LIFTOFF' | 'RING_25NM' | 'RING_10NM' | 'SAR_OR_7700';
+  triggerType: 'AIRBORNE_LIFTOFF' | 'RING_25NM' | 'RING_10NM' | 'SAR_OR_7700' | 'TURNBACK';
   message: string;
 }
