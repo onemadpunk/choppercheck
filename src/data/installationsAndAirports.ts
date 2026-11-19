@@ -8,6 +8,8 @@ export const FIELD_OPERATOR_COLORS: Record<FieldOperator, string> = {
   'Harbour Energy': '#38bdf8',  // Sky Blue
   'TotalEnergies': '#ef4444',   // Coral Red
   'Ithaca Energy': '#a855f7',   // Violet
+  'Dana Petroleum': '#8b5cf6',  // Purple
+  'Hibiscus Petroleum': '#fb7185', // Rose
   'EnQuest': '#14b8a6',         // Teal
   'CNOOC': '#6366f1',           // Indigo
   'Spirit Energy': '#06b6d4',   // Teal-Cyan
@@ -604,7 +606,7 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
     heliAdminAliases: ['TRI', 'TRIT'],
     name: 'Triton FPSO (Bittern / Guillemot / Evelyn)',
     shortName: 'Triton FPSO (TRI)',
-    fieldOperator: 'Ithaca Energy',
+    fieldOperator: 'Dana Petroleum',
     assetType: 'FPSO',
     sector: 'uk_north_sea',
     lat: 57.0158,
@@ -623,7 +625,7 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
     heliAdminAliases: ['ANA', 'ANAS'],
     name: 'Anasuria FPSO (Teal / Guillemot A / Cook)',
     shortName: 'Anasuria FPSO (ANA)',
-    fieldOperator: 'Shell',
+    fieldOperator: 'Hibiscus Petroleum',
     assetType: 'FPSO',
     sector: 'uk_north_sea',
     lat: 57.2581,
@@ -654,25 +656,6 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
     helicopterOperators: ['Bristow', 'CHC'],
     regionLabel: 'Central North Sea · Block 23/22a (Pierce Field)',
     notes: 'Shell Pierce field FPSO in the Central North Sea.'
-  },
-  {
-    id: 'uk-gryphon-fpso',
-    code: 'GRY',
-    heliAdminAliases: ['GRY', 'GRYP'],
-    name: 'Gryphon Alpha FPSO',
-    shortName: 'Gryphon Alpha FPSO',
-    fieldOperator: 'TotalEnergies',
-    assetType: 'FPSO',
-    sector: 'uk_north_sea',
-    lat: 59.3608,
-    lon: 1.5694,
-    elevationFt: 110,
-    helideckDValueM: 22.8,
-    maxHeliType: 'Sikorsky S-92A / Airbus H175',
-    primaryShoreBase: 'EGPD',
-    helicopterOperators: ['NHV', 'Bristow', 'OHS'],
-    regionLabel: 'Northern North Sea · Block 9/18b (South of Beryl)',
-    notes: 'Turret-moored FPSO in Quad 9 just south of Apache Beryl Alpha.'
   },
 
   // =========================================================================
@@ -1193,7 +1176,7 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
   {
     id: 'apt-egsm',
     code: 'EGSM',
-    name: 'Beccles Offshore Heliport (East Anglia)',
+    name: 'Beccles Airfield (East Anglia)',
     shortName: 'Beccles (EGSM)',
     fieldOperator: 'UK Airport / Heliport',
     assetType: 'Shore Heliport',

@@ -13,12 +13,14 @@ import {
   evaluateHourWithLimits,
   isCaaNightForHour,
   parseSeaStateFromMetar,
+  parseMetarCloudBase,
 } from '../src/utils/solarAndMetUtils.ts';
 import {
   AIRFRAME_PRESETS,
   classifyNorthSeaConvection,
   computeMinus10IsothermFt,
   evaluateCorridorLightningBypass,
+  buildCorridorTrackGeometry,
   WEATHER_MODELS_META,
 } from '../src/services/multiModelWeatherService.ts';
 import { resolveHeliAdminStopCode } from '../src/data/installationsAndAirports.ts';
@@ -380,51 +382,72 @@ test('Blackpool EGNH, Irish Sea, Southern North Sea & UK SAR bases resolve and c
   assert.equal(clearBypass.directRisk, 'LOW');
   assert.equal(clearBypass.recommendedRoute, 'DIRECT');
 
-  // Case 2: High triggered-lightning cell directly on the EGPB -> GL midpoint, but clear 18 NM North
+  // Case 2: coarse grid only shows risk on the track -> no detour advice
   const cellOnTrackGrid = [
-    {
-      ...baseGridPt,
-      lat: sumburgh.lat,
-      lon: sumburgh.lon,
-      lightningRisk: 'LOW' as const,
-    },
-    {
-      ...baseGridPt,
-      lat: glenLyon.lat,
-      lon: glenLyon.lon,
-      lightningRisk: 'LOW' as const,
-    },
-    {
-      ...baseGridPt,
-      lat: midLat,
-      lon: midLon,
-      lightningRisk: 'HIGH' as const,
-      lightningType: 'TRIGGERED_WINTER' as const,
-      precipMmHr: 2.4,
-      capeJkg: 260,
-    },
-    {
-      ...baseGridPt,
-      lat: midLat + 0.3,
-      lon: midLon + 0.1,
-      lightningRisk: 'LOW' as const,
-    },
-    {
-      ...baseGridPt,
-      lat: midLat - 0.3,
-      lon: midLon - 0.1,
-      lightningRisk: 'MODERATE' as const,
-    },
+    { ...baseGridPt, lat: midLat, lon: midLon, lightningRisk: 'HIGH' as const },
   ];
-  const dogLegBypass = evaluateCorridorLightningBypass(
-    sumburgh,
-    glenLyon,
-    cellOnTrackGrid,
-    AIRFRAME_PRESETS.S92
-  );
-  assert.equal(dogLegBypass.directRisk, 'HIGH');
-  assert.equal(dogLegBypass.northBypassRisk, 'LOW');
-  assert.equal(dogLegBypass.recommendedRoute, 'BYPASS_NORTH');
-  assert.ok(dogLegBypass.summaryText.includes('NORTH'));
+  const coarse = evaluateCorridorLightningBypass(sumburgh, glenLyon, cellOnTrackGrid, AIRFRAME_PRESETS.S92);
+  assert.equal(coarse.dataSource, 'coarse_grid');
+  assert.equal(coarse.directRisk, 'HIGH');
+  assert.equal(coarse.leftBypassRisk, null);
+  assert.equal(coarse.recommendedRoute, 'NO_CLEAR_TRACK');
+  assert.ok(!/detour to the/.test(coarse.summaryText));
+
+  // Case 3: route samples: direct track HIGH, left detour clear -> recommend left, named by compass
+  const geo = buildCorridorTrackGeometry(sumburgh, glenLyon);
+  const mk = (pts: Array<{ lat: number; lon: number }>, risk: 'LOW' | 'MODERATE' | 'HIGH') =>
+    pts.map((p) => ({ ...baseGridPt, ...p, lightningRisk: risk }));
+  const routeSamples = [
+    ...mk(geo.direct, 'HIGH'),
+    ...mk(geo.left, 'LOW'),
+    ...mk(geo.right, 'MODERATE'),
+  ];
+  const dogLeg = evaluateCorridorLightningBypass(sumburgh, glenLyon, [], AIRFRAME_PRESETS.S92, routeSamples);
+  assert.equal(dogLeg.dataSource, 'route_samples');
+  assert.equal(dogLeg.recommendedRoute, 'BYPASS_LEFT');
+  assert.ok(dogLeg.summaryText.includes(`detour to the ${geo.leftSideLabel}`));
+
+  // Case 4: a detour that is only MODERATE is never called clear
+  const notClear = evaluateCorridorLightningBypass(sumburgh, glenLyon, [], AIRFRAME_PRESETS.S92, [
+    ...mk(geo.direct, 'HIGH'),
+    ...mk(geo.left, 'MODERATE'),
+    ...mk(geo.right, 'MODERATE'),
+  ]);
+  assert.equal(notClear.recommendedRoute, 'NO_CLEAR_TRACK');
 });
 
+test('corridor detours are named by real compass direction', () => {
+  // Route due north: detours must be west (left) and east (right), not north/south
+  const ns = buildCorridorTrackGeometry({ lat: 57, lon: -2 }, { lat: 59, lon: -2 });
+  assert.equal(ns.leftSideLabel, 'west');
+  assert.equal(ns.rightSideLabel, 'east');
+  assert.ok(ns.leftMidpoint.lon < -2 && ns.rightMidpoint.lon > -2);
+  // Route due east: left is north
+  const ew = buildCorridorTrackGeometry({ lat: 57, lon: -2 }, { lat: 57, lon: 1 });
+  assert.equal(ew.leftSideLabel, 'north');
+  assert.ok(ew.leftMidpoint.lat > 57);
+  // Offset is ~18 NM
+  const offNm = Math.hypot(ns.leftMidpoint.lat - 58, (ns.leftMidpoint.lon + 2) * Math.cos((58 * Math.PI) / 180)) * 60;
+  assert.ok(Math.abs(offNm - 18) < 0.5, `offset ${offNm}`);
+});
+
+
+test('parseMetarCloudBase reads the reported ceiling', () => {
+  const bkn = parseMetarCloudBase('EGPD 191050Z 24015KT 9999 FEW006 BKN012 OVC030 08/06 Q1002');
+  assert.equal(bkn?.ceilingFt, 1200);
+  assert.equal(bkn?.lowestLayerFt, 600);
+  assert.equal(bkn?.ceilingGroup, 'BKN012');
+  const fog = parseMetarCloudBase('EGPB 191050Z 18005KT 0300 FG VV001 09/09 Q1010');
+  assert.equal(fog?.ceilingFt, 100);
+  const cavok = parseMetarCloudBase('EGPD 191050Z 24010KT CAVOK 10/02 Q1020');
+  assert.equal(cavok?.ceilingFt, null);
+  assert.equal(cavok?.noCeiling, true);
+  const sct = parseMetarCloudBase('EGPD 191050Z 24010KT 9999 SCT015CB 10/02 Q1020');
+  assert.equal(sct?.ceilingFt, null);
+  assert.equal(sct?.lowestLayerFt, 1500);
+  // Trend groups are forecasts, not observations
+  const trend = parseMetarCloudBase('EGPD 191050Z 24010KT 9999 SCT030 10/02 Q1020 TEMPO BKN008');
+  assert.equal(trend?.ceilingFt, null);
+  assert.equal(parseMetarCloudBase(undefined), null);
+  assert.equal(parseMetarCloudBase('EGPD 191050Z 24010KT 9999 10/02 Q1020'), null);
+});

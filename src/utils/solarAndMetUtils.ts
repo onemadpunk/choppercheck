@@ -348,13 +348,14 @@ export interface EstimatedFpsoDeckMotion {
 }
 
 /**
- * Computes a wave-derived hydrodynamic RAO (Response Amplitude Operator) estimate of
- * Category 1 Turret-Moored FPSO / Semi-Sub Helideck Motion (Pitch/Roll ±°, Inclination INC °,
- * and Significant Heave Rate SHR m/s) from real Open-Meteo / Copernicus Marine wave height (Hs),
- * swell height, peak swell period (Tp), and wave/swell encounter angle.
+ * Rough rule-of-thumb estimate of floating helideck motion (pitch/roll ±°, inclination °, and
+ * significant heave rate m/s) from forecast wave height (Hs), swell height, swell period and the
+ * swell's angle to the vessel heading.
  *
- * This provides a free, physics-based alternative when the user does not have a HeliMet.com login
- * to the vessel's internal MRU gyroscope.
+ * The multipliers are generic tuning factors, not a real response model for any vessel: actual
+ * motion depends on each hull, its loading and mooring, and is measured by the vessel's own
+ * helideck monitoring system (HMS). Semi-subs use the same factors, which will over- or
+ * under-state their motion. Treat the result as a hint only.
  */
 export function computeEstimatedFpsoDeckMotion(params: {
   waveHeightM: number;
@@ -426,10 +427,10 @@ export function computeEstimatedFpsoDeckMotion(params: {
 
   const summaryLabel =
     deckLightStatus === 'RED'
-      ? 'EST. RED DECK (Wave/Swell RAO Exceeds Limit)'
+      ? 'ESTIMATE: deck motion may exceed limits'
       : deckLightStatus === 'AMBER'
-      ? 'EST. AMBER DECK (Moderate Wave/Swell Motion)'
-      : 'EST. GREEN DECK (Stable Wave/Swell RAO)';
+      ? 'ESTIMATE: deck motion near limits'
+      : 'ESTIMATE: deck motion within limits';
 
   return {
     estPitchRollDeg,
@@ -621,7 +622,8 @@ export function computeFiveModelConsensus(
   isFpso: boolean,
   basePreset: AirframeLimitPreset,
   flightOpsMode: FlightOpsMode,
-  customOverride?: CustomRigOverride | null
+  customOverride?: CustomRigOverride | null,
+  isSemiSub = false
 ): FiveModelConsensusSummary {
   const modelIds = Object.keys(hourEntry.models) as WeatherModelId[];
   let goCount = 0;
@@ -645,7 +647,8 @@ export function computeFiveModelConsensus(
       isFpso,
       basePreset,
       flightOpsMode,
-      customOverride
+      customOverride,
+      isSemiSub
     );
     perModel.push({ id: mId, status: ev.status });
     if (ev.status === 'GO') goCount++;
@@ -671,7 +674,7 @@ export function computeFiveModelConsensus(
     consensusStatus === 'HOLD'
       ? holdCount
       : consensusStatus === 'CAUTION'
-      ? Math.max(cautionCount, totalModels - goCount)
+      ? cautionCount
       : goCount;
 
   const isSplit = goCount > 0 && (holdCount > 0 || cautionCount > 0);
@@ -1126,3 +1129,44 @@ export function parseSeaStateFromMetar(rawOb?: string): {
     seaStateLabel: WMO_SEA_STATE_LABELS[seaStateCode],
   };
 }
+
+export interface MetarCloudBase {
+  /** Lowest BKN/OVC layer or vertical visibility (VV) in ft above the airfield; null when none is reported. */
+  ceilingFt: number | null;
+  /** Lowest reported cloud layer of any amount (FEW/SCT/BKN/OVC) in ft, or null. */
+  lowestLayerFt: number | null;
+  /** The METAR group that sets the ceiling, e.g. "BKN008". */
+  ceilingGroup: string | null;
+  /** True when the report says there is no ceiling (CAVOK, NSC, NCD, SKC, CLR, or only FEW/SCT). */
+  noCeiling: boolean;
+}
+
+/**
+ * Reads the reported cloud base from a raw METAR. A ceiling is the lowest broken (BKN) or
+ * overcast (OVC) layer, or the vertical visibility (VV) in fog. Heights in METARs are in
+ * hundreds of feet above the airfield. Returns null when the METAR is missing or unreadable.
+ */
+export function parseMetarCloudBase(rawOb?: string | null): MetarCloudBase | null {
+  if (!rawOb || typeof rawOb !== 'string') return null;
+  // Ignore trend / remarks so a forecast group like "BECMG BKN005" is not read as observed
+  const body = ` ${rawOb.toUpperCase().split(/\s(?:TEMPO|BECMG|NOSIG|RMK)\b/)[0]} `;
+  const layers = [...body.matchAll(/\s(FEW|SCT|BKN|OVC|VV)(\d{3}|\/\/\/)(?:CB|TCU|\/\/\/)?(?=\s)/g)];
+  const parsed = layers
+    .filter((m) => /\d{3}/.test(m[2]))
+    .map((m) => ({ amount: m[1], heightFt: parseInt(m[2], 10) * 100, group: `${m[1]}${m[2]}` }));
+  const ceilingLayer = parsed
+    .filter((l) => l.amount === 'BKN' || l.amount === 'OVC' || l.amount === 'VV')
+    .sort((a, b) => a.heightFt - b.heightFt)[0];
+  const lowest = [...parsed].sort((a, b) => a.heightFt - b.heightFt)[0];
+  const saysNoCloud = /\s(CAVOK|NSC|NCD|SKC|CLR)\s/.test(body);
+  if (!ceilingLayer && !saysNoCloud && parsed.length === 0) return null;
+  return {
+    ceilingFt: ceilingLayer ? ceilingLayer.heightFt : null,
+    lowestLayerFt: lowest ? lowest.heightFt : null,
+    ceilingGroup: ceilingLayer ? ceilingLayer.group : null,
+    noCeiling: !ceilingLayer,
+  };
+}
+
+/** Value used for "no ceiling reported" when a number is needed for limit checks. */
+export const NO_CEILING_FT = 5000;

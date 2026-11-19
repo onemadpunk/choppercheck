@@ -93,6 +93,10 @@ interface RadarMapProps {
   customOverride?: CustomRigOverride | null;
   viewMode?: 'simple' | 'detailed';
   onChangeViewMode?: (mode: 'simple' | 'detailed') => void;
+  /** Shore base chosen in the weather panel (overrides the rig's default base). */
+  shoreBaseFacility?: InstallationOrAirport;
+  /** Model samples along the direct track and both detours (see fetchCorridorTrackSamples). */
+  corridorRouteSamples?: SpatialWeatherGridPoint[];
 }
 
 type MapStyleMode = 'dark_radar' | 'daylight_osm' | 'satellite' | 'nautical_ocean';
@@ -282,6 +286,8 @@ export const RadarMap: React.FC<RadarMapProps> = ({
   customOverride,
   viewMode = 'simple',
   onChangeViewMode,
+  shoreBaseFacility: shoreBaseFacilityProp,
+  corridorRouteSamples,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -362,12 +368,14 @@ export const RadarMap: React.FC<RadarMapProps> = ({
     [cursorCoords.lat, cursorCoords.lon, spatialGrid, activePreset]
   );
 
+  // Use the shore base chosen in the weather panel when given, else the rig's default base
   const shoreBaseFacility = useMemo(
     () =>
+      shoreBaseFacilityProp ||
       installations.find((x) => x.code === activeFacility.primaryShoreBase) ||
       installations.find((x) => x.code === 'EGPD') ||
       activeFacility,
-    [installations, activeFacility]
+    [shoreBaseFacilityProp, installations, activeFacility]
   );
 
   const corridorBypass = useMemo(
@@ -376,9 +384,10 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         shoreBaseFacility,
         activeFacility,
         spatialGrid,
-        activePreset
+        activePreset,
+        corridorRouteSamples
       ),
-    [shoreBaseFacility, activeFacility, spatialGrid, activePreset]
+    [shoreBaseFacility, activeFacility, spatialGrid, activePreset, corridorRouteSamples]
   );
 
   // Initialize Leaflet Map once with key-free OpenStreetMap / Esri tiles
@@ -774,6 +783,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         preset={activePreset}
         activeFacility={activeFacility}
         shoreBaseFacility={shoreBaseFacility}
+        corridorAssessment={corridorBypass}
       />
 
       {/* Top-left stack: rig card + overlay key flow in one column so they can never overlap.
@@ -933,12 +943,12 @@ export const RadarMap: React.FC<RadarMapProps> = ({
               className="pointer-events-auto min-h-[36px] max-w-full px-2.5 py-1.5 rounded-full bg-slate-950/92 backdrop-blur-md border border-amber-500/50 shadow-xl flex items-center gap-1.5 text-[11px] font-mono cursor-pointer hover:border-amber-400"
             >
               <Zap className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-              <span className="font-semibold text-amber-300 whitespace-nowrap">HTLI key</span>
+              <span className="font-semibold text-amber-300 whitespace-nowrap">Lightning est. key</span>
               <span
                 className={`w-2 h-2 rounded-full shrink-0 ${
                   corridorBypass.directRisk === 'LOW'
                     ? 'bg-emerald-400'
-                    : corridorBypass.recommendedRoute === 'HOLD_WIDESPREAD'
+                    : corridorBypass.directRisk === 'HIGH'
                     ? 'bg-rose-500'
                     : 'bg-amber-400'
                 }`}
@@ -949,7 +959,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
             <div className="pointer-events-auto w-full sm:w-80 max-w-full bg-slate-950/94 backdrop-blur-md border border-amber-500/50 rounded-xl px-2.5 py-2 shadow-xl text-[10px] font-mono space-y-1">
               <div className="flex items-center justify-between gap-2">
                 <span className="font-bold text-amber-300 flex items-center gap-1">
-                  <Zap className="w-3.5 h-3.5" /> TRIGGERED LIGHTNING (HTLI)
+                  <Zap className="w-3.5 h-3.5" /> LIGHTNING RISK (ESTIMATE)
                 </span>
                 <button
                   onClick={() => setLightningKeyCollapsed(true)}
@@ -962,7 +972,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block shrink-0" />
-                <span className="text-emerald-300">Clear fly-around air</span>
+                <span className="text-emerald-300">No shower/lightning signal</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block shrink-0" />
@@ -970,18 +980,23 @@ export const RadarMap: React.FC<RadarMapProps> = ({
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block shrink-0" />
-                <span className="text-rose-300">High cell (avoid / dog-leg)</span>
+                <span className="text-rose-300">High risk area</span>
               </div>
               <div
                 className={`pt-1 border-t border-slate-800 font-semibold ${
                   corridorBypass.directRisk === 'LOW'
                     ? 'text-emerald-300'
-                    : corridorBypass.recommendedRoute === 'HOLD_WIDESPREAD'
+                    : corridorBypass.directRisk === 'HIGH'
                     ? 'text-rose-300'
                     : 'text-amber-300'
                 }`}
               >
                 {corridorBypass.summaryText}
+              </div>
+              <div className="text-slate-400 font-sans leading-snug">
+                ChopperCheck&apos;s own estimate from forecast models (freezing level, showers, instability), not
+                an official triggered-lightning forecast or live lightning data. Check the live rain radar and
+                the operator&apos;s own briefing.
               </div>
             </div>
           ))}
@@ -1245,7 +1260,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
                 : ([
                     { id: 'off', label: 'Off' },
                     { id: 'go_nogo_matrix', label: 'Go/No-Go Matrix' },
-                    { id: 'triggered_lightning', label: '⚡ Triggered Lightning' },
+                    { id: 'triggered_lightning', label: '⚡ Lightning (est.)' },
                     { id: 'wind_surface', label: '10m Wind' },
                     { id: 'wind_950hpa', label: '950hPa (1,800ft)' },
                     { id: 'wind_850hpa', label: '850hPa (5,000ft)' },
