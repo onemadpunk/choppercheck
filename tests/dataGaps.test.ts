@@ -233,3 +233,21 @@ test('sourced icing, visibility and fog rules replace the old rules of thumb', a
   // A long swell alone no longer raises CAUTION; the deck motion estimate handles it
   assert.equal(evaluateHourWithLimits(snap(), 3, 12, false, true, preset, '24h_ops').status, 'GO');
 });
+
+test('no low cloud is shown as such, not as a measured 5,000 ft', async () => {
+  const { formatCeilingFt } = await import('../src/utils/solarAndMetUtils.ts');
+  assert.equal(formatCeilingFt(5000), 'no low cloud (5,000+ ft)');
+  assert.equal(formatCeilingFt(1200), '1,200 ft');
+  assert.equal(formatCeilingFt(null), 'no data');
+  // No wave period: no deck estimate is made from a guessed period
+  const noPeriod = evaluateFacilityHour({
+    snap: snap(),
+    hour: { ...hour({}, 3), swellPeriodSec: null },
+    isNight: false,
+    isFpso: true,
+    isSemiSub: false,
+    preset,
+    flightOpsMode: '24h_ops',
+  });
+  assert.equal(noPeriod.deckMotion, null);
+});
