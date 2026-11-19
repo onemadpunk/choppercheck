@@ -257,6 +257,29 @@ export function evaluateGridPointStatus(
   return base;
 }
 
+/** The forecast values each map layer is drawn from. */
+const LAYER_INPUTS: Record<string, string[] | 'all'> = {
+  triggered_lightning: ['temperature', 'freezing level'],
+  wind_surface: ['wind'],
+  wind_950hpa: ['wind'],
+  wind_850hpa: ['wind'],
+  wave_swell: [],
+  go_nogo_matrix: 'all',
+};
+
+/**
+ * True when a grid point has every value a map layer needs. A point is only left off a layer when
+ * that layer's own inputs are missing: a gap in low cloud must not hide the lightning or wind layer.
+ * Waves are checked separately (no waves over land).
+ */
+export function gridPointUsableForLayer(pt: Pick<SpatialWeatherGridPoint, 'missingData'>, layer: string): boolean {
+  const gaps = pt.missingData ?? [];
+  if (gaps.length === 0) return true;
+  const needs = LAYER_INPUTS[layer] ?? 'all';
+  if (needs === 'all') return false;
+  return !gaps.some((g) => needs.includes(g));
+}
+
 /**
  * Interpolates live or forecast weather at any cursor/tap coordinate on the map (Ventusky-style spot readout).
  */
