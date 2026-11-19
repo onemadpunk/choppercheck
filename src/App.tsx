@@ -625,6 +625,8 @@ export default function App() {
   const selectedHourIso = hourlyForecast[selectedHourIdx]?.hourIso;
 
   const weatherRequestRef = useRef(0);
+  // Rig whose on-screen forecast is fresh (not the saved copy), so refreshes don't flash the saved one
+  const freshForecastFacilityRef = useRef<string | null>(null);
   const loadWeather = useCallback(async () => {
     const requestId = ++weatherRequestRef.current;
     if (activeFacility.id === 'map-reference') {
@@ -647,8 +649,15 @@ export default function App() {
         >;
         const entry = parsed?.[facId];
         if (!entry || !Array.isArray(entry.hours) || entry.hours.length === 0) return null;
-        if (Date.now() - entry.savedAtMs > 6 * 3600 * 1000) return null;
-        return { savedAtIso: entry.savedAtIso, hours: entry.hours };
+        // A saved 7-day forecast stays useful for a couple of days; it is shown with its age
+        if (Date.now() - entry.savedAtMs > 48 * 3600 * 1000) return null;
+        // Drop hours that have already passed so the saved forecast starts at the current hour
+        const nowMs = Date.now();
+        const hours = entry.hours
+          .filter((h) => new Date(h.hourIso + 'Z').getTime() + 3600_000 > nowMs)
+          .map((h, i) => ({ ...h, hourIndex: i }));
+        if (hours.length === 0) return null;
+        return { savedAtIso: entry.savedAtIso, hours };
       } catch {
         return null;
       }
@@ -682,10 +691,20 @@ export default function App() {
       }
     };
 
+    // Show the saved forecast straight away (labelled with its age) while the fresh one loads,
+    // so a slow or retried request on a weak signal never leaves the screen empty
+    const savedNow =
+      freshForecastFacilityRef.current === activeFacility.id ? null : readSavedForecast(activeFacility.id);
+    if (savedNow) {
+      setHourlyForecast(savedNow.hours);
+      setCachedForecastSavedAt(savedNow.savedAtIso);
+    }
+
     fetchMultiModelRigForecast(activeFacility, activePreset)
       .then((hours) => {
         if (requestId !== weatherRequestRef.current) return;
         if (hours.length > 0) {
+          freshForecastFacilityRef.current = activeFacility.id;
           setHourlyForecast(hours);
           setCachedForecastSavedAt(null);
           writeSavedForecast(activeFacility.id, hours);

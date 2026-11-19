@@ -885,6 +885,29 @@ const SHORT_MONTHS = [
  * Fetches a full 7-day (up to 168 hours) multi-model offshore forecast across all 5 meteorological models
  * (UKMO UKV 2km, DWD ICON-EU, ECMWF IFS, NOAA GFS, ECCC GEM) + WaveWatch III / Copernicus Marine.
  */
+/**
+ * Fetches JSON, retrying a failed or timed-out request (weak offshore signal, brief API hiccup)
+ * before giving up. Returns null only when every attempt fails.
+ */
+export async function fetchJsonWithRetry(url: string, tries = 3): Promise<any | null> {
+  for (let attempt = 0; attempt < tries; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      if (res.ok) return await res.json();
+      // 4xx other than rate limiting will not get better on retry
+      if (res.status >= 400 && res.status < 500 && res.status !== 429) return null;
+    } catch {
+      // network error or timeout: retry
+    }
+    if (attempt < tries - 1) await new Promise((r) => setTimeout(r, 700 * (attempt + 1) ** 2));
+  }
+  return null;
+}
+
+/** True when a marine response has at least one real wave height. */
+const hasSeaData = (j: any): boolean =>
+  Array.isArray(j?.hourly?.wave_height) && j.hourly.wave_height.some((v: unknown) => typeof v === 'number');
+
 export async function fetchMultiModelRigForecast(
   facility: InstallationOrAirport,
   preset: AirframeLimitPreset
@@ -939,12 +962,36 @@ export async function fetchMultiModelRigForecast(
   )}&hourly=wave_height,wave_period,wave_direction,swell_wave_height,swell_wave_period,swell_wave_direction,sea_surface_temperature&forecast_days=7`;
 
   try {
-    const [wxRes, marRes] = await Promise.allSettled([fetch(wxUrl), fetch(marineUrl)]);
-    if (wxRes.status !== 'fulfilled' || !wxRes.value.ok) return [];
+    const [wxJson, marFirst] = await Promise.all([
+      fetchJsonWithRetry(wxUrl),
+      isShoreFacility ? Promise.resolve(null) : fetchJsonWithRetry(marineUrl),
+    ]);
+    if (!wxJson) return [];
 
-    const wxJson = await wxRes.value.json();
-    const marJson =
-      marRes.status === 'fulfilled' && marRes.value.ok ? await marRes.value.json() : null;
+    // Rigs close to the coast can fall on a land cell of the wave model. Then use the nearest
+    // sea point (real data, labelled with its distance) rather than leaving waves empty.
+    let marJson = marFirst;
+    let seaDataNote: string | undefined;
+    if (!isShoreFacility && !hasSeaData(marFirst)) {
+      const offsets: Array<[number, number]> = [
+        [0.1, 0], [-0.1, 0], [0, 0.18], [0, -0.18],
+        [0.2, 0], [-0.2, 0], [0, 0.36], [0, -0.36],
+      ];
+      const pts = offsets.map(([dLat, dLon]) => ({ lat: facility.lat + dLat, lon: facility.lon + dLon }));
+      const nearUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${pts
+        .map((p) => p.lat.toFixed(3))
+        .join(',')}&longitude=${pts
+        .map((p) => p.lon.toFixed(3))
+        .join(',')}&hourly=wave_height,wave_period,wave_direction,swell_wave_height,swell_wave_period,swell_wave_direction,sea_surface_temperature&forecast_days=7`;
+      const near = await fetchJsonWithRetry(nearUrl, 2);
+      const list = Array.isArray(near) ? near : near ? [near] : [];
+      const idx = list.findIndex((j: any) => hasSeaData(j));
+      if (idx >= 0) {
+        marJson = list[idx];
+        const nm = Math.round(calculateDistanceNm(facility.lat, facility.lon, pts[idx].lat, pts[idx].lon));
+        seaDataNote = `Sea data from the nearest sea point, ${nm} NM away`;
+      }
+    }
 
     const hourly = wxJson?.hourly || {};
     const marHourly = marJson?.hourly || {};
@@ -1020,24 +1067,40 @@ export async function fetchMultiModelRigForecast(
 
       for (const mMeta of WEATHER_MODELS_META) {
         const m = mMeta.id;
-        const rawVal = (field: string): number | null => {
-          const val = hourly[`${field}_${m}`]?.[idx];
+        const valOf = (field: string, model: WeatherModelId): number | null => {
+          const val = hourly[`${field}_${model}`]?.[idx];
           return typeof val === 'number' && !Number.isNaN(val) ? val : null;
         };
-        // Core values this model did not supply for this hour. Placeholder numbers below keep the
-        // maths running, but the hour is flagged, never counted as GO and left out of the model vote.
+        const rawVal = (field: string): number | null => valOf(field, m);
+        // When this model has a gap, take the same hour's real value from the next model that has
+        // it (UKV first, then ICON, ECMWF, GFS, GEM) and say so. Only if no model has it is the
+        // value missing: then a placeholder keeps the maths running, the hour is never GO, and the
+        // model is left out of the vote. Models with filled gaps are also left out of the vote.
         const missingData: string[] = [];
+        const filledData: string[] = [];
+        const fromOthers = (field: string): { v: number; by: string } | null => {
+          for (const other of WEATHER_MODELS_META) {
+            if (other.id === m) continue;
+            const v = valOf(field, other.id);
+            if (v !== null) return { v, by: other.shortName };
+          }
+          return null;
+        };
         const core = (field: string, label: string, placeholder: number): number => {
           const v = rawVal(field);
-          if (v === null) {
-            if (!missingData.includes(label)) missingData.push(label);
-            return placeholder;
+          if (v !== null) return v;
+          const alt = fromOthers(field);
+          if (alt) {
+            const note = `${label} from ${alt.by}`;
+            if (!filledData.includes(note)) filledData.push(note);
+            return alt.v;
           }
-          return v;
+          if (!missingData.includes(label)) missingData.push(label);
+          return placeholder;
         };
 
         const ws10 = Math.round(core('wind_speed_10m', 'wind', 0));
-        const wd10 = Math.round(rawVal('wind_direction_10m') ?? 0);
+        const wd10 = Math.round(rawVal('wind_direction_10m') ?? fromOthers('wind_direction_10m')?.v ?? 0);
         const wg10 = Math.round(core('wind_gusts_10m', 'gusts', ws10));
         const rawWs80 = rawVal('wind_speed_80m');
         const ws80 = rawWs80 !== null ? Math.round(rawWs80) : undefined;
@@ -1079,12 +1142,20 @@ export async function fetchMultiModelRigForecast(
         const temp2mC = Number(core('temperature_2m', 'temperature', 5).toFixed(1));
         const dewPoint2mC = Number(core('dew_point_2m', 'dew point', temp2mC).toFixed(1));
         const dewSpreadC = Number(Math.max(0, temp2mC - dewPoint2mC).toFixed(1));
+        // Freezing level: this model's own value or its upper-air temperatures, else another model's
+        let borrowedFreezeM: number | null = null;
         if (
           rawVal('freezing_level_height') === null &&
           rawVal('temperature_925hPa') === null &&
           rawVal('temperature_850hPa') === null
         ) {
-          missingData.push('freezing level');
+          const alt = fromOthers('freezing_level_height');
+          if (alt) {
+            borrowedFreezeM = alt.v;
+            filledData.push(`freezing level from ${alt.by}`);
+          } else {
+            missingData.push('freezing level');
+          }
         }
         const t925 = rawVal('temperature_925hPa') ?? t950;
         const z925 = rawVal('geopotential_height_925hPa') ?? 720;
@@ -1096,7 +1167,7 @@ export async function fetchMultiModelRigForecast(
         const z500 = rawVal('geopotential_height_500hPa') ?? 5450;
 
         const freezingLevelFt = computeNativeFreezingLevelFt(
-          rawVal('freezing_level_height'),
+          rawVal('freezing_level_height') ?? borrowedFreezeM,
           temp2mC,
           t925,
           z925,
@@ -1217,6 +1288,7 @@ export async function fetchMultiModelRigForecast(
           status: evalResult.status,
           statusReason: evalResult.reason,
           missingData: missingData.length ? missingData : undefined,
+          filledData: filledData.length ? filledData : undefined,
         };
       }
 
@@ -1236,6 +1308,7 @@ export async function fetchMultiModelRigForecast(
         swellWavePeriodSec,
         swellWaveDirDeg,
         seaSurfaceTempC,
+        seaDataNote,
         models: modelsRecord,
       });
     }
@@ -1412,12 +1485,9 @@ export async function fetchFlightCorridorProfile(
     const marUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${lats}&longitude=${lons}&hourly=wave_height&forecast_days=7`;
 
     try {
-      const [wxRes, marRes] = await Promise.allSettled([fetch(wxUrl), fetch(marUrl)]);
-      if (wxRes.status !== 'fulfilled' || !wxRes.value.ok) return [];
-
-      const wxArr = await wxRes.value.json();
-      const marArr =
-        marRes.status === 'fulfilled' && marRes.value.ok ? await marRes.value.json() : [];
+      const [wxArr, marArrRaw] = await Promise.all([fetchJsonWithRetry(wxUrl), fetchJsonWithRetry(marUrl, 2)]);
+      if (!wxArr) return [];
+      const marArr = marArrRaw ?? [];
 
       cached = { wxArr, marArr, fetchedAt: Date.now() };
       corridorRawCache.set(cacheKey, cached);
@@ -1665,12 +1735,9 @@ export async function fetchWeatherPointsAt(
     const marUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${lats}&longitude=${lons}&hourly=wave_height,wave_direction,sea_surface_temperature&forecast_days=7`;
 
     try {
-      const [wxRes, marRes] = await Promise.allSettled([fetch(wxUrl), fetch(marUrl)]);
-      if (wxRes.status !== 'fulfilled' || !wxRes.value.ok) return [];
-
-      const wxArr = await wxRes.value.json();
-      const marArr =
-        marRes.status === 'fulfilled' && marRes.value.ok ? await marRes.value.json() : [];
+      const [wxArr, marArrRaw] = await Promise.all([fetchJsonWithRetry(wxUrl), fetchJsonWithRetry(marUrl, 2)]);
+      if (!wxArr) return [];
+      const marArr = marArrRaw ?? [];
 
       cached = { coords, wxArr, marArr, fetchedAt: Date.now() };
       spatialGridRawCache.set(cacheKey, cached);

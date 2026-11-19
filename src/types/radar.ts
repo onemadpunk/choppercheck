@@ -265,6 +265,8 @@ export interface ModelPointSnapshot {
   statusReason: string;
   /** Values this model did not supply for this hour (e.g. 'wind', 'low cloud'). Such hours are never GO. */
   missingData?: string[];
+  /** Gaps in this model filled with another model's real value, e.g. 'gusts from ICON-EU'. */
+  filledData?: string[];
 }
 
 export interface MultiModelHourEntry {
@@ -284,6 +286,8 @@ export interface MultiModelHourEntry {
   swellWavePeriodSec?: number;
   swellWaveDirDeg?: number;
   seaSurfaceTempC: number | null;
+  /** Set when waves come from a nearby sea point because the rig sits on a land cell of the wave model */
+  seaDataNote?: string;
   models: Record<WeatherModelId, ModelPointSnapshot>;
 }
 

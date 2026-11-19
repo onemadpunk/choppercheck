@@ -719,8 +719,8 @@ export function computeFiveModelConsensus(
   for (const mId of modelIds) {
     const snap = hourEntry.models[mId];
     if (!snap) continue;
-    // A model with gaps for this hour does not get a vote
-    if (snap.missingData && snap.missingData.length > 0) {
+    // A model with gaps for this hour (missing, or filled from another model) does not get a vote
+    if ((snap.missingData && snap.missingData.length > 0) || (snap.filledData && snap.filledData.length > 0)) {
       noDataModels.push(MODEL_SHORT_LABELS[mId] || mId);
       continue;
     }
