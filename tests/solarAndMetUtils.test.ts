@@ -35,24 +35,64 @@ test('Glen Lyon winter daylight window is much shorter than summer daylight', ()
   assert.equal(isCaaNightForHour('2026-11-14T12:00', winter), false);
 });
 
-test('Night operating limits tighten ceiling, visibility, gust and FPSO wave margins automatically and match CAP 437 / SPA.HOFO.125', () => {
+test('Night keeps the CAA 60 kt / 6 m limits and uses the ARA 300 ft and HCA night deck-motion limits', () => {
   const s92 = AIRFRAME_PRESETS.S92;
   const day = deriveEffectiveLimits(s92, false, true, '24h_ops');
   const night = deriveEffectiveLimits(s92, true, true, '24h_ops');
 
   assert.equal(day.maxHelideckGustKts, 60);
   assert.equal(day.maxFpsoWaveHeightM, 6.0);
-  assert.equal(day.minCloudCeilingFt, 250);
+  assert.equal(day.minCloudCeilingFt, 200);
   assert.equal(day.maxPitchRollDeg, 3.0);
   assert.equal(day.maxInclinationDeg, 3.5);
   assert.equal(day.maxShrMs, 1.3);
 
-  assert.equal(night.maxHelideckGustKts, 55);
-  assert.equal(night.maxFpsoWaveHeightM, 5.5);
+  assert.equal(night.maxHelideckGustKts, 60);
+  assert.equal(night.maxFpsoWaveHeightM, 6.0);
   assert.equal(night.minCloudCeilingFt, 300);
   assert.equal(night.maxPitchRollDeg, 2.0);
   assert.equal(night.maxInclinationDeg, 2.5);
   assert.equal(night.maxShrMs, 1.0);
+
+  // HCA Rev 9c: Category A night limits on a Cat 1 semi-sub are wider than on an FPSO.
+  const nightSemiSub = deriveEffectiveLimits(s92, true, true, '24h_ops', null, true);
+  assert.equal(nightSemiSub.maxPitchRollDeg, 3.0);
+  assert.equal(nightSemiSub.maxInclinationDeg, 3.5);
+  assert.equal(nightSemiSub.maxShrMs, 1.0);
+
+  // Category B (AW139 / H175 / H160) day and FPSO-night limits.
+  const aw139Day = deriveEffectiveLimits(AIRFRAME_PRESETS.AW139, false, true, '24h_ops');
+  assert.equal(aw139Day.maxPitchRollDeg, 4.0);
+  assert.equal(aw139Day.maxInclinationDeg, 4.5);
+  assert.equal(aw139Day.maxShrMs, 1.3);
+  const aw139Night = deriveEffectiveLimits(AIRFRAME_PRESETS.AW139, true, true, '24h_ops');
+  assert.equal(aw139Night.maxPitchRollDeg, 3.0);
+  assert.equal(aw139Night.maxInclinationDeg, 3.5);
+  assert.equal(aw139Night.maxShrMs, 1.0);
+  assert.equal(AIRFRAME_PRESETS.H175.maxPitchRollDegDay, 4.0);
+
+  // Hold only when a value goes over its limit, never when it equals it, day or night.
+  const calm = { cloudCeilingFt: 2500, visibilityKm: 15, freezingLevelFt: 4500, precipMmHr: 0 };
+  for (const isNight of [false, true]) {
+    for (const isFpso of [false, true]) {
+      assert.notEqual(
+        evaluateHourWithLimits({ ...calm, windSpeed10mKts: 58, windGust10mKts: 60 }, 2, 8, isNight, isFpso, s92, '24h_ops').status,
+        'HOLD'
+      );
+      assert.equal(
+        evaluateHourWithLimits({ ...calm, windSpeed10mKts: 45, windGust10mKts: 61 }, 2, 8, isNight, isFpso, s92, '24h_ops').status,
+        'HOLD'
+      );
+      assert.notEqual(
+        evaluateHourWithLimits({ ...calm, windSpeed10mKts: 15, windGust10mKts: 20 }, 6.0, 8, isNight, isFpso, s92, '24h_ops').status,
+        'HOLD'
+      );
+      assert.equal(
+        evaluateHourWithLimits({ ...calm, windSpeed10mKts: 15, windGust10mKts: 20 }, 6.1, 8, isNight, isFpso, s92, '24h_ops').status,
+        'HOLD'
+      );
+    }
+  }
 
   const customOverride = deriveEffectiveLimits(s92, false, true, '24h_ops', {
     maxGustKts: 50,
@@ -262,11 +302,11 @@ test('Blackpool EGNH, Irish Sea, Southern North Sea & UK SAR bases resolve and c
   const catcher = resolveHeliAdminStopCode('CAT');
   assert.equal(catcher?.assetType, 'FPSO');
 
-  // Verify all 5 presets have 60kt wind, 6.0m sea state, and 250ft Day ARA ceiling
+  // Verify all 5 presets have 60kt wind, 6.0m sea state, and 200ft Day ARA ceiling
   for (const preset of Object.values(AIRFRAME_PRESETS)) {
     assert.equal(preset.maxHelideckGustKts, 60);
     assert.equal(preset.maxFpsoWaveHeightM, 6.0);
-    assert.equal(preset.minCloudCeilingFt, 250);
+    assert.equal(preset.minCloudCeilingFt, 200);
   }
 
   // Verify wave-derived FPSO deck motion RAO estimator (Green deck vs Red deck)
