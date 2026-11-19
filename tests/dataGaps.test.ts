@@ -124,7 +124,8 @@ test('map card and panel share one evaluation: a red deck estimate turns GO into
         found = true;
         break;
       }
-      if (full.deckMotion?.deckLightStatus !== 'RED') assert.equal(full.status, plain.status);
+      if (plain.status === 'GO' && full.deckMotion?.deckLightStatus === 'AMBER') assert.equal(full.status, 'CAUTION');
+      if (full.deckMotion?.deckLightStatus === 'GREEN') assert.equal(full.status, plain.status);
     }
   }
   assert.ok(found, 'expected at least one sea state where only the deck estimate is red');

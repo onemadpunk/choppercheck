@@ -639,7 +639,8 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
       return `Weather at ${facility.shortName} is okay, but weather halfway along the flight route from ${shoreBaseFacility.code} is outside limits.`;
     }
     if (deckMotionRaisesCaution) {
-      return `Deck motion may be too much: from the forecast waves (${ndU(waveVal, ' m')}) and swell (${ndU(wavePeriodVal, 's')}), our rough estimate is that this ${isSemiSub ? 'semi-sub' : 'FPSO'} could be pitching, rolling or heaving beyond the landing limits. Only the vessel's own motion sensors know for sure.`;
+      const nearOnly = fpsoMotionEstimate?.deckLightStatus === 'AMBER';
+      return `Deck motion may be ${nearOnly ? 'close to the limit' : 'too much'}: from the forecast waves (${ndU(waveVal, ' m')}) and swell (${ndU(wavePeriodVal, 's')}), our rough estimate is that this ${isSemiSub ? 'semi-sub' : 'FPSO'} could be pitching, rolling or heaving ${nearOnly ? 'near' : 'beyond'} the landing limits. Only the vessel's own motion sensors know for sure.`;
     }
     if (lightningStatus === 'CAUTION') {
       return `Wind (${ndU(gustVal, ' kt')}) and waves (${ndU(waveVal, ' m')}) are well within limits, but cold air + winter showers can trigger static lightning on helicopter blades — crews may wait 20–40 mins for heavy showers to pass.`;
