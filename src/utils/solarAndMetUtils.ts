@@ -703,13 +703,17 @@ export function evaluateFacilityHour(params: {
           maxShrLimit: ev.limits.maxShrMs,
         })
       : null;
-  const deckMotionRaisesCaution = ev.status === 'GO' && deckMotion?.deckLightStatus === 'RED';
+  // An estimated deck that is near (AMBER) or over (RED) the limits makes GO a CAUTION; never HOLD,
+  // because it is only an estimate. Swell period and direction feed in through the estimate.
+  const deckMotionRaisesCaution =
+    ev.status === 'GO' && (deckMotion?.deckLightStatus === 'RED' || deckMotion?.deckLightStatus === 'AMBER');
+  const vesselWord = isSemiSub ? 'semi-sub' : 'FPSO';
   return {
     status: deckMotionRaisesCaution ? 'CAUTION' : ev.status,
     reason: deckMotionRaisesCaution
-      ? `DECK MOTION CAUTION (estimate): wave-derived pitch/roll/heave may exceed the ${
-          isSemiSub ? 'semi-sub' : 'FPSO'
-        } limits. Check the live HMS deck status.`
+      ? deckMotion?.deckLightStatus === 'RED'
+        ? `DECK MOTION CAUTION (estimate): wave-derived pitch/roll/heave may exceed the ${vesselWord} limits. Check the live HMS deck status.`
+        : `DECK MOTION CAUTION (estimate): wave-derived pitch/roll/heave near the ${vesselWord} limits. Check the live HMS deck status.`
       : ev.reason,
     limits: ev.limits,
     deckMotion,
