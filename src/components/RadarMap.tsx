@@ -31,6 +31,7 @@ import {
   evaluateFacilityHour,
 } from '../utils/solarAndMetUtils';
 import { WeatherStreamlineCanvas } from './WeatherStreamlineCanvas';
+import { SimpleFlightAnswer } from './SimpleFlightAnswer';
 import {
   Building2,
   Calendar,
@@ -306,9 +307,15 @@ export const RadarMap: React.FC<RadarMapProps> = ({
   // Floating map cards can be folded into small chips so they never pile up over the map on phones.
   // "Hide boxes" clean-map mode: hides every floating card, the weather dock and the side buttons in one tap.
   const [boxesHidden, setBoxesHidden] = useState<boolean>(false);
-  const [rigCardCollapsed, setRigCardCollapsed] = useState<boolean>(() =>
-    readStoredFlag('choppercheck_rig_card_collapsed', false)
-  );
+  // A shared rig link (?rig=) always opens on the rig card's answer, not a folded chip
+  const [rigCardCollapsed, setRigCardCollapsed] = useState<boolean>(() => {
+    try {
+      if (new URLSearchParams(window.location.search).has('rig')) return false;
+    } catch {
+      // ignore URL errors
+    }
+    return readStoredFlag('choppercheck_rig_card_collapsed', false);
+  });
   const [lightningKeyCollapsed, setLightningKeyCollapsed] = useState<boolean>(() =>
     readStoredFlag('choppercheck_lightning_key_collapsed', isNarrowViewport())
   );
@@ -328,6 +335,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
   });
 
   const isFpso = activeFacility.assetType === 'FPSO' || activeFacility.assetType === 'Semi-Sub';
+  const isSemiSub = activeFacility.assetType === 'Semi-Sub';
   const activePreset = AIRFRAME_PRESETS[airframePresetId];
   const daySummaries = useMemo(
     () =>
@@ -337,14 +345,14 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         activePreset,
         isFpso,
         flightOpsMode,
-        customOverride
+        customOverride,
+        isSemiSub
       ),
-    [hourlyForecast, weatherModelId, activePreset, isFpso, flightOpsMode, customOverride]
+    [hourlyForecast, weatherModelId, activePreset, isFpso, flightOpsMode, customOverride, isSemiSub]
   );
   const activeHour = hourlyForecast[selectedHourIdx] || hourlyForecast[0];
   const activeHourSnap = activeHour?.models[weatherModelId];
   // Same evaluation as the weather panel (limits + deck motion estimate), so the card and panel agree
-  const isSemiSub = activeFacility.assetType === 'Semi-Sub';
   const activeHourEval = useMemo(() => {
     if (!activeHour || !activeHourSnap) return null;
     return evaluateFacilityHour({
@@ -807,7 +815,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
             >
               ● {viewMode === 'simple'
                 ? hudStatus === 'NODATA'
-                  ? 'NO DATA'
+                  ? 'LOADING'
                   : hudStatus === 'GO'
                   ? 'GOOD'
                   : hudStatus === 'CAUTION'
@@ -824,9 +832,11 @@ export const RadarMap: React.FC<RadarMapProps> = ({
                 {isFavoriteFacility ? '★ MY FAVOURITE RIG' : 'LOCKED RIG / BASE'} · {activeFacility.code}
               </span>
               <span className="flex items-center gap-1.5 shrink-0">
-                <span className="text-[10px] font-mono tabular-nums text-slate-400">
-                  {activeFacility.elevationFt} FT
-                </span>
+                {viewMode !== 'simple' && (
+                  <span className="text-[10px] font-mono tabular-nums text-slate-400">
+                    {activeFacility.elevationFt} FT
+                  </span>
+                )}
                 <button
                   onClick={() => setRigCardCollapsed(true)}
                   aria-label="Minimise rig card"
@@ -864,6 +874,16 @@ export const RadarMap: React.FC<RadarMapProps> = ({
               </button>
             </div>
 
+            {viewMode === 'simple' ? (
+              <SimpleFlightAnswer
+                daySummaries={daySummaries}
+                hasForecast={hourlyForecast.length > 0}
+                operators={activeFacility.helicopterOperators}
+                onOpenWeather={onOpenWeather}
+                onOpenDirectory={onOpenDirectory}
+              />
+            ) : (
+            <>
             <div className="text-[11px] text-slate-400 truncate mt-0.5">
               {activeFacility.fieldOperator} · {activeFacility.assetType} · Base {activeFacility.primaryShoreBase}
             </div>
@@ -886,15 +906,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
                   }`}
                 >
                   ●{' '}
-                  {viewMode === 'simple'
-                    ? hudStatus === 'NODATA'
-                      ? 'NO FORECAST DATA'
-                      : hudStatus === 'GO'
-                      ? 'GOOD TO FLY'
-                      : hudStatus === 'CAUTION'
-                      ? 'POSSIBLE DELAY'
-                      : 'WEATHER HOLD'
-                    : hudStatus === 'NODATA' ? 'NO DATA' : `${activePreset.id} ${hudStatus}`}
+                  {hudStatus === 'NODATA' ? 'NO DATA' : `${activePreset.id} ${hudStatus}`}
                 </span>
                 <span className="text-cyan-400 font-sans font-semibold text-[10px]">
                   Open 7-Day Weather →
@@ -938,6 +950,8 @@ export const RadarMap: React.FC<RadarMapProps> = ({
                 <span className="truncate">Change Rig</span>
               </button>
             </div>
+            </>
+            )}
           </div>
         )}
 
@@ -1131,7 +1145,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       </div>
 
       {/* Floating Multi-Model Offshore Weather, 7-Day Time Machine & Go/No-Go Control Dock */}
-      <div className="map-floating absolute bottom-2 right-2 left-2 sm:bottom-2.5 sm:right-2.5 sm:left-auto z-[400] bg-slate-950/94 backdrop-blur-md border border-slate-800 rounded-xl p-2 sm:p-2.5 pointer-events-auto shadow-2xl max-w-full sm:max-w-[580px] space-y-1.5">
+      <div className={`${viewMode === 'simple' ? 'hidden lg:block' : ''} map-floating absolute bottom-2 right-2 left-2 sm:bottom-2.5 sm:right-2.5 sm:left-auto z-[400] bg-slate-950/94 backdrop-blur-md border border-slate-800 rounded-xl p-2 sm:p-2.5 pointer-events-auto shadow-2xl max-w-full sm:max-w-[580px] space-y-1.5`}>
         {/* Compact Single-Row Summary Bar when collapsed (phones & tablets, < lg) */}
         <div className="flex lg:hidden items-center justify-between gap-1.5">
           <button

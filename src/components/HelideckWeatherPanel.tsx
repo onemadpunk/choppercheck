@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { ukLocalTime, windWords, seaWords, cloudWords } from '../utils/plainWords';
 import {
   AircraftTarget,
   AirframePresetId,
@@ -23,6 +24,8 @@ import { calculateBearingDeg, calculateDistanceNm } from '../data/aircraftDecode
 import { BaseOutlookCard, SHORE_BASE_ASSET_TYPES } from './BaseOutlookCard';
 import {
   buildContextAwareSevenDaySummaries,
+  plainDayAnswer,
+  plainCauseForHour,
   computeBestRunwayWind,
   computeEstimatedFpsoDeckMotion,
   computeFiveModelConsensus,
@@ -142,6 +145,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   });
 
   const viewMode = externalViewMode ?? internalViewMode;
+  const isSimple = viewMode === 'simple';
 
   const handleSetViewMode = (mode: 'simple' | 'detailed') => {
     setInternalViewMode(mode);
@@ -183,9 +187,10 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
         preset,
         isFpso,
         flightOpsMode,
-        customOverride
+        customOverride,
+        isSemiSub
       ),
-    [hourlyForecast, weatherModelId, preset, isFpso, flightOpsMode, customOverride]
+    [hourlyForecast, weatherModelId, preset, isFpso, flightOpsMode, customOverride, isSemiSub]
   );
 
   const activeHour = hourlyForecast[selectedHourIdx] || hourlyForecast[0];
@@ -659,6 +664,29 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
       .replace(/, waves \(no data\)/, isShoreFacility ? '' : ', waves (no sea data)');
   })();
 
+  // Simple view: the same answer in plain words, with no numbers or aviation terms
+  const simpleSummary = (() => {
+    if (!hasForecast || !evaluatedActive) return plainEnglishSummary;
+    const cause = plainCauseForHour(
+      activeModelSnapshot ?? { windGust10mKts: 0, cloudCeilingFt: 99999, visibilityKm: 99 },
+      activeHour?.waveHeightM ?? null,
+      currentReason,
+      evaluatedActive.limits
+    );
+    if (currentStatus === 'GO') {
+      return routeCombinedStatus === 'GO'
+        ? 'The weather looks fine for flying at this time.'
+        : `The weather here looks fine, but there may be some delay from the weather at ${shoreBaseFacility.shortName} or on the way out.`;
+    }
+    if (cause === 'after dark') return 'This is after dark. Crew changes mostly fly in daylight.';
+    if (cause === 'forecast incomplete') {
+      return 'Part of the forecast is missing for this time, so we can’t say it looks fine. Check again later.';
+    }
+    return currentStatus === 'CAUTION'
+      ? `Flights may be delayed at this time because of ${cause}.`
+      : `Flights are unlikely at this time because of ${cause}.`;
+  })();
+
   return (
     <div className="flex flex-col h-full min-w-0 w-full bg-slate-950 text-slate-100 overflow-y-auto overflow-x-hidden p-3 sm:p-5 space-y-4">
       <div className={isFullScreen ? 'max-w-6xl mx-auto w-full min-w-0 space-y-4' : 'w-full min-w-0 space-y-4'}>
@@ -666,14 +694,16 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="text-[11px] font-mono text-cyan-400">
-              7-DAY MULTI-MODEL FLIGHT LIMITS · {facility.code}
+              {isSimple ? `Flight weather outlook · ${facility.code}` : `7-DAY MULTI-MODEL FLIGHT LIMITS · ${facility.code}`}
             </div>
             <h3 className="text-base sm:text-lg font-bold text-white truncate">
               {facility.name}
             </h3>
-            <div className="text-xs text-slate-400">
-              {facility.fieldOperator} · {facility.assetType} · Base {shoreBaseFacility.code}
-            </div>
+            {!isSimple && (
+              <div className="text-xs text-slate-400">
+                {facility.fieldOperator} · {facility.assetType} · Base {shoreBaseFacility.code}
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             <button
@@ -822,8 +852,16 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             <div className="space-y-0.5 min-w-0">
               <div className="text-[10px] font-mono uppercase tracking-wider opacity-85">
                 {activeHour?.dayNameFull || 'Today'} {activeHour?.dateShort || ''} ·{' '}
-                {activeHour?.hourLabel || 'Live'} UTC ({isNightHour ? 'Night Limits' : 'Daylight'}) ·{' '}
-                {preset.id} Helicopter
+                {isSimple ? (
+                  <>
+                    {activeHour ? ukLocalTime(activeHour.hourIso) : 'Now'} UK time{isNightHour ? ' (after dark)' : ''}
+                  </>
+                ) : (
+                  <>
+                    {activeHour?.hourLabel || 'Live'} UTC ({isNightHour ? 'Night Limits' : 'Daylight'}) ·{' '}
+                    {preset.id} Helicopter
+                  </>
+                )}
               </div>
               <div className="text-base sm:text-lg font-extrabold flex items-center gap-2">
                 {currentStatus === 'GO' && <CheckCircle2 className="w-5 h-5 shrink-0 text-emerald-400" />}
@@ -840,7 +878,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 </span>
               </div>
             </div>
-            {fiveModelConsensus && (
+            {fiveModelConsensus && !isSimple && (
               <span className="px-2 py-1 rounded-md bg-slate-950/80 border border-white/15 text-[11px] font-mono font-bold text-white shrink-0">
                 {(currentStatus === 'GO'
                   ? fiveModelConsensus.goCount
@@ -854,7 +892,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             )}
           </div>
 
-          {(activeModelSnapshot?.filledData?.length || activeHour?.seaDataNote) && (
+          {!isSimple && (activeModelSnapshot?.filledData?.length || activeHour?.seaDataNote) && (
             <p className="text-[11px] text-slate-300 leading-snug">
               {activeModelSnapshot?.filledData?.length
                 ? `${WEATHER_MODELS_META.find((m) => m.id === weatherModelId)?.shortName ?? 'This model'} had gaps this hour, so these come from another model: ${activeModelSnapshot.filledData.join(', ')}.`
@@ -864,11 +902,19 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             </p>
           )}
           <p className="text-xs sm:text-sm text-white/95 leading-relaxed font-sans">
-            {plainEnglishSummary}
+            {isSimple ? simpleSummary : plainEnglishSummary}
           </p>
 
+          {isSimple && isNightHour && (
+            <p className="text-[11px] text-indigo-200 leading-snug">
+              <Moon className="inline w-3.5 h-3.5 mr-1 text-indigo-300" />
+              This hour is after dark, when stricter rules apply. Most crew changes fly in daylight, so tap a
+              daytime hour below to see those.
+            </p>
+          )}
+
           {/* Explain why Night hours show stricter cloud and deck-motion limits than daytime hours */}
-          {isNightHour && (
+          {isNightHour && !isSimple && (
             <div className="p-2.5 rounded-lg bg-indigo-950/80 border border-indigo-400/40 text-xs text-indigo-100 flex flex-wrap items-center justify-between gap-2">
               <div className="space-y-0.5">
                 <div className="font-bold text-indigo-200 flex items-center gap-1.5">
@@ -925,13 +971,22 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                       : 'bg-rose-500/30 text-rose-300'
                   }`}
                 >
-                  {gustStatus === 'NODATA' ? 'No data' : gustStatus === 'GO' ? 'OK' : gustStatus === 'CAUTION' ? 'Breezy' : 'Over Limit'}
+                  {gustStatus === 'NODATA' ? 'No data' : gustStatus === 'GO' ? (isSimple ? 'OK to fly' : 'OK') : gustStatus === 'CAUTION' ? (isSimple ? 'Near limit' : 'Breezy') : isSimple ? 'Too windy' : 'Over Limit'}
                 </span>
               </div>
-              <div className="text-sm font-bold text-white font-mono">{gustVal === null ? 'No data' : `${gustVal} kt gusts`}</div>
-              <div className="text-[10px] text-slate-400">
-                Max: {maxGustLimit} kt ({isNightHour ? 'Night · 60kt Day' : 'Day'})
-              </div>
+              {isSimple ? (
+                <>
+                  <div className="text-sm font-bold text-white">{windWords(gustVal)}</div>
+                  {gustVal !== null && <div className="text-[10px] text-slate-500">gusts {gustVal} knots</div>}
+                </>
+              ) : (
+                <>
+                  <div className="text-sm font-bold text-white font-mono">{gustVal === null ? 'No data' : `${gustVal} kt gusts`}</div>
+                  <div className="text-[10px] text-slate-400">
+                    Max: {maxGustLimit} kt ({isNightHour ? 'Night · 60kt Day' : 'Day'})
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="p-2.5 rounded-lg bg-slate-950/85 border border-white/10 space-y-1">
@@ -950,18 +1005,32 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                       : 'bg-rose-500/30 text-rose-300'
                   }`}
                 >
-                  {waveStatus === 'NODATA' ? (isShoreFacility ? 'N/A' : 'No data') : waveStatus === 'GO' ? 'OK' : waveStatus === 'CAUTION' ? 'Rough' : 'Over Limit'}
+                  {waveStatus === 'NODATA' ? (isShoreFacility ? 'N/A' : 'No data') : waveStatus === 'GO' ? (isSimple ? 'OK to fly' : 'OK') : waveStatus === 'CAUTION' ? (isSimple ? 'Near limit' : 'Rough') : isSimple ? 'Too rough' : 'Over Limit'}
                 </span>
               </div>
-              <div className="text-sm font-bold text-white font-mono">
-                {waveVal === null ? (isShoreFacility ? 'Not at sea' : 'No sea data') : `${waveVal} m waves`}
-              </div>
-              <div className="text-[10px] text-slate-400">
-                Max: {maxWaveLimit} m ({isNightHour ? 'Night · 6m Day' : 'Day'})
-                {isFpso && fpsoMotionEstimate
-                  ? ` · est. deck motion ${fpsoMotionEstimate.deckLightStatus === 'RED' ? 'over limit' : fpsoMotionEstimate.deckLightStatus === 'AMBER' ? 'near limit' : 'OK'}`
-                  : ''}
-              </div>
+              {isSimple ? (
+                <>
+                  <div className="text-sm font-bold text-white">{seaWords(waveVal, isShoreFacility)}</div>
+                  <div className="text-[10px] text-slate-500">
+                    {waveVal !== null ? `waves ${waveVal} m` : ''}
+                    {isFpso && fpsoMotionEstimate
+                      ? `${waveVal !== null ? ' · ' : ''}deck movement ${fpsoMotionEstimate.deckLightStatus === 'RED' ? 'may be too much' : fpsoMotionEstimate.deckLightStatus === 'AMBER' ? 'near the limit' : 'OK'} (estimate)`
+                      : ''}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-sm font-bold text-white font-mono">
+                    {waveVal === null ? (isShoreFacility ? 'Not at sea' : 'No sea data') : `${waveVal} m waves`}
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    Max: {maxWaveLimit} m ({isNightHour ? 'Night · 6m Day' : 'Day'})
+                    {isFpso && fpsoMotionEstimate
+                      ? ` · est. deck motion ${fpsoMotionEstimate.deckLightStatus === 'RED' ? 'over limit' : fpsoMotionEstimate.deckLightStatus === 'AMBER' ? 'near limit' : 'OK'}`
+                      : ''}
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="p-2.5 rounded-lg bg-slate-950/85 border border-white/10 space-y-1">
@@ -989,6 +1058,20 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                     : 'Low Cloud'}
                 </span>
               </div>
+              {isSimple ? (
+                <>
+                  <div className="text-sm font-bold text-white">
+                    {cloudWords(ceilVal, Boolean(facilityHasReportedCeiling && reportedCloud?.noCeiling))}
+                  </div>
+                  <div className="text-[10px] text-slate-500">
+                    {ceilVal !== null && !(facilityHasReportedCeiling && reportedCloud?.noCeiling)
+                      ? `cloud base ${ceilVal.toLocaleString()} ft · `
+                      : ''}
+                    {facilityHasReportedCeiling ? 'from the airport weather report' : 'forecast estimate'}
+                  </div>
+                </>
+              ) : (
+                <>
               <div className="text-sm font-bold text-white font-mono">
                 {facilityHasReportedCeiling && reportedCloud?.noCeiling
                   ? 'No low cloud'
@@ -1022,6 +1105,8 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               <div className="text-[10px] text-slate-400">
                 Min: {minCeilLimit} ft ({isNightHour ? `Night · ${preset.minCloudCeilingFt}ft Day` : 'Day'}) · Vis {ndU(visVal, ' km')}
               </div>
+                </>
+              )}
             </div>
 
             <div className="p-2.5 rounded-lg bg-slate-950/85 border border-white/10 space-y-1">
@@ -1049,18 +1134,32 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                     : 'Watch'}
                 </span>
               </div>
-              <div className="text-sm font-bold text-white font-mono truncate">
-                {lightningStatus !== 'GO'
-                  ? 'Winter Showers'
-                  : iceStatus === 'NODATA'
-                  ? 'No data'
-                  : iceStatus !== 'GO'
-                  ? `Ice ${ndFt(freezeVal)}`
-                  : 'No Lightning'}
-              </div>
-              <div className="text-[10px] text-slate-400">
-                0°C Freeze: {ndFt(freezeVal)}
-              </div>
+              {isSimple ? (
+                <div className="text-sm font-bold text-white">
+                  {lightningStatus !== 'GO'
+                    ? 'Heavy showers, lightning risk'
+                    : iceStatus === 'NODATA'
+                    ? 'Not known'
+                    : iceStatus !== 'GO'
+                    ? 'Icing risk'
+                    : 'No lightning or ice'}
+                </div>
+              ) : (
+                <>
+                  <div className="text-sm font-bold text-white font-mono truncate">
+                    {lightningStatus !== 'GO'
+                      ? 'Winter Showers'
+                      : iceStatus === 'NODATA'
+                      ? 'No data'
+                      : iceStatus !== 'GO'
+                      ? `Ice ${ndFt(freezeVal)}`
+                      : 'No Lightning'}
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    0°C Freeze: {ndFt(freezeVal)}
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
@@ -1104,7 +1203,8 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             </div>
           )}
 
-          {/* 1-Tap Triggered Lightning & Fly-Around Corridor Map Button (visible in both Simple & Pro View) */}
+          {/* 1-Tap Triggered Lightning & Fly-Around Corridor Map Button (Pro view) */}
+          {!isSimple && (
           <div className="pt-2 border-t border-white/10 flex flex-wrap items-center justify-between gap-2">
             <span className="text-[11px] text-slate-300 flex items-center gap-1.5">
               <CloudLightning className="w-3.5 h-3.5 text-amber-400 shrink-0" />
@@ -1122,6 +1222,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               <span>⚡ Open Lightning Map →</span>
             </button>
           </div>
+          )}
         </div>
 
         {/* 0. Astronomical Daylight Window & Auto Day/Night Flight Mode Selector (Shown in Heli-Admin / Pro View) */}
@@ -1394,7 +1495,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-bold text-white flex items-center gap-1.5">
                 <Calendar className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                7-Day Crew-Change Calendar (Tap Your Flight Day &amp; Hour)
+                {isSimple ? 'Next 7 days (tap a day)' : <>7-Day Crew-Change Calendar (Tap Your Flight Day &amp; Hour)</>}
               </span>
               {selectedHourIdx > 0 && (
                 <button
@@ -1405,6 +1506,11 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 </button>
               )}
             </div>
+            {isSimple ? (
+              <p className="text-[11px] text-slate-400 leading-snug">
+                Each day is judged on the daytime hours when crew changes usually fly.
+              </p>
+            ) : (
             <p className="text-[11px] text-slate-400 leading-snug">
               Each day shows: <strong className="text-emerald-300">GO</strong> (Good) /{' '}
               <strong className="text-amber-300">CAUTION</strong> (Possible Delay) /{' '}
@@ -1413,6 +1519,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               <strong className="text-cyan-300">Peak Waves (m)</strong> ·{' '}
               <strong className="text-slate-300">Models Agreeing (e.g. 5/5)</strong>
             </p>
+            )}
 
             <div className="flex w-full min-w-0 overflow-x-auto gap-1.5 pb-1 no-scrollbar sm:grid sm:grid-cols-7 sm:gap-1 sm:pb-0">
               {daySummaries.slice(0, 7).map((day) => {
@@ -1454,15 +1561,28 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                           : 'bg-emerald-500 text-slate-950'
                       }`}
                     >
-                      {day.overallStatus}
+                      {isSimple
+                        ? day.overallStatus === 'GO'
+                          ? 'Likely'
+                          : day.overallStatus === 'CAUTION'
+                          ? 'Delays?'
+                          : 'Unlikely'
+                        : day.overallStatus}
                     </span>
-                    <span className="text-[10px] sm:text-[8px] font-mono text-slate-300 mt-1 sm:mt-0.5 tabular-nums">
-                      {day.maxGustKts}kt
-                    </span>
-                    <span className="text-[10px] sm:text-[8px] font-mono text-cyan-300 tabular-nums">
-                      {day.maxWaveM === null ? "—" : `${day.maxWaveM}m`}
-                    </span>
-                    {day.consensusBadge && (
+                    {!isSimple && (
+                      <>
+                        <span className="text-[10px] sm:text-[8px] font-mono text-slate-300 mt-1 sm:mt-0.5 tabular-nums">
+                          {day.maxGustKts}kt
+                        </span>
+                        <span className="text-[10px] sm:text-[8px] font-mono text-cyan-300 tabular-nums">
+                          {day.maxWaveM === null ? "—" : `${day.maxWaveM}m`}
+                        </span>
+                      </>
+                    )}
+                    {isSimple && day.overallStatus !== 'GO' && day.plainCause && (
+                      <span className="text-[9px] sm:text-[8px] text-slate-300 leading-tight mt-0.5">{day.plainCause}</span>
+                    )}
+                    {!isSimple && day.consensusBadge && (
                       <span className="text-[9px] sm:text-[7px] font-mono text-slate-400 tabular-nums">
                         {day.consensusBadge}
                       </span>
@@ -1479,9 +1599,12 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                   <span className="font-semibold text-cyan-300">
                     {activeDaySummary.dayNameFull} ({activeDaySummary.dateShort}) ·{' '}
                     <span className="font-mono text-white">
-                      {activeHour?.hourLabel} UTC ({isNightHour ? 'NIGHT' : 'DAY'})
+                      {isSimple
+                        ? `${activeHour ? ukLocalTime(activeHour.hourIso) : ''} UK time${isNightHour ? ' (after dark)' : ''}`
+                        : `${activeHour?.hourLabel} UTC (${isNightHour ? 'NIGHT' : 'DAY'})`}
                     </span>
                   </span>
+                  {!isSimple && (
                   <span className="text-[10px] font-mono text-slate-400">
                     {activeDaySummary.goHoursCount}h GO · {activeDaySummary.cautionHoursCount}h
                     CAUT · {activeDaySummary.holdHoursCount}h HOLD
@@ -1489,9 +1612,16 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                       ? ` · ⚡${activeDaySummary.lightningHoursCount}h`
                       : ''}
                   </span>
+                  )}
                 </div>
 
-                {activeDaySummary.overallStatus !== 'GO' && (
+                {isSimple && activeDaySummary.overallStatus !== 'GO' && (
+                  <div className="px-2 py-1 rounded bg-slate-950/80 border border-slate-800 text-[11px] text-amber-200">
+                    {plainDayAnswer(activeDaySummary).headline}
+                    {activeDaySummary.plainCause ? ` (${activeDaySummary.plainCause})` : ''}
+                  </div>
+                )}
+                {!isSimple && activeDaySummary.overallStatus !== 'GO' && (
                   <div className="px-2 py-1 rounded bg-slate-950/80 border border-slate-800 text-[10px] font-mono text-amber-200 truncate">
                     Day Limit Driver: {activeDaySummary.primaryRiskReason}
                   </div>
@@ -1537,14 +1667,16 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                         } ${badgeClr}`}
                       >
                         <span className="flex items-center gap-0.5">
-                          {hr.hourLabel.slice(0, 2)}
+                          {isSimple ? ukLocalTime(hr.hourIso).slice(0, 2) : hr.hourLabel.slice(0, 2)}
                           <span className="text-[8px] sm:text-[7px] opacity-85">
                             {hrLightning ? '⚡' : hrNight ? '☾' : '☀'}
                           </span>
                         </span>
-                        <span className="text-[9px] sm:text-[8px]">
-                          {snap?.deckWindGustKts ?? snap?.windGust10mKts}k
-                        </span>
+                        {!isSimple && (
+                          <span className="text-[9px] sm:text-[8px]">
+                            {snap?.deckWindGustKts ?? snap?.windGust10mKts}k
+                          </span>
+                        )}
                       </button>
                     );
                   })}
