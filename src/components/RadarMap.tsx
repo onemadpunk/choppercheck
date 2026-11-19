@@ -41,9 +41,12 @@ import {
   Globe,
   Layers,
   LocateFixed,
+  MapPin,
   Minus,
   Plus,
   Star,
+  X,
+  Zap,
 } from 'lucide-react';
 
 const escapeHtml = (s: string) =>
@@ -212,6 +215,26 @@ function createFacilityIconHtml(
   `;
 }
 
+const isNarrowViewport = (): boolean =>
+  typeof window !== 'undefined' && window.innerWidth < 1024;
+
+const readStoredFlag = (key: string, fallback: boolean): boolean => {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw === null ? fallback : raw === 'true';
+  } catch {
+    return fallback;
+  }
+};
+
+const writeStoredFlag = (key: string, value: boolean): void => {
+  try {
+    localStorage.setItem(key, String(value));
+  } catch {
+    /* storage unavailable (private mode) – keep in-memory state only */
+  }
+};
+
 export const RadarMap: React.FC<RadarMapProps> = ({
   flights,
   installations,
@@ -262,6 +285,18 @@ export const RadarMap: React.FC<RadarMapProps> = ({
 
   const [mapStyle, setMapStyle] = useState<MapStyleMode>('dark_radar');
   const [mobileDockOpen, setMobileDockOpen] = useState<boolean>(false);
+  // Floating map cards can be folded into small chips so they never pile up over the map on phones.
+  const [rigCardCollapsed, setRigCardCollapsed] = useState<boolean>(() =>
+    readStoredFlag('choppercheck_rig_card_collapsed', false)
+  );
+  const [lightningKeyCollapsed, setLightningKeyCollapsed] = useState<boolean>(() =>
+    readStoredFlag('choppercheck_lightning_key_collapsed', isNarrowViewport())
+  );
+  useEffect(() => writeStoredFlag('choppercheck_rig_card_collapsed', rigCardCollapsed), [rigCardCollapsed]);
+  useEffect(
+    () => writeStoredFlag('choppercheck_lightning_key_collapsed', lightningKeyCollapsed),
+    [lightningKeyCollapsed]
+  );
   const [showRainRadar, setShowRainRadar] = useState<boolean>(false);
   const [rainFrames, setRainFrames] = useState<RainViewerRadarFrame[]>([]);
   const [rainFrameIdx, setRainFrameIdx] = useState<number>(0);
@@ -724,146 +759,215 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         shoreBaseFacility={shoreBaseFacility}
       />
 
-      {/* Triggered-Lightning & Fly-Around Corridor Legend Pill when ⚡ Lightning overlay is active */}
-      {weatherOverlayMode === 'triggered_lightning' && (
-        <div className="
-          absolute top-12 left-1/2 -translate-x-1/2 z-[400]
-          bg-slate-950/94 backdrop-blur-md border border-amber-500/50 rounded-xl px-3 py-1.5
-          pointer-events-auto shadow-xl max-w-[92vw] sm:max-w-xl
-          flex flex-col items-center gap-1 text-[10px] font-mono
-        ">
-          <div className="flex flex-wrap items-center justify-center gap-2.5 text-slate-200">
-            <span className="font-bold text-amber-300">⚡ TRIGGERED LIGHTNING (HTLI) MAP:</span>
-            <span className="flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block" />
-              <span className="text-emerald-300">Clear Fly-Around Air</span>
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block" />
-              <span className="text-amber-300">Mod Band (0°C ≤ 3,500ft + Showers)</span>
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block" />
-              <span className="text-rose-300">High Cell (Avoid / Dog-Leg)</span>
-            </span>
-          </div>
-          <div
-            className={`font-semibold text-center ${
-              corridorBypass.directRisk === 'LOW'
-                ? 'text-emerald-300'
-                : corridorBypass.recommendedRoute === 'HOLD_WIDESPREAD'
-                ? 'text-rose-300'
-                : 'text-amber-300'
-            }`}
-          >
-            {corridorBypass.summaryText}
-          </div>
-        </div>
-      )}
-
-      {/* Top-Left Active Helideck / Airport Lock HUD */}
-      <div className="map-reference-card absolute top-2.5 left-2.5 z-[400] bg-slate-950/92 backdrop-blur-md border border-slate-800 rounded-xl p-2 sm:p-2.5 w-[calc(100vw-72px)] sm:w-auto max-w-[300px] sm:max-w-xs pointer-events-auto shadow-xl">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] font-mono text-cyan-400 tracking-tight truncate font-semibold">
-            {isFavoriteFacility ? '★ MY FAVOURITE RIG' : 'LOCKED RIG / BASE'} · {activeFacility.code}
-          </span>
-          <span className="text-[10px] font-mono tabular-nums text-slate-400 shrink-0">
-            {activeFacility.elevationFt} FT
-          </span>
-        </div>
-
-        <div className="flex items-center justify-between gap-2 mt-0.5">
-          <div className="text-sm font-bold text-white truncate">
-            {activeFacility.shortName}
-          </div>
+      {/* Top-left stack: rig card + overlay key flow in one column so they can never overlap.
+          Each card folds down to a tappable chip to keep the map clear on phones. */}
+      <div className="map-top-left-stack absolute top-2.5 left-2.5 right-[68px] lg:right-auto z-[400] flex flex-col items-start gap-1.5 pointer-events-none max-h-[calc(100%-7rem)] overflow-y-auto no-scrollbar">
+        {rigCardCollapsed ? (
           <button
-            onClick={() => onToggleFavoriteFacility(activeFacility.id)}
-            title={
-              isFavoriteFacility
-                ? 'Saved as Favourite Rig (Tap to remove)'
-                : 'Save as My Favourite Rig on this phone'
-            }
-            className={`min-h-[34px] px-2.5 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1 border shrink-0 transition-colors cursor-pointer ${
-              isFavoriteFacility
-                ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
-                : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-700'
-            }`}
+            onClick={() => setRigCardCollapsed(false)}
+            aria-expanded={false}
+            title="Show rig card"
+            className="pointer-events-auto min-h-[36px] max-w-full px-2.5 py-1.5 rounded-full bg-slate-950/92 backdrop-blur-md border border-slate-700 shadow-xl flex items-center gap-1.5 text-[11px] font-mono text-slate-200 cursor-pointer hover:border-cyan-500/60"
           >
-            <Star
-              className={`w-3.5 h-3.5 ${
-                isFavoriteFacility ? 'fill-amber-400 text-amber-400' : 'text-slate-400'
-              }`}
-            />
-            {isFavoriteFacility ? 'Saved' : 'Save Rig'}
-          </button>
-        </div>
-
-        <div className="text-[11px] text-slate-400 truncate mt-0.5">
-          {activeFacility.fieldOperator} · {activeFacility.assetType} · Base {activeFacility.primaryShoreBase}
-        </div>
-
-        {/* Live / Selected Day Weather & Limits Mini-Bar (tappable to open 7-Day Planner) */}
-        <button
-          onClick={onOpenWeather}
-          className="mt-1.5 sm:mt-2 w-full min-h-[38px] px-2.5 py-1.5 rounded-md bg-slate-900/95 hover:bg-slate-900 border border-cyan-500/35 flex flex-col gap-0.5 text-left cursor-pointer transition-colors"
-        >
-          <div className="w-full flex items-center justify-between gap-1.5 text-[11px] font-mono">
+            <MapPin className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+            <span className="font-semibold text-white truncate">{activeFacility.code}</span>
             <span
-              className={`font-bold ${
+              className={`font-bold whitespace-nowrap ${
                 hudStatus === 'GO'
-                  ? 'text-emerald-400'
-                  : hudStatus === 'CAUTION'
-                  ? 'text-amber-400'
-                  : 'text-rose-400'
+                    ? 'text-emerald-400'
+                    : hudStatus === 'CAUTION'
+                    ? 'text-amber-400'
+                    : 'text-rose-400'
               }`}
             >
-              ●{' '}
-              {viewMode === 'simple'
+              ● {viewMode === 'simple'
                 ? hudStatus === 'GO'
-                  ? 'GOOD TO FLY'
+                  ? 'GOOD'
                   : hudStatus === 'CAUTION'
-                  ? 'POSSIBLE DELAY'
-                  : 'WEATHER HOLD'
+                  ? 'DELAY?'
+                  : 'HOLD'
                 : `${activePreset.id} ${hudStatus}`}
             </span>
-            <span className="text-cyan-400 font-sans font-semibold text-[10px]">
-              Open 7-Day Weather →
-            </span>
-          </div>
-          <div className="w-full flex items-center justify-between text-[10px] font-mono text-slate-300 tabular-nums">
-            <span>
-              Wind {hudWindGust}kt gusts · Waves {hudWave}m
-            </span>
-            <span className="text-slate-400">
-              {activeHour ? `${activeHour.dayNameShort} ${activeHour.hourLabel}Z` : 'Live'}
-            </span>
-          </div>
-        </button>
-
-        {/* Quick Mobile Action Row: Focus Only 1 Rig + Change Rig */}
-        <div className="mt-1.5 sm:mt-2 grid grid-cols-2 gap-1.5">
-          <button
-            onClick={onToggleSingleRigFocus}
-            className={`min-h-[36px] px-2 py-1.5 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 border transition-colors cursor-pointer ${
-              singleRigFocus
-                ? 'bg-cyan-500 text-slate-950 border-cyan-400 font-bold'
-                : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-800'
-            }`}
-          >
-            <Eye className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">
-              {singleRigFocus ? `Only ${activeFacility.code} (ON)` : `Only ${activeFacility.code}`}
-            </span>
+            <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
           </button>
+        ) : (
+          <div className="map-reference-card pointer-events-auto w-full sm:w-80 max-w-full bg-slate-950/92 backdrop-blur-md border border-slate-800 rounded-xl p-2 sm:p-2.5 shadow-xl">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] font-mono text-cyan-400 tracking-tight truncate font-semibold">
+                {isFavoriteFacility ? '★ MY FAVOURITE RIG' : 'LOCKED RIG / BASE'} · {activeFacility.code}
+              </span>
+              <span className="flex items-center gap-1.5 shrink-0">
+                <span className="text-[10px] font-mono tabular-nums text-slate-400">
+                  {activeFacility.elevationFt} FT
+                </span>
+                <button
+                  onClick={() => setRigCardCollapsed(true)}
+                  aria-label="Minimise rig card"
+                  title="Minimise"
+                  className="w-7 h-7 -my-1 -mr-1 rounded-md flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+                >
+                  <ChevronUp className="w-4 h-4" />
+                </button>
+              </span>
+            </div>
 
-          <button
-            onClick={onOpenDirectory}
-            className="min-h-[36px] px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-800 flex items-center justify-center gap-1 transition-colors cursor-pointer"
-          >
-            <Building2 className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">Change Rig</span>
-          </button>
-        </div>
+            <div className="flex items-center justify-between gap-2 mt-0.5">
+              <div className="text-sm font-bold text-white truncate">
+                {activeFacility.shortName}
+              </div>
+              <button
+                onClick={() => onToggleFavoriteFacility(activeFacility.id)}
+                title={
+                  isFavoriteFacility
+                    ? 'Saved as Favourite Rig (Tap to remove)'
+                    : 'Save as My Favourite Rig on this phone'
+                }
+                className={`min-h-[34px] px-2.5 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1 border shrink-0 transition-colors cursor-pointer ${
+                  isFavoriteFacility
+                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
+                    : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-700'
+                }`}
+              >
+                <Star
+                  className={`w-3.5 h-3.5 ${
+                    isFavoriteFacility ? 'fill-amber-400 text-amber-400' : 'text-slate-400'
+                  }`}
+                />
+                {isFavoriteFacility ? 'Saved' : 'Save Rig'}
+              </button>
+            </div>
+
+            <div className="text-[11px] text-slate-400 truncate mt-0.5">
+              {activeFacility.fieldOperator} · {activeFacility.assetType} · Base {activeFacility.primaryShoreBase}
+            </div>
+
+            {/* Live / Selected Day Weather & Limits Mini-Bar (tappable to open 7-Day Planner) */}
+            <button
+              onClick={onOpenWeather}
+              className="mt-1.5 sm:mt-2 w-full min-h-[38px] px-2.5 py-1.5 rounded-md bg-slate-900/95 hover:bg-slate-900 border border-cyan-500/35 flex flex-col gap-0.5 text-left cursor-pointer transition-colors"
+            >
+              <div className="w-full flex items-center justify-between gap-1.5 text-[11px] font-mono">
+                <span
+                  className={`font-bold ${
+                    hudStatus === 'GO'
+                      ? 'text-emerald-400'
+                      : hudStatus === 'CAUTION'
+                      ? 'text-amber-400'
+                      : 'text-rose-400'
+                  }`}
+                >
+                  ●{' '}
+                  {viewMode === 'simple'
+                    ? hudStatus === 'GO'
+                      ? 'GOOD TO FLY'
+                      : hudStatus === 'CAUTION'
+                      ? 'POSSIBLE DELAY'
+                      : 'WEATHER HOLD'
+                    : `${activePreset.id} ${hudStatus}`}
+                </span>
+                <span className="text-cyan-400 font-sans font-semibold text-[10px]">
+                  Open 7-Day Weather →
+                </span>
+              </div>
+              <div className="w-full flex items-center justify-between text-[10px] font-mono text-slate-300 tabular-nums">
+                <span>
+                  Wind {hudWindGust}kt gusts · Waves {hudWave}m
+                </span>
+                <span className="text-slate-400">
+                  {activeHour ? `${activeHour.dayNameShort} ${activeHour.hourLabel}Z` : 'Live'}
+                </span>
+              </div>
+            </button>
+
+            {/* Quick Mobile Action Row: Focus Only 1 Rig + Change Rig */}
+            <div className="mt-1.5 sm:mt-2 grid grid-cols-2 gap-1.5">
+              <button
+                onClick={onToggleSingleRigFocus}
+                className={`min-h-[36px] px-2 py-1.5 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 border transition-colors cursor-pointer ${
+                  singleRigFocus
+                    ? 'bg-cyan-500 text-slate-950 border-cyan-400 font-bold'
+                    : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-800'
+                }`}
+              >
+                <Eye className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">
+                  {singleRigFocus ? `Only ${activeFacility.code} (ON)` : `Only ${activeFacility.code}`}
+                </span>
+              </button>
+
+              <button
+                onClick={onOpenDirectory}
+                className="min-h-[36px] px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-800 flex items-center justify-center gap-1 transition-colors cursor-pointer"
+              >
+                <Building2 className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Change Rig</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Triggered-Lightning & Fly-Around Corridor key when ⚡ Lightning overlay is active */}
+        {weatherOverlayMode === 'triggered_lightning' &&
+          (lightningKeyCollapsed ? (
+            <button
+              onClick={() => setLightningKeyCollapsed(false)}
+              aria-expanded={false}
+              title="Show lightning map key"
+              className="pointer-events-auto min-h-[36px] max-w-full px-2.5 py-1.5 rounded-full bg-slate-950/92 backdrop-blur-md border border-amber-500/50 shadow-xl flex items-center gap-1.5 text-[11px] font-mono cursor-pointer hover:border-amber-400"
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+              <span className="font-semibold text-amber-300 whitespace-nowrap">HTLI key</span>
+              <span
+                className={`w-2 h-2 rounded-full shrink-0 ${
+                  corridorBypass.directRisk === 'LOW'
+                    ? 'bg-emerald-400'
+                    : corridorBypass.recommendedRoute === 'HOLD_WIDESPREAD'
+                    ? 'bg-rose-500'
+                    : 'bg-amber-400'
+                }`}
+              />
+              <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            </button>
+          ) : (
+            <div className="pointer-events-auto w-full sm:w-80 max-w-full bg-slate-950/94 backdrop-blur-md border border-amber-500/50 rounded-xl px-2.5 py-2 shadow-xl text-[10px] font-mono space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-bold text-amber-300 flex items-center gap-1">
+                  <Zap className="w-3.5 h-3.5" /> TRIGGERED LIGHTNING (HTLI)
+                </span>
+                <button
+                  onClick={() => setLightningKeyCollapsed(true)}
+                  aria-label="Minimise lightning map key"
+                  title="Minimise"
+                  className="w-7 h-7 -my-1 -mr-1 rounded-md flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block shrink-0" />
+                <span className="text-emerald-300">Clear fly-around air</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block shrink-0" />
+                <span className="text-amber-300">Mod band (0°C ≤ 3,500ft + showers)</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block shrink-0" />
+                <span className="text-rose-300">High cell (avoid / dog-leg)</span>
+              </div>
+              <div
+                className={`pt-1 border-t border-slate-800 font-semibold ${
+                  corridorBypass.directRisk === 'LOW'
+                    ? 'text-emerald-300'
+                    : corridorBypass.recommendedRoute === 'HOLD_WIDESPREAD'
+                    ? 'text-rose-300'
+                    : 'text-amber-300'
+                }`}
+              >
+                {corridorBypass.summaryText}
+              </div>
+            </div>
+          ))}
       </div>
 
       {/* Right Map Floating Tactical Controls */}
@@ -973,8 +1077,8 @@ export const RadarMap: React.FC<RadarMapProps> = ({
 
       {/* Floating Multi-Model Offshore Weather, 7-Day Time Machine & Go/No-Go Control Dock */}
       <div className="absolute bottom-2 right-2 left-2 sm:bottom-2.5 sm:right-2.5 sm:left-auto z-[400] bg-slate-950/94 backdrop-blur-md border border-slate-800 rounded-xl p-2 sm:p-2.5 pointer-events-auto shadow-2xl max-w-full sm:max-w-[580px] space-y-1.5">
-        {/* Compact Single-Row Phone Summary Bar when collapsed (< sm) */}
-        <div className="flex sm:hidden items-center justify-between gap-1.5">
+        {/* Compact Single-Row Summary Bar when collapsed (phones & tablets, < lg) */}
+        <div className="flex lg:hidden items-center justify-between gap-1.5">
           <button
             onClick={() => setMobileDockOpen((prev) => !prev)}
             className="min-h-[38px] px-2 py-1 rounded-lg bg-slate-900/90 border border-slate-800 flex items-center gap-1.5 text-[11px] font-mono text-slate-200 min-w-0 flex-1 cursor-pointer"
@@ -1032,8 +1136,8 @@ export const RadarMap: React.FC<RadarMapProps> = ({
           </button>
         </div>
 
-        {/* Full 3-Row Controls: Always visible on >= sm, expandable on phones */}
-        <div className={`${mobileDockOpen ? 'block' : 'hidden'} sm:block space-y-1.5`}>
+        {/* Full 3-Row Controls: Always visible on >= lg, expandable on phones & tablets */}
+        <div className={`${mobileDockOpen ? 'block' : 'hidden'} lg:block space-y-1.5`}>
           {/* Row 1: 7-Day Forecast Day Picker (Tap Mon, Tue, etc. to preview future flight limits on map) */}
           {daySummaries.length > 0 && (
             <div className="flex items-center justify-between gap-1.5 pb-1.5 border-b border-slate-800/80 overflow-x-auto no-scrollbar">

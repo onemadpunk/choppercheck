@@ -1391,9 +1391,9 @@ export default function App() {
           MAIN WORKSPACE: FULL-BLEED MAP + DOCKED TELEMETRY SIDEBAR
          ===================================================================== */}
       <main className="flex-1 flex overflow-hidden relative pb-14 lg:pb-0">
-        {/* LEFT / CENTER: INTERACTIVE RADAR MAP */}
+        {/* LEFT / CENTER: INTERACTIVE RADAR MAP (min-w-0 keeps it inside the screen so the zoom buttons stay visible on phones) */}
         <div
-          className={`flex-1 h-full relative ${
+          className={`flex-1 min-w-0 h-full relative ${
             activeTab === 'radar'
               ? 'block'
               : activeTab === 'weather'
