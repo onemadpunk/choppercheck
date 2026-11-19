@@ -137,17 +137,31 @@ export const WEATHER_MODELS_META: Array<{
   },
 ];
 
+/** Airfields and bases on land: no sea-state limit applies there. */
+export const SHORE_ASSET_TYPES = new Set<InstallationOrAirport['assetType']>([
+  'Shore Heliport',
+  'SAR Base',
+  'UK Airport',
+  'Norwegian Hub',
+  'Hospital Helipad',
+]);
+
 export function evaluateAirframeLimits(
   windSpeed10mKts: number,
   windGust10mKts: number,
   cloudCeilingFt: number,
   visibilityKm: number,
   freezingLevelFt: number,
-  waveHeightM: number,
+  /** null = no sea data, or a shore point where the sea-state limit does not apply */
+  waveHeightM: number | null,
   precipMmHr: number,
   isFpso: boolean,
-  preset: AirframeLimitPreset
+  preset: AirframeLimitPreset,
+  missingData: string[] = []
 ): { status: 'GO' | 'CAUTION' | 'HOLD'; reason: string } {
+  const hasWave = typeof waveHeightM === 'number' && Number.isFinite(waveHeightM);
+  const wave = hasWave ? (waveHeightM as number) : 0;
+  const waveTxt = hasWave ? `Wave ${wave}m` : 'no sea data';
   const icingHazard =
     freezingLevelFt > 0 &&
     freezingLevelFt < preset.minIcingFreezingLevelFt &&
@@ -159,12 +173,12 @@ export function evaluateAirframeLimits(
       reason: `NO-GO: Gusts ${windGust10mKts} kt exceed ${preset.id} ${preset.maxHelideckGustKts} kt helideck wind limit`,
     };
   }
-  if (waveHeightM > preset.maxFpsoWaveHeightM) {
+  if (hasWave && wave > preset.maxFpsoWaveHeightM) {
     return {
       status: 'HOLD',
       reason: isFpso
-        ? `NO-GO: Wave Hs ${waveHeightM}m exceeds CAA ${preset.maxFpsoWaveHeightM}m sea state limit (FPSO)`
-        : `NO-GO: Wave Hs ${waveHeightM}m exceeds CAA ${preset.maxFpsoWaveHeightM}m sea state limit`,
+        ? `NO-GO: Wave Hs ${wave}m exceeds CAA ${preset.maxFpsoWaveHeightM}m sea state limit (FPSO)`
+        : `NO-GO: Wave Hs ${wave}m exceeds CAA ${preset.maxFpsoWaveHeightM}m sea state limit`,
     };
   }
   if (
@@ -188,8 +202,8 @@ export function evaluateAirframeLimits(
     icingHazard ||
     cloudCeilingFt < preset.minCloudCeilingFt + 350 ||
     visibilityKm < preset.minVisibilityKm + 2.0 ||
-    (isFpso && waveHeightM >= preset.maxFpsoWaveHeightM - 1.2) ||
-    (!isFpso && waveHeightM >= preset.maxFpsoWaveHeightM - 0.8)
+    (hasWave && isFpso && wave >= preset.maxFpsoWaveHeightM - 1.2) ||
+    (hasWave && !isFpso && wave >= preset.maxFpsoWaveHeightM - 0.8)
   ) {
     if (icingHazard) {
       return {
@@ -197,21 +211,27 @@ export function evaluateAirframeLimits(
         reason: `ICING CAUTION: 0°C Freezing Level at ${freezingLevelFt.toLocaleString()} ft (Transit Band)`,
       };
     }
-    if (isFpso && waveHeightM >= preset.maxFpsoWaveHeightM - 1.2) {
+    if (hasWave && isFpso && wave >= preset.maxFpsoWaveHeightM - 1.2) {
       return {
         status: 'CAUTION',
-        reason: `FPSO DECK MOTION CAUTION: Wave Hs ${waveHeightM}m near ${preset.maxFpsoWaveHeightM}m pitch/roll limit`,
+        reason: `FPSO DECK MOTION CAUTION: Wave Hs ${wave}m near ${preset.maxFpsoWaveHeightM}m pitch/roll limit`,
       };
     }
     return {
       status: 'CAUTION',
-      reason: `CAUTION: Gusts ${windGust10mKts} kt · Ceiling ${cloudCeilingFt.toLocaleString()} ft · Wave ${waveHeightM}m`,
+      reason: `CAUTION: Gusts ${windGust10mKts} kt · Ceiling ${cloudCeilingFt.toLocaleString()} ft · ${waveTxt}`,
+    };
+  }
+  if (missingData.length > 0) {
+    return {
+      status: 'CAUTION',
+      reason: `NO DATA: the forecast has no ${missingData.join(', ')} here, so it is not counted as good to fly`,
     };
   }
 
   return {
     status: 'GO',
-    reason: `GO (${preset.id} Within Limits) — Gusts ${windGust10mKts} kt · Wave ${waveHeightM}m · 0°C at ${freezingLevelFt.toLocaleString()} ft`,
+    reason: `GO (${preset.id} Within Limits) — Gusts ${windGust10mKts} kt · ${waveTxt} · 0°C at ${freezingLevelFt.toLocaleString()} ft`,
   };
 }
 
@@ -228,7 +248,8 @@ export function evaluateGridPointStatus(
     pt.waveHeightM,
     pt.precipMmHr ?? 0,
     true,
-    preset
+    preset,
+    pt.missingData ?? []
   ).status;
 
   if (pt.lightningRisk === 'HIGH') return 'HOLD';
@@ -249,19 +270,23 @@ export function interpolateSpotWeatherAtLatLon(
   windGust10mKts: number;
   windDir10mDeg: number;
   windSpeed950hPaKts: number;
-  waveHeightM: number;
+  waveHeightM: number | null;
   freezingLevelFt: number;
   cloudCeilingFt: number;
-  seaSurfaceTempC: number;
+  seaSurfaceTempC: number | null;
   precipMmHr: number;
   capeJkg: number;
   lightningRisk: 'LOW' | 'MODERATE' | 'HIGH';
   lightningType: 'NONE' | 'TRIGGERED_WINTER' | 'CONVECTIVE_SHOWER' | 'NATURAL_TS';
   status: 'GO' | 'CAUTION' | 'HOLD';
 } | null {
+  // Points with gaps are left out rather than blended in with made-up values
+  gridPoints = gridPoints.filter((p) => !p.missingData || p.missingData.length === 0);
   if (gridPoints.length === 0) return null;
 
   let wSum = 0;
+  let waveW = 0;
+  let sstW = 0;
   let ws10 = 0;
   let wg10 = 0;
   let wd10 = 0;
@@ -291,10 +316,16 @@ export function interpolateSpotWeatherAtLatLon(
     wg10 += pt.windGust10mKts * w;
     wd10 += pt.windDir10mDeg * w;
     ws950 += pt.windSpeed950hPaKts * w;
-    wave += pt.waveHeightM * w;
+    if (pt.waveHeightM !== null) {
+      wave += pt.waveHeightM * w;
+      waveW += w;
+    }
     freeze += pt.freezingLevelFt * w;
     ceil += pt.cloudCeilingFt * w;
-    sst += pt.seaSurfaceTempC * w;
+    if (pt.seaSurfaceTempC !== null) {
+      sst += pt.seaSurfaceTempC * w;
+      sstW += w;
+    }
     precip += (pt.precipMmHr ?? 0) * w;
     cape += (pt.capeJkg ?? 0) * w;
     const ptRiskScore =
@@ -308,10 +339,12 @@ export function interpolateSpotWeatherAtLatLon(
   const finalWg10 = Math.round(wg10 / wSum);
   const finalWd10 = Math.round(wd10 / wSum);
   const finalWs950 = Math.round(ws950 / wSum);
-  const finalWave = Number((wave / wSum).toFixed(1));
+  // Only report waves where the nearest point has sea data (no waves over land)
+  const finalWave =
+    waveW > 0 && nearestPt.waveHeightM !== null ? Number((wave / waveW).toFixed(1)) : null;
   const finalFreeze = Math.round(freeze / wSum);
   const finalCeil = Math.round(ceil / wSum);
-  const finalSst = Number((sst / wSum).toFixed(1));
+  const finalSst = sstW > 0 && nearestPt.seaSurfaceTempC !== null ? Number((sst / sstW).toFixed(1)) : null;
   const finalPrecip = Number((precip / wSum).toFixed(1));
   const finalCape = Math.round(cape / wSum);
   const normLt = ltScore / wSum;
@@ -857,6 +890,7 @@ export async function fetchMultiModelRigForecast(
   preset: AirframeLimitPreset
 ): Promise<MultiModelHourEntry[]> {
   const isFpso = facility.assetType === 'FPSO' || facility.assetType === 'Semi-Sub';
+  const isShoreFacility = SHORE_ASSET_TYPES.has(facility.assetType);
 
   const hourlyVars = [
     'wind_speed_10m',
@@ -886,7 +920,7 @@ export async function fetchMultiModelRigForecast(
     'showers',
     'temperature_2m',
     'dew_point_2m',
-    'surface_pressure',
+    'pressure_msl',
     'cape',
     'weather_code',
   ].join(',');
@@ -958,9 +992,15 @@ export async function fetchMultiModelRigForecast(
         : FULL_DAYS[dt.getUTCDay()];
       const dateShort = `${dt.getUTCDate()} ${SHORT_MONTHS[dt.getUTCMonth()]}`;
 
-      const waveHeightM = Number((marHourly.wave_height?.[idx] ?? 2.1).toFixed(1));
-      const swellPeriodSec = Number((marHourly.wave_period?.[idx] ?? 8.2).toFixed(1));
-      const swellDirDeg = Math.round(marHourly.wave_direction?.[idx] ?? 240);
+      // No sea data (inland point or failed marine request) stays null rather than a made-up value
+      const marNum = (v: unknown): number | null =>
+        typeof v === 'number' && Number.isFinite(v) ? v : null;
+      const rawWave = marNum(marHourly.wave_height?.[idx]);
+      const waveHeightM = rawWave === null ? null : Number(rawWave.toFixed(1));
+      const rawPeriod = marNum(marHourly.wave_period?.[idx]);
+      const swellPeriodSec = rawPeriod === null ? null : Number(rawPeriod.toFixed(1));
+      const rawWaveDir = marNum(marHourly.wave_direction?.[idx]);
+      const swellDirDeg = rawWaveDir === null ? null : Math.round(rawWaveDir);
       const swellWaveHeightM =
         typeof marHourly.swell_wave_height?.[idx] === 'number'
           ? Number(marHourly.swell_wave_height[idx].toFixed(1))
@@ -973,9 +1013,8 @@ export async function fetchMultiModelRigForecast(
         typeof marHourly.swell_wave_direction?.[idx] === 'number'
           ? Math.round(marHourly.swell_wave_direction[idx])
           : undefined;
-      const seaSurfaceTempC = Number(
-        (marHourly.sea_surface_temperature?.[idx] ?? 9.8).toFixed(1)
-      );
+      const rawSst = marNum(marHourly.sea_surface_temperature?.[idx]);
+      const seaSurfaceTempC = rawSst === null ? null : Number(rawSst.toFixed(1));
 
       const modelsRecord = {} as Record<WeatherModelId, ModelPointSnapshot>;
 
@@ -985,10 +1024,21 @@ export async function fetchMultiModelRigForecast(
           const val = hourly[`${field}_${m}`]?.[idx];
           return typeof val === 'number' && !Number.isNaN(val) ? val : null;
         };
+        // Core values this model did not supply for this hour. Placeholder numbers below keep the
+        // maths running, but the hour is flagged, never counted as GO and left out of the model vote.
+        const missingData: string[] = [];
+        const core = (field: string, label: string, placeholder: number): number => {
+          const v = rawVal(field);
+          if (v === null) {
+            if (!missingData.includes(label)) missingData.push(label);
+            return placeholder;
+          }
+          return v;
+        };
 
-        const ws10 = Math.round(rawVal('wind_speed_10m') ?? 18);
-        const wd10 = Math.round(rawVal('wind_direction_10m') ?? 230);
-        const wg10 = Math.round(rawVal('wind_gusts_10m') ?? Math.round(ws10 * 1.28));
+        const ws10 = Math.round(core('wind_speed_10m', 'wind', 0));
+        const wd10 = Math.round(rawVal('wind_direction_10m') ?? 0);
+        const wg10 = Math.round(core('wind_gusts_10m', 'gusts', ws10));
         const rawWs80 = rawVal('wind_speed_80m');
         const ws80 = rawWs80 !== null ? Math.round(rawWs80) : undefined;
         const rawWd80 = rawVal('wind_direction_80m');
@@ -1006,7 +1056,9 @@ export async function fetchMultiModelRigForecast(
             rawVal('wind_speed_925hPa') ??
             Math.round(ws10 * 1.22)
         );
-        const approachShearKts = Math.max(0, ws950 - ws10);
+        // Only work out approach shear when the model actually gave an upper wind
+        const hasUpperWind = rawVal('wind_speed_950hPa') !== null || rawVal('wind_speed_925hPa') !== null;
+        const approachShearKts = hasUpperWind ? Math.max(0, ws950 - ws10) : undefined;
         const wd950 = Math.round(
           rawVal('wind_direction_950hPa') ??
             rawVal('wind_direction_925hPa') ??
@@ -1024,9 +1076,16 @@ export async function fetchMultiModelRigForecast(
         );
         const wd850 = Math.round(rawVal('wind_direction_850hPa') ?? wd950);
 
-        const temp2mC = Number((rawVal('temperature_2m') ?? 8.5).toFixed(1));
-        const dewPoint2mC = Number((rawVal('dew_point_2m') ?? temp2mC - 2.5).toFixed(1));
+        const temp2mC = Number(core('temperature_2m', 'temperature', 5).toFixed(1));
+        const dewPoint2mC = Number(core('dew_point_2m', 'dew point', temp2mC).toFixed(1));
         const dewSpreadC = Number(Math.max(0, temp2mC - dewPoint2mC).toFixed(1));
+        if (
+          rawVal('freezing_level_height') === null &&
+          rawVal('temperature_925hPa') === null &&
+          rawVal('temperature_850hPa') === null
+        ) {
+          missingData.push('freezing level');
+        }
         const t925 = rawVal('temperature_925hPa') ?? t950;
         const z925 = rawVal('geopotential_height_925hPa') ?? 720;
         const t850 = rawVal('temperature_850hPa') ?? t925 - 4.0;
@@ -1052,12 +1111,15 @@ export async function fetchMultiModelRigForecast(
           t500,
           z500
         );
-        const sstMinus500C = Number((seaSurfaceTempC - t500).toFixed(1));
+        const sstMinus500C =
+          seaSurfaceTempC === null ? undefined : Number((seaSurfaceTempC - t500).toFixed(1));
 
-        const lowCloudPct = rawVal('cloud_cover_low') ?? 45;
+        const lowCloudPct = core('cloud_cover_low', 'low cloud', 0);
         const precipMmHr = Number((rawVal('precipitation') ?? 0).toFixed(1));
         const showersMm = Number((rawVal('showers') ?? 0).toFixed(1));
-        const qnhHpa = Math.round(rawVal('surface_pressure') ?? 1010);
+        // QNH is pressure reduced to sea level, so use the model's mean-sea-level pressure
+        const rawMsl = rawVal('pressure_msl');
+        const qnhHpa = rawMsl === null ? null : Math.round(rawMsl);
         const capeVal = rawVal('cape');
         const wmoCode = rawVal('weather_code');
 
@@ -1112,10 +1174,11 @@ export async function fetchMultiModelRigForecast(
           cloudCeilingFt,
           visibilityKm,
           freezingLevelFt,
-          waveHeightM,
+          isShoreFacility ? null : waveHeightM,
           precipMmHr,
           isFpso,
-          preset
+          preset,
+          missingData
         );
 
         modelsRecord[m] = {
@@ -1153,6 +1216,7 @@ export async function fetchMultiModelRigForecast(
           qnhHpa,
           status: evalResult.status,
           statusReason: evalResult.reason,
+          missingData: missingData.length ? missingData : undefined,
         };
       }
 
@@ -1208,7 +1272,7 @@ export function buildSevenDayFlightWindowSummaries(
     const evalSet = opsHours.length > 0 ? opsHours : dayHours;
 
     let maxGustKts = 0;
-    let maxWaveM = 0;
+    let maxWaveM: number | null = null;
     let minCeilingFt = 99999;
     let minFreezingFt = 99999;
     let goCount = 0;
@@ -1220,7 +1284,7 @@ export function buildSevenDayFlightWindowSummaries(
       const snap = h.models[modelId];
       if (!snap) continue;
       if (snap.windGust10mKts > maxGustKts) maxGustKts = snap.windGust10mKts;
-      if (h.waveHeightM > maxWaveM) maxWaveM = h.waveHeightM;
+      if (h.waveHeightM !== null && (maxWaveM === null || h.waveHeightM > maxWaveM)) maxWaveM = h.waveHeightM;
       if (snap.cloudCeilingFt < minCeilingFt) minCeilingFt = snap.cloudCeilingFt;
       if (snap.freezingLevelFt < minFreezingFt) minFreezingFt = snap.freezingLevelFt;
 
@@ -1287,7 +1351,9 @@ export async function fetchFlightCorridorProfile(
   shoreBase: InstallationOrAirport,
   targetRig: InstallationOrAirport,
   preset: AirframeLimitPreset,
-  selectedHourIso?: string
+  selectedHourIso?: string,
+  /** Same model as the one picked in the weather panel */
+  modelId: WeatherModelId = 'ukmo_seamless'
 ): Promise<CorridorWaypointProfile[]> {
   const midLat = Number(((shoreBase.lat + targetRig.lat) / 2).toFixed(3));
   const midLon = Number(((shoreBase.lon + targetRig.lon) / 2).toFixed(3));
@@ -1312,6 +1378,7 @@ export async function fetchFlightCorridorProfile(
       lon: shoreBase.lon,
       distNm: 0,
       isFpso: false,
+      isShore: SHORE_ASSET_TYPES.has(shoreBase.assetType),
     },
     {
       label: `Mid-Route (${Math.round(totalDistNm / 2)} NM)`,
@@ -1320,6 +1387,8 @@ export async function fetchFlightCorridorProfile(
       lon: midLon,
       distNm: Math.round(totalDistNm / 2),
       isFpso: false,
+      // Overland when both ends are on land (e.g. base to hospital)
+      isShore: SHORE_ASSET_TYPES.has(shoreBase.assetType) && SHORE_ASSET_TYPES.has(targetRig.assetType),
     },
     {
       label: `Helideck (${targetRig.code})`,
@@ -1328,17 +1397,18 @@ export async function fetchFlightCorridorProfile(
       lon: targetRig.lon,
       distNm: Math.round(totalDistNm),
       isFpso: targetRig.assetType === 'FPSO' || targetRig.assetType === 'Semi-Sub',
+      isShore: SHORE_ASSET_TYPES.has(targetRig.assetType),
     },
   ];
 
-  const cacheKey = `${shoreBase.id}_${targetRig.id}`;
+  const cacheKey = `${shoreBase.id}_${targetRig.id}_${modelId}`;
   let cached = corridorRawCache.get(cacheKey);
 
   if (!cached || Date.now() - cached.fetchedAt > 300000) {
     const lats = points.map((p) => p.lat.toFixed(3)).join(',');
     const lons = points.map((p) => p.lon.toFixed(3)).join(',');
 
-    const wxUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,wind_speed_950hPa,wind_direction_950hPa,wind_speed_925hPa,wind_direction_925hPa,temperature_925hPa,geopotential_height_925hPa,wind_speed_850hPa,wind_direction_850hPa,temperature_850hPa,geopotential_height_850hPa,temperature_2m,dew_point_2m,cloud_cover_low,visibility,freezing_level_height,precipitation,cape,weather_code&wind_speed_unit=kn&forecast_days=7`;
+    const wxUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,wind_speed_950hPa,wind_direction_950hPa,wind_speed_925hPa,wind_direction_925hPa,temperature_925hPa,geopotential_height_925hPa,wind_speed_850hPa,wind_direction_850hPa,temperature_850hPa,geopotential_height_850hPa,temperature_2m,dew_point_2m,cloud_cover_low,visibility,freezing_level_height,precipitation,showers,cape,weather_code&models=${modelId}&wind_speed_unit=kn&forecast_days=7`;
     const marUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${lats}&longitude=${lons}&hourly=wave_height&forecast_days=7`;
 
     try {
@@ -1375,70 +1445,74 @@ export async function fetchFlightCorridorProfile(
       }
     }
 
-    const ws10 = Math.round(Number(w?.hourly?.wind_speed_10m?.[hrIdx] ?? 18));
-    const wd10 = Math.round(Number(w?.hourly?.wind_direction_10m?.[hrIdx] ?? 230));
-    const wg10 = Math.round(Number(w?.hourly?.wind_gusts_10m?.[hrIdx] ?? ws10 + 6));
+    // Single-model requests may come back with plain or model-suffixed field names
+    const rawT = (f: string): number | null => {
+      const v1 = w?.hourly?.[f]?.[hrIdx];
+      if (typeof v1 === 'number' && Number.isFinite(v1)) return v1;
+      const v2 = w?.hourly?.[`${f}_${modelId}`]?.[hrIdx];
+      return typeof v2 === 'number' && Number.isFinite(v2) ? v2 : null;
+    };
+    const missingData: string[] = [];
+    const core = (f: string, label: string, placeholder: number): number => {
+      const v = rawT(f);
+      if (v === null) {
+        if (!missingData.includes(label)) missingData.push(label);
+        return placeholder;
+      }
+      return v;
+    };
 
-    const ws950 = Math.round(
-      Number(
-        w?.hourly?.wind_speed_950hPa?.[hrIdx] ??
-          w?.hourly?.wind_speed_925hPa?.[hrIdx] ??
-          Math.round(ws10 * 1.25)
-      )
-    );
-    const wd950 = Math.round(
-      Number(
-        w?.hourly?.wind_direction_950hPa?.[hrIdx] ??
-          w?.hourly?.wind_direction_925hPa?.[hrIdx] ??
-          wd10
-      )
-    );
-    const ws850 = Math.round(
-      Number(w?.hourly?.wind_speed_850hPa?.[hrIdx] ?? Math.round(ws950 * 1.15))
-    );
-    const wd850 = Math.round(Number(w?.hourly?.wind_direction_850hPa?.[hrIdx] ?? wd950));
+    const ws10 = Math.round(core('wind_speed_10m', 'wind', 0));
+    const wd10 = Math.round(rawT('wind_direction_10m') ?? 0);
+    const wg10 = Math.round(core('wind_gusts_10m', 'gusts', ws10));
+
+    const ws950 = Math.round(rawT('wind_speed_950hPa') ?? rawT('wind_speed_925hPa') ?? ws10);
+    const wd950 = Math.round(rawT('wind_direction_950hPa') ?? rawT('wind_direction_925hPa') ?? wd10);
+    const ws850 = Math.round(rawT('wind_speed_850hPa') ?? ws950);
+    const wd850 = Math.round(rawT('wind_direction_850hPa') ?? wd950);
 
     const angleRad = ((wd950 - outboundTrackDeg) * Math.PI) / 180;
     const headwind950Kts = Math.round(ws950 * Math.cos(angleRad));
 
-    const t2m = Number(w?.hourly?.temperature_2m?.[hrIdx] ?? 8.5);
-    const dp2m = Number(w?.hourly?.dew_point_2m?.[hrIdx] ?? t2m - 2.5);
-    const t925 = Number(w?.hourly?.temperature_925hPa?.[hrIdx] ?? 4.0);
-    const z925 = Number(w?.hourly?.geopotential_height_925hPa?.[hrIdx] ?? 720);
-    const t850 = Number(w?.hourly?.temperature_850hPa?.[hrIdx] ?? 0.5);
-    const z850 = Number(w?.hourly?.geopotential_height_850hPa?.[hrIdx] ?? 1420);
-    const rawFreeze = w?.hourly?.freezing_level_height?.[hrIdx];
+    const t2m = core('temperature_2m', 'temperature', 5);
+    const dp2m = core('dew_point_2m', 'dew point', t2m);
+    const t925 = rawT('temperature_925hPa') ?? t2m - 5;
+    const z925 = rawT('geopotential_height_925hPa') ?? 760;
+    const t850 = rawT('temperature_850hPa') ?? t925 - 4;
+    const z850 = rawT('geopotential_height_850hPa') ?? 1460;
+    const rawFreeze = rawT('freezing_level_height');
+    if (rawFreeze === null && rawT('temperature_925hPa') === null && rawT('temperature_850hPa') === null) {
+      missingData.push('freezing level');
+    }
 
-    const freezingLevelFt = computeNativeFreezingLevelFt(
-      typeof rawFreeze === 'number' ? rawFreeze : null,
-      t2m,
-      t925,
-      z925,
-      t850,
-      z850
-    );
+    const freezingLevelFt = computeNativeFreezingLevelFt(rawFreeze, t2m, t925, z925, t850, z850);
 
-    const visKm = Number(
-      Math.min(
-        50,
-        Math.max(0.2, Number(w?.hourly?.visibility?.[hrIdx] ?? 18000) / 1000)
-      ).toFixed(1)
-    );
-    const lowCloud = Number(w?.hourly?.cloud_cover_low?.[hrIdx] ?? 40);
+    const rawVisM = rawT('visibility');
+    const dewGap = Math.max(0, t2m - dp2m);
+    const visKm =
+      rawVisM !== null
+        ? Number(Math.min(50, Math.max(0.2, rawVisM / 1000)).toFixed(1))
+        : Number(Math.min(35, Math.max(1.5, 10 + dewGap * 4)).toFixed(1));
+    const lowCloud = core('cloud_cover_low', 'low cloud', 0);
     const cloudCeilingFt = computePhysicalCloudCeilingFt(t2m, dp2m, lowCloud, visKm);
-    const waveHeightM = Number(Number(m?.hourly?.wave_height?.[hrIdx] ?? 2.0).toFixed(1));
-    const precip = Number(w?.hourly?.precipitation?.[hrIdx] ?? 0);
-    const capeVal = typeof w?.hourly?.cape?.[hrIdx] === 'number' ? Number(w.hourly.cape[hrIdx]) : 0;
-    const wmoCode = typeof w?.hourly?.weather_code?.[hrIdx] === 'number' ? Number(w.hourly.weather_code[hrIdx]) : 0;
+    // No sea-state limit at an airfield, and no made-up waves where there is no sea data
+    const rawWave = m?.hourly?.wave_height?.[hrIdx];
+    const waveHeightM =
+      pt.isShore || typeof rawWave !== 'number' || !Number.isFinite(rawWave)
+        ? null
+        : Number(rawWave.toFixed(1));
+    if (!pt.isShore && waveHeightM === null) missingData.push('sea state');
+    const precip = rawT('precipitation') ?? 0;
+    const capeRaw = rawT('cape');
+    const capeVal = capeRaw ?? 0;
     const dewSpreadC = Number(Math.max(0, t2m - dp2m).toFixed(1));
-    const rawT = (f: string): number | null =>
-      typeof w?.hourly?.[f]?.[hrIdx] === 'number' ? Number(w.hourly[f][hrIdx]) : null;
     const lightningRisk: 'LOW' | 'MODERATE' | 'HIGH' = classifyNorthSeaConvection({
-      cape: typeof w?.hourly?.cape?.[hrIdx] === 'number' ? capeVal : null,
-      wmo: typeof w?.hourly?.weather_code?.[hrIdx] === 'number' ? wmoCode : null,
+      cape: capeRaw,
+      wmo: rawT('weather_code'),
       precip,
-      showers: Number(w?.hourly?.showers?.[hrIdx] ?? 0),
+      showers: rawT('showers') ?? 0,
       freezeFt: freezingLevelFt,
+      gridKm: MODEL_GRID_KM[modelId],
       layerTempC: averageTempInLayerC(
         [
           { heightM: 2, tempC: rawT('temperature_2m') },
@@ -1459,7 +1533,8 @@ export async function fetchFlightCorridorProfile(
       waveHeightM,
       precip,
       pt.isFpso,
-      preset
+      preset,
+      missingData
     );
 
     const effectiveStatus: 'GO' | 'CAUTION' | 'HOLD' =
@@ -1494,6 +1569,7 @@ export async function fetchFlightCorridorProfile(
       isFpso: pt.isFpso,
       status: effectiveStatus,
       ceilingSource: 'model_estimate',
+      missingData: missingData.length ? missingData : undefined,
     };
   });
 }
@@ -1517,7 +1593,8 @@ export function applyReportedCeilingToWaypoint(
     wp.waveHeightM,
     wp.precipMmHr ?? 0,
     Boolean(wp.isFpso),
-    preset
+    preset,
+    wp.missingData ?? []
   );
   const status: 'GO' | 'CAUTION' | 'HOLD' =
     wp.lightningRisk === 'HIGH'
@@ -1636,14 +1713,19 @@ export async function fetchWeatherPointsAt(
       return null;
     };
 
-    const ws10 = Math.round(pickRaw('wind_speed_10m') ?? 18);
-    const wd10 = Math.round(pickRaw('wind_direction_10m') ?? 235);
-    const wg10 = Math.round(pickRaw('wind_gusts_10m') ?? Math.round(ws10 * 1.28));
-    const ws950 = Math.round(
-      pickRaw('wind_speed_950hPa') ??
-        pickRaw('wind_speed_925hPa') ??
-        Math.round(ws10 * 1.22)
-    );
+    const missingData: string[] = [];
+    const core = (field: string, label: string, placeholder: number): number => {
+      const v = pickRaw(field);
+      if (v === null) {
+        if (!missingData.includes(label)) missingData.push(label);
+        return placeholder;
+      }
+      return v;
+    };
+    const ws10 = Math.round(core('wind_speed_10m', 'wind', 0));
+    const wd10 = Math.round(pickRaw('wind_direction_10m') ?? 0);
+    const wg10 = Math.round(core('wind_gusts_10m', 'gusts', ws10));
+    const ws950 = Math.round(pickRaw('wind_speed_950hPa') ?? pickRaw('wind_speed_925hPa') ?? ws10);
     const wd950 = Math.round(
       pickRaw('wind_direction_950hPa') ??
         pickRaw('wind_direction_925hPa') ??
@@ -1654,11 +1736,18 @@ export async function fetchWeatherPointsAt(
     );
     const wd850 = Math.round(pickRaw('wind_direction_850hPa') ?? wd950);
 
-    const t2m = pickRaw('temperature_2m') ?? 8.5;
-    const dp2m = pickRaw('dew_point_2m') ?? t2m - 2.5;
-    const t925 = pickRaw('temperature_925hPa') ?? 4.0;
+    const t2m = core('temperature_2m', 'temperature', 5);
+    const dp2m = core('dew_point_2m', 'dew point', t2m);
+    if (
+      pickRaw('freezing_level_height') === null &&
+      pickRaw('temperature_925hPa') === null &&
+      pickRaw('temperature_850hPa') === null
+    ) {
+      missingData.push('freezing level');
+    }
+    const t925 = pickRaw('temperature_925hPa') ?? t2m - 5;
     const z925 = pickRaw('geopotential_height_925hPa') ?? 720;
-    const t850 = pickRaw('temperature_850hPa') ?? 0.5;
+    const t850 = pickRaw('temperature_850hPa') ?? t925 - 4;
     const z850 = pickRaw('geopotential_height_850hPa') ?? 1420;
     const t700 = pickRaw('temperature_700hPa') ?? t850 - 7.5;
     const z700 = pickRaw('geopotential_height_700hPa') ?? 2950;
@@ -1687,20 +1776,23 @@ export async function fetchWeatherPointsAt(
       rawVis !== null
         ? Number(Math.min(50, Math.max(0.2, rawVis / 1000)).toFixed(1))
         : Number(Math.min(35, Math.max(1.5, 10 + (t2m - dp2m) * 4)).toFixed(1));
-    const lowCloud = pickRaw('cloud_cover_low') ?? 45;
+    const lowCloud = core('cloud_cover_low', 'low cloud', 0);
     const cloudCeilingFt = computePhysicalCloudCeilingFt(t2m, dp2m, lowCloud, visKm);
 
-    const waveHeightM = Number(Number(marHourly.wave_height?.[hr] ?? 2.0).toFixed(1));
-    const waveDirDeg = Math.round(Number(marHourly.wave_direction?.[hr] ?? wd10));
-    const seaSurfaceTempC = Number(
-      Number(marHourly.sea_surface_temperature?.[hr] ?? 9.5).toFixed(1)
-    );
+    // Land points have no sea data: leave waves empty rather than inventing them
+    const marNum = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+    const rawWave = marNum(marHourly.wave_height?.[hr]);
+    const waveHeightM = rawWave === null ? null : Number(rawWave.toFixed(1));
+    const rawWaveDir = marNum(marHourly.wave_direction?.[hr]);
+    const waveDirDeg = rawWaveDir === null ? null : Math.round(rawWaveDir);
+    const rawSst = marNum(marHourly.sea_surface_temperature?.[hr]);
+    const seaSurfaceTempC = rawSst === null ? null : Number(rawSst.toFixed(1));
 
     const precipMmHr = Number((pickRaw('precipitation') ?? 0).toFixed(1));
     const showersMm = Number((pickRaw('showers') ?? 0).toFixed(1));
     const rawCape = pickRaw('cape');
     const rawWmo = pickRaw('weather_code');
-    const sstMinus500C = Number((seaSurfaceTempC - t500).toFixed(1));
+    const sstMinus500C = seaSurfaceTempC === null ? undefined : Number((seaSurfaceTempC - t500).toFixed(1));
 
     const conv = classifyNorthSeaConvection({
       cape: rawCape,
@@ -1744,6 +1836,7 @@ export async function fetchWeatherPointsAt(
       minus10IsothermFt,
       lightningRisk: conv.risk,
       lightningType: conv.type,
+      missingData: missingData.length ? missingData : undefined,
     };
   });
 }

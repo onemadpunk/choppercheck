@@ -260,9 +260,11 @@ export interface ModelPointSnapshot {
   lightningRisk?: 'LOW' | 'MODERATE' | 'HIGH';
   lightningType?: 'NONE' | 'TRIGGERED_WINTER' | 'CONVECTIVE_SHOWER' | 'NATURAL_TS';
   fogSpreadRisk?: 'LOW' | 'MODERATE' | 'HIGH';
-  qnhHpa: number;
+  qnhHpa: number | null;
   status: 'GO' | 'CAUTION' | 'HOLD';
   statusReason: string;
+  /** Values this model did not supply for this hour (e.g. 'wind', 'low cloud'). Such hours are never GO. */
+  missingData?: string[];
 }
 
 export interface MultiModelHourEntry {
@@ -274,13 +276,14 @@ export interface MultiModelHourEntry {
   dayNameFull: string;
   dateShort: string;
   isNight?: boolean;
-  waveHeightM: number;
-  swellPeriodSec: number;
-  swellDirDeg: number;
+  /** Significant wave height; null when there is no sea data (inland points or a failed marine request). */
+  waveHeightM: number | null;
+  swellPeriodSec: number | null;
+  swellDirDeg: number | null;
   swellWaveHeightM?: number;
   swellWavePeriodSec?: number;
   swellWaveDirDeg?: number;
-  seaSurfaceTempC: number;
+  seaSurfaceTempC: number | null;
   models: Record<WeatherModelId, ModelPointSnapshot>;
 }
 
@@ -292,7 +295,7 @@ export interface DayFlightWindowSummary {
   representativeHourIndex: number;
   overallStatus: 'GO' | 'CAUTION' | 'HOLD';
   maxGustKts: number;
-  maxWaveM: number;
+  maxWaveM: number | null;
   minCeilingFt: number;
   minFreezingFt: number;
   goHoursCount: number;
@@ -332,6 +335,8 @@ export interface FiveModelConsensusSummary {
   freezeMinFt: number;
   freezeMaxFt: number;
   dissentingModels: string[];
+  /** Models left out of the vote because they had gaps for this hour. */
+  noDataModels: string[];
 }
 
 export interface CorridorWaypointProfile {
@@ -351,7 +356,8 @@ export interface CorridorWaypointProfile {
   freezingLevelFt: number;
   cloudCeilingFt: number;
   visibilityKm: number;
-  waveHeightM: number;
+  /** null at the shore airport (no sea limit) or where there is no sea data. */
+  waveHeightM: number | null;
   dewSpreadC?: number;
   capeJkg?: number;
   lightningRisk?: 'LOW' | 'MODERATE' | 'HIGH';
@@ -361,6 +367,7 @@ export interface CorridorWaypointProfile {
   /** model_estimate: worked out from model temperature/dewpoint/low cloud. metar: reported by the airport. */
   ceilingSource?: 'model_estimate' | 'metar';
   ceilingStationIcao?: string;
+  missingData?: string[];
 }
 
 export interface SpatialWeatherGridPoint {
@@ -376,15 +383,16 @@ export interface SpatialWeatherGridPoint {
   freezingLevelFt: number;
   cloudCeilingFt: number;
   visibilityKm: number;
-  waveHeightM: number;
-  waveDirDeg: number;
-  seaSurfaceTempC: number;
+  waveHeightM: number | null;
+  waveDirDeg: number | null;
+  seaSurfaceTempC: number | null;
   precipMmHr?: number;
   capeJkg?: number;
   wmoWeatherCode?: number;
   minus10IsothermFt?: number;
   lightningRisk?: 'LOW' | 'MODERATE' | 'HIGH';
   lightningType?: 'NONE' | 'TRIGGERED_WINTER' | 'CONVECTIVE_SHOWER' | 'NATURAL_TS';
+  missingData?: string[];
 }
 
 export interface HeliportTerminal {

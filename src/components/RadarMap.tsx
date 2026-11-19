@@ -24,10 +24,11 @@ import {
   evaluateCorridorLightningBypass,
   fetchRainViewerRadarFrames,
   interpolateSpotWeatherAtLatLon,
+  SHORE_ASSET_TYPES,
 } from '../services/multiModelWeatherService';
 import {
   buildContextAwareSevenDaySummaries,
-  evaluateHourWithLimits,
+  evaluateFacilityHour,
 } from '../utils/solarAndMetUtils';
 import { WeatherStreamlineCanvas } from './WeatherStreamlineCanvas';
 import {
@@ -342,19 +343,21 @@ export const RadarMap: React.FC<RadarMapProps> = ({
   );
   const activeHour = hourlyForecast[selectedHourIdx] || hourlyForecast[0];
   const activeHourSnap = activeHour?.models[weatherModelId];
+  // Same evaluation as the weather panel (limits + deck motion estimate), so the card and panel agree
+  const isSemiSub = activeFacility.assetType === 'Semi-Sub';
   const activeHourEval = useMemo(() => {
     if (!activeHour || !activeHourSnap) return null;
-    return evaluateHourWithLimits(
-      activeHourSnap,
-      activeHour.waveHeightM,
-      activeHour.swellPeriodSec,
-      Boolean(activeHour.isNight),
+    return evaluateFacilityHour({
+      snap: activeHourSnap,
+      hour: activeHour,
+      isNight: Boolean(activeHour.isNight),
       isFpso,
-      activePreset,
+      isSemiSub,
+      preset: activePreset,
       flightOpsMode,
-      customOverride
-    );
-  }, [activeHour, activeHourSnap, isFpso, activePreset, flightOpsMode, customOverride]);
+      customOverride,
+    });
+  }, [activeHour, activeHourSnap, isFpso, isSemiSub, activePreset, flightOpsMode, customOverride]);
 
   // Live Ventusky-style spot-check readout at cursor / tap coordinate
   const spotWeather = useMemo(
@@ -749,23 +752,16 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       ? 'Satellite'
       : 'Daylight Map';
 
-  const hudStatus =
-    activeHourEval?.status ||
-    activeHourSnap?.status ||
-    (weather?.cap437Status && weather.cap437Status !== 'UNAVAILABLE'
-      ? weather.cap437Status
-      : 'GO');
-  const hudWindSpd =
-    activeHourSnap?.deckWindSpeedKts ??
-    activeHourSnap?.windSpeed10mKts ??
-    weather?.windSpeedKts ??
-    20;
-  const hudWindGust =
-    activeHourSnap?.deckWindGustKts ??
-    activeHourSnap?.windGust10mKts ??
-    weather?.windGustKts ??
-    26;
-  const hudWave = activeHour?.waveHeightM ?? weather?.significantWaveHeightM ?? 2.1;
+  // Never show GO without a forecast: with nothing loaded the card says "NO DATA"
+  const hudStatus: 'GO' | 'CAUTION' | 'HOLD' | 'NODATA' = activeHourEval?.status ?? 'NODATA';
+  const hudMissing = new Set(activeHourSnap?.missingData ?? []);
+  const hudWindGust: number | null = activeHourSnap
+    ? hudMissing.has('gusts')
+      ? null
+      : activeHourSnap.deckWindGustKts ?? activeHourSnap.windGust10mKts
+    : weather?.windGustKts ?? null;
+  const hudWave: number | null = activeHour ? activeHour.waveHeightM : weather?.significantWaveHeightM ?? null;
+  const hudIsShore = SHORE_ASSET_TYPES.has(activeFacility.assetType);
 
   return (
     <div
@@ -800,7 +796,9 @@ export const RadarMap: React.FC<RadarMapProps> = ({
             <span className="font-semibold text-white truncate">{activeFacility.code}</span>
             <span
               className={`font-bold whitespace-nowrap ${
-                hudStatus === 'GO'
+                hudStatus === 'NODATA'
+                    ? 'text-slate-400'
+                    : hudStatus === 'GO'
                     ? 'text-emerald-400'
                     : hudStatus === 'CAUTION'
                     ? 'text-amber-400'
@@ -808,12 +806,14 @@ export const RadarMap: React.FC<RadarMapProps> = ({
               }`}
             >
               ● {viewMode === 'simple'
-                ? hudStatus === 'GO'
+                ? hudStatus === 'NODATA'
+                  ? 'NO DATA'
+                  : hudStatus === 'GO'
                   ? 'GOOD'
                   : hudStatus === 'CAUTION'
                   ? 'DELAY?'
                   : 'HOLD'
-                : `${activePreset.id} ${hudStatus}`}
+                : hudStatus === 'NODATA' ? 'NO DATA' : `${activePreset.id} ${hudStatus}`}
             </span>
             <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
           </button>
@@ -876,7 +876,9 @@ export const RadarMap: React.FC<RadarMapProps> = ({
               <div className="w-full flex items-center justify-between gap-1.5 text-[11px] font-mono">
                 <span
                   className={`font-bold ${
-                    hudStatus === 'GO'
+                    hudStatus === 'NODATA'
+                      ? 'text-slate-400'
+                      : hudStatus === 'GO'
                       ? 'text-emerald-400'
                       : hudStatus === 'CAUTION'
                       ? 'text-amber-400'
@@ -885,12 +887,14 @@ export const RadarMap: React.FC<RadarMapProps> = ({
                 >
                   ●{' '}
                   {viewMode === 'simple'
-                    ? hudStatus === 'GO'
+                    ? hudStatus === 'NODATA'
+                      ? 'NO FORECAST DATA'
+                      : hudStatus === 'GO'
                       ? 'GOOD TO FLY'
                       : hudStatus === 'CAUTION'
                       ? 'POSSIBLE DELAY'
                       : 'WEATHER HOLD'
-                    : `${activePreset.id} ${hudStatus}`}
+                    : hudStatus === 'NODATA' ? 'NO DATA' : `${activePreset.id} ${hudStatus}`}
                 </span>
                 <span className="text-cyan-400 font-sans font-semibold text-[10px]">
                   Open 7-Day Weather →
@@ -898,10 +902,14 @@ export const RadarMap: React.FC<RadarMapProps> = ({
               </div>
               <div className="w-full flex items-center justify-between text-[10px] font-mono text-slate-300 tabular-nums">
                 <span>
-                  Wind {hudWindGust}kt gusts · Waves {hudWave}m
+                  {hudStatus === 'NODATA' && hudWindGust === null
+                    ? 'Forecast not loaded'
+                    : `Wind ${hudWindGust === null ? 'no data' : `${hudWindGust}kt gusts`} · ${
+                        hudWave === null ? (hudIsShore ? 'not at sea' : 'no sea data') : `Waves ${hudWave}m`
+                      }`}
                 </span>
                 <span className="text-slate-400">
-                  {activeHour ? `${activeHour.dayNameShort} ${activeHour.hourLabel}Z` : 'Live'}
+                  {activeHour ? `${activeHour.dayNameShort} ${activeHour.hourLabel}Z` : ''}
                 </span>
               </div>
             </button>
@@ -1406,7 +1414,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
               950hPa {spotWeather.windSpeed950hPaKts}kt
             </span>
             <span className="text-sky-300 tabular-nums">
-              Wave {spotWeather.waveHeightM}m
+              {spotWeather.waveHeightM === null ? 'No sea data' : `Wave ${spotWeather.waveHeightM}m`}
             </span>
             <span className="text-purple-300 tabular-nums">
               0°C {spotWeather.freezingLevelFt.toLocaleString()}ft

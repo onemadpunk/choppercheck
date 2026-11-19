@@ -63,6 +63,9 @@ function interpolateGrid(
 
   for (let i = 0; i < gridPoints.length; i++) {
     const pt = gridPoints[i];
+    // Skip points with gaps (never blend in placeholder values) and land points on the wave layer
+    if (pt.missingData && pt.missingData.length > 0) continue;
+    if (overlayMode === 'wave_swell' && pt.waveHeightM === null) continue;
     const dLat = lat - pt.lat;
     const dLon = (lon - pt.lon) * 0.56; // cos(57 deg) aspect correction
     const rawDistSq = dLat * dLat + dLon * dLon;
@@ -85,8 +88,8 @@ function interpolateGrid(
       windSpd = pt.windSpeed850hPaKts;
       windDir = pt.windDir850hPaDeg;
     } else if (overlayMode === 'wave_swell') {
-      windSpd = Math.max(8, pt.waveHeightM * 7);
-      windDir = pt.waveDirDeg;
+      windSpd = Math.max(8, (pt.waveHeightM ?? 0) * 7);
+      windDir = pt.waveDirDeg ?? pt.windDir10mDeg;
     }
 
     // Meteorological wind direction is FROM (degrees clockwise from North).
@@ -165,16 +168,17 @@ function interpolateGrid(
         b = 129; // Calm Emerald
       }
     } else if (overlayMode === 'wave_swell') {
-      scalar = pt.waveHeightM;
-      if (pt.waveHeightM >= 5.0) {
+      const hs = pt.waveHeightM ?? 0;
+      scalar = hs;
+      if (hs >= 5.0) {
         r = 239;
         g = 68;
         b = 68;
-      } else if (pt.waveHeightM >= 3.2) {
+      } else if (hs >= 3.2) {
         r = 245;
         g = 158;
         b = 11;
-      } else if (pt.waveHeightM >= 1.5) {
+      } else if (hs >= 1.5) {
         r = 56;
         g = 189;
         b = 248;
