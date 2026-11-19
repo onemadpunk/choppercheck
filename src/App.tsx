@@ -28,6 +28,7 @@ import {
   fetchFlightCorridorProfile,
   fetchMultiModelRigForecast,
   fetchSpatialWeatherGrid,
+  fetchCorridorTrackSamples,
 } from './services/multiModelWeatherService';
 import { RadarMap } from './components/RadarMap';
 import { FlightDossierPanel } from './components/FlightDossierPanel';
@@ -272,6 +273,7 @@ export default function App() {
   const [weatherModelId, setWeatherModelId] = useState<WeatherModelId>('ukmo_seamless');
   const [airframePresetId, setAirframePresetId] = useState<AirframePresetId>('S92');
   const [spatialGrid, setSpatialGrid] = useState<SpatialWeatherGridPoint[]>([]);
+  const [corridorRouteSamples, setCorridorRouteSamples] = useState<SpatialWeatherGridPoint[]>([]);
   const [hourlyForecast, setHourlyForecast] = useState<MultiModelHourEntry[]>([]);
   const [selectedHourIdx, setSelectedHourIdx] = useState<number>(0);
   const [corridorWaypoints, setCorridorWaypoints] = useState<CorridorWaypointProfile[]>([]);
@@ -751,6 +753,29 @@ export default function App() {
       cancelled = true;
     };
   }, [shoreBaseFacility, activeFacility, activePreset, selectedHourIso]);
+
+  // Sample the selected model along the shore base -> rig track and both 18 NM detours, only while
+  // the lightning overlay is on, so the route check is not limited to the coarse background grid.
+  useEffect(() => {
+    if (
+      weatherOverlayMode !== 'triggered_lightning' ||
+      activeFacility.id === 'map-reference' ||
+      activeFacility.id === shoreBaseFacility.id
+    ) {
+      setCorridorRouteSamples([]);
+      return;
+    }
+    let cancelled = false;
+    setCorridorRouteSamples([]);
+    void fetchCorridorTrackSamples(shoreBaseFacility, activeFacility, weatherModelId, selectedHourIso).then(
+      (samples) => {
+        if (!cancelled) setCorridorRouteSamples(samples);
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [weatherOverlayMode, shoreBaseFacility, activeFacility, weatherModelId, selectedHourIso]);
 
   // Update 25-point UK & North Sea Spatial Weather Grid for the selected model & forecast hour
   useEffect(() => {
@@ -1449,6 +1474,8 @@ export default function App() {
             airframePresetId={airframePresetId}
             onChangeAirframePresetId={setAirframePresetId}
             spatialGrid={spatialGrid}
+            shoreBaseFacility={shoreBaseFacility}
+            corridorRouteSamples={corridorRouteSamples}
             hourlyForecast={hourlyForecast}
             selectedHourIdx={selectedHourIdx}
             onChangeSelectedHourIdx={setSelectedHourIdx}

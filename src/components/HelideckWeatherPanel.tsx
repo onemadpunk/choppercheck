@@ -16,6 +16,7 @@ import {
   AIRFRAME_PRESETS,
   WEATHER_MODELS_META,
   fetchNearbyOffshoreOrUpwindMetars,
+  applyReportedCeilingToWaypoint,
 } from '../services/multiModelWeatherService';
 import { calculateBearingDeg, calculateDistanceNm } from '../data/aircraftDecoder';
 import {
@@ -29,6 +30,8 @@ import {
   evaluateFpsoSwellRisk,
   deriveEffectiveLimits,
   evaluateHourWithLimits,
+  parseMetarCloudBase,
+  NO_CEILING_FT,
   formatCrewOutlookSummary,
 } from '../utils/solarAndMetUtils';
 import {
@@ -107,7 +110,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   hourlyForecast,
   selectedHourIdx,
   onChangeSelectedHourIdx,
-  corridorWaypoints,
+  corridorWaypoints: corridorWaypointsModel,
   ensembleLoading,
   flightOpsMode,
   onChangeFlightOpsMode,
@@ -200,8 +203,52 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     return computeSolarTimesUtc(facility.lat, facility.lon, refDate);
   }, [facility.lat, facility.lon, activeHour]);
 
-  const activeModelSnapshot = activeHour?.models[weatherModelId];
   const isNightHour = Boolean(activeHour?.isNight);
+
+  // Reported cloud base from the airport METAR. Only used for the hour that is happening now and
+  // only while the report is under 90 minutes old; forecast hours and offshore points stay model estimates.
+  const isCurrentHour = (() => {
+    if (!activeHour?.hourIso) return false;
+    const startMs = new Date(activeHour.hourIso + 'Z').getTime();
+    const nowMs = Date.now();
+    return Number.isFinite(startMs) && nowMs >= startMs && nowMs < startMs + 3600_000;
+  })();
+  const metarIsFresh =
+    typeof weather?.metarTime === 'number' && Date.now() - weather.metarTime <= 90 * 60_000;
+  const reportedCloud = useMemo(
+    () => (isCurrentHour && metarIsFresh ? parseMetarCloudBase(weather?.rawMetar) : null),
+    [isCurrentHour, metarIsFresh, weather?.rawMetar]
+  );
+  const reportedCeilingFt = reportedCloud
+    ? reportedCloud.ceilingFt ?? NO_CEILING_FT
+    : null;
+  const metarStation = weather?.shoreBaseIcao || '';
+  // The facility itself is the airport that issued the METAR (e.g. viewing Aberdeen or Sumburgh)
+  const facilityHasReportedCeiling = reportedCeilingFt !== null && metarStation === facility.code;
+
+  const modelSnapshot = activeHour?.models[weatherModelId];
+  const activeModelSnapshot = useMemo(
+    () =>
+      modelSnapshot && facilityHasReportedCeiling && reportedCeilingFt !== null
+        ? { ...modelSnapshot, cloudCeilingFt: reportedCeilingFt }
+        : modelSnapshot,
+    [modelSnapshot, facilityHasReportedCeiling, reportedCeilingFt]
+  );
+
+  // Shore base leg of the route: use the reported ceiling when the METAR is from that airport
+  const corridorWaypoints = useMemo(() => {
+    if (
+      reportedCeilingFt === null ||
+      corridorWaypointsModel.length === 0 ||
+      metarStation !== shoreBaseFacility.code
+    ) {
+      return corridorWaypointsModel;
+    }
+    return [
+      applyReportedCeilingToWaypoint(corridorWaypointsModel[0], reportedCeilingFt, metarStation, preset),
+      ...corridorWaypointsModel.slice(1),
+    ];
+  }, [corridorWaypointsModel, reportedCeilingFt, metarStation, shoreBaseFacility.code, preset]);
 
   const evaluatedActive = useMemo(() => {
     if (!activeModelSnapshot || !activeHour) return null;
@@ -234,9 +281,10 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
       isFpso,
       preset,
       flightOpsMode,
-      customOverride
+      customOverride,
+      isSemiSub
     );
-  }, [activeHour, isFpso, preset, flightOpsMode, customOverride]);
+  }, [activeHour, isFpso, preset, flightOpsMode, customOverride, isSemiSub]);
 
   const inboundHelis = useMemo(() => {
     if (!flights || flights.length === 0) return [];
@@ -269,23 +317,6 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   }
 
   const effLimits = evaluatedActive?.limits;
-  const currentStatus =
-    evaluatedActive?.status ||
-    activeModelSnapshot?.status ||
-    (!weather || weather.cap437Status === 'UNAVAILABLE' ? 'GO' : weather.cap437Status);
-  const currentReason =
-    evaluatedActive?.reason ||
-    activeModelSnapshot?.statusReason ||
-    weather?.cap437Reason ||
-    '7-Day Multi-Model Offshore Operating Limits Active';
-
-  const statusColor =
-    currentStatus === 'GO'
-      ? 'text-emerald-400 border-emerald-500/40 bg-emerald-950/20'
-      : currentStatus === 'CAUTION'
-      ? 'text-amber-400 border-amber-500/40 bg-amber-950/20'
-      : 'text-rose-400 border-rose-500/50 bg-rose-950/30';
-
   const delayColor =
     weather?.delayRiskLevel === 'HIGH'
       ? 'border-rose-500/50 bg-rose-950/25 text-rose-300'
@@ -330,6 +361,55 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
 
   const waveVal = activeHour?.waveHeightM ?? weather?.significantWaveHeightM ?? 0;
   const wavePeriodVal = activeHour?.swellPeriodSec ?? weather?.swellPeriodSec ?? 7;
+  // FPSO Wind-Over-Deck Sector if heading saved
+  const windDirNow = activeModelSnapshot?.windDir10mDeg ?? weather?.windDirectionDeg ?? 230;
+  const windOverDeck =
+    isFpso && typeof customOverride?.vesselHeadingDeg === 'number'
+      ? computeWindOverDeckSector(windDirNow, customOverride.vesselHeadingDeg)
+      : null;
+
+  const fpsoMotionEstimate = (() => {
+    if (!isFpso) return null;
+    return computeEstimatedFpsoDeckMotion({
+      waveHeightM: waveVal,
+      swellPeriodSec: wavePeriodVal,
+      swellWaveHeightM: activeHour?.swellWaveHeightM,
+      swellWavePeriodSec: activeHour?.swellWavePeriodSec,
+      swellDirDeg: activeHour?.swellDirDeg,
+      windDirDeg: windDirNow,
+      vesselHeadingDeg: customOverride?.vesselHeadingDeg,
+      maxPitchRollLimit,
+      maxInclinationLimit,
+      maxShrLimit,
+    });
+  })();
+
+  // The wave-derived deck motion estimate feeds the verdict: if it says the deck may move more than
+  // the limits, a GO becomes CAUTION. It never makes a HOLD on its own because it is only an estimate;
+  // the vessel's live helideck monitoring system (HMS) decides.
+  const baseStatus: 'GO' | 'CAUTION' | 'HOLD' =
+    evaluatedActive?.status ||
+    activeModelSnapshot?.status ||
+    (!weather || weather.cap437Status === 'UNAVAILABLE' ? 'GO' : weather.cap437Status);
+  const baseReason =
+    evaluatedActive?.reason ||
+    activeModelSnapshot?.statusReason ||
+    weather?.cap437Reason ||
+    '7-Day Multi-Model Offshore Operating Limits Active';
+  const deckMotionRaisesCaution =
+    isFpso && fpsoMotionEstimate?.deckLightStatus === 'RED' && baseStatus === 'GO';
+  const currentStatus: 'GO' | 'CAUTION' | 'HOLD' = deckMotionRaisesCaution ? 'CAUTION' : baseStatus;
+  const currentReason = deckMotionRaisesCaution
+    ? `DECK MOTION CAUTION (estimate): wave-derived pitch/roll/heave may exceed the ${isSemiSub ? 'semi-sub' : 'FPSO'} limits. Check the live HMS deck status.`
+    : baseReason;
+
+  const statusColor =
+    currentStatus === 'GO'
+      ? 'text-emerald-400 border-emerald-500/40 bg-emerald-950/20'
+      : currentStatus === 'CAUTION'
+      ? 'text-amber-400 border-amber-500/40 bg-amber-950/20'
+      : 'text-rose-400 border-rose-500/50 bg-rose-950/30';
+
   const swellRisk = evaluateFpsoSwellRisk(
     waveVal,
     wavePeriodVal,
@@ -346,6 +426,27 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
       : 'GO';
 
   const ceilVal = activeModelSnapshot?.cloudCeilingFt ?? 2200;
+  // Nearest airport/platform METAR that reports cloud, shown beside the offshore model estimate
+  const nearestReportedCloud = (() => {
+    if (!isCurrentHour) return null;
+    const candidates: Array<{ icao: string; distanceNm: number; rawOb?: string; obsTimeMs?: number | null }> = [
+      ...nearbyMetars.map((st) => ({ icao: st.icao, distanceNm: st.distanceNm, rawOb: st.rawOb, obsTimeMs: st.obsTimeMs })),
+    ];
+    if (weather?.rawMetar && metarStation) {
+      const stn = shoreBaseFacility.code === metarStation ? shoreBaseFacility : null;
+      const distanceNm = stn ? Math.round(calculateDistanceNm(facility.lat, facility.lon, stn.lat, stn.lon)) : null;
+      if (distanceNm !== null) {
+        candidates.push({ icao: metarStation, distanceNm, rawOb: weather.rawMetar, obsTimeMs: weather.metarTime });
+      }
+    }
+    return (
+      candidates
+        .filter((c) => typeof c.obsTimeMs !== 'number' || Date.now() - c.obsTimeMs <= 90 * 60_000)
+        .map((c) => ({ ...c, cloud: parseMetarCloudBase(c.rawOb) }))
+        .filter((c): c is typeof c & { cloud: NonNullable<typeof c.cloud> } => c.cloud !== null)
+        .sort((a, b) => a.distanceNm - b.distanceNm)[0] || null
+    );
+  })();
   const ceilStatus =
     ceilVal < minCeilLimit ? 'HOLD' : ceilVal < minCeilLimit + 350 ? 'CAUTION' : 'GO';
 
@@ -381,7 +482,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     fogSpreadRisk === 'HIGH' ? 'CAUTION' : fogSpreadRisk === 'MODERATE' ? 'CAUTION' : 'GO';
 
   // Combined Shore-to-Deck route verdict (Shore Base + Mid-Route + Rig/FPSO)
-  const routeCombinedStatus: 'GO' | 'CAUTION' | 'HOLD' = useMemo(() => {
+  const routeCombinedStatus: 'GO' | 'CAUTION' | 'HOLD' = (() => {
     const statuses: Array<'GO' | 'CAUTION' | 'HOLD'> = [
       currentStatus === 'HOLD' || currentStatus === 'CAUTION' ? currentStatus : 'GO',
       ...corridorWaypoints.map((w) => w.status),
@@ -389,9 +490,9 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     if (statuses.includes('HOLD')) return 'HOLD';
     if (statuses.includes('CAUTION')) return 'CAUTION';
     return 'GO';
-  }, [currentStatus, corridorWaypoints]);
+  })();
 
-  const limitingLeg = useMemo(() => {
+  const limitingLeg = (() => {
     if (corridorWaypoints.length < 3) return null;
     if (corridorWaypoints[0].status === 'HOLD') return `${shoreBaseFacility.code} Shore Base`;
     if (corridorWaypoints[1].status === 'HOLD') return 'Mid-Route Corridor';
@@ -400,11 +501,11 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     if (corridorWaypoints[1].status === 'CAUTION') return 'Mid-Route Corridor';
     if (currentStatus === 'CAUTION') return `${facility.code} Helideck`;
     return 'All 3 Route Legs Clear';
-  }, [corridorWaypoints, shoreBaseFacility.code, facility.code, currentStatus]);
+  })();
 
   // Shore base runway crosswind check (using shore corridor leg wind or live weather)
   const shoreLeg = corridorWaypoints[0];
-  const shoreRunwayWind = useMemo(() => {
+  const shoreRunwayWind = (() => {
     const dir = shoreLeg?.windDir10mDeg ?? weather?.windDirectionDeg;
     const spd = shoreLeg?.windSpeed10mKts ?? weather?.windSpeedKts;
     const gst = shoreLeg?.windGust10mKts ?? weather?.windGustKts ?? spd;
@@ -412,50 +513,8 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
       return null;
     }
     return computeBestRunwayWind(shoreBaseFacility.code, dir, spd, gst);
-  }, [
-    shoreBaseFacility.code,
-    shoreLeg?.windDir10mDeg,
-    shoreLeg?.windSpeed10mKts,
-    shoreLeg?.windGust10mKts,
-    weather?.windDirectionDeg,
-    weather?.windSpeedKts,
-    weather?.windGustKts,
-  ]);
+  })();
 
-  // FPSO Wind-Over-Deck Sector if heading saved
-  const windDirNow = activeModelSnapshot?.windDir10mDeg ?? weather?.windDirectionDeg ?? 230;
-  const windOverDeck =
-    isFpso && typeof customOverride?.vesselHeadingDeg === 'number'
-      ? computeWindOverDeckSector(windDirNow, customOverride.vesselHeadingDeg)
-      : null;
-
-  const fpsoMotionEstimate = useMemo(() => {
-    if (!isFpso) return null;
-    return computeEstimatedFpsoDeckMotion({
-      waveHeightM: waveVal,
-      swellPeriodSec: wavePeriodVal,
-      swellWaveHeightM: activeHour?.swellWaveHeightM,
-      swellWavePeriodSec: activeHour?.swellWavePeriodSec,
-      swellDirDeg: activeHour?.swellDirDeg,
-      windDirDeg: windDirNow,
-      vesselHeadingDeg: customOverride?.vesselHeadingDeg,
-      maxPitchRollLimit,
-      maxInclinationLimit,
-      maxShrLimit,
-    });
-  }, [
-    isFpso,
-    waveVal,
-    wavePeriodVal,
-    activeHour?.swellWaveHeightM,
-    activeHour?.swellWavePeriodSec,
-    activeHour?.swellDirDeg,
-    windDirNow,
-    customOverride?.vesselHeadingDeg,
-    maxPitchRollLimit,
-    maxInclinationLimit,
-    maxShrLimit,
-  ]);
 
   const handleCopyOutlook = async () => {
     const modelName =
@@ -515,7 +574,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   );
 
   // Plain-English explanation for casual offshore passengers & crew
-  const plainEnglishSummary = useMemo(() => {
+  const plainEnglishSummary = (() => {
     if (evaluatedActive?.limits.daylightOnlyBlocked) {
       return `Night flight hold: ${activeHour?.hourLabel || 'This hour'} UTC is outside daylight hours and the deck is set to Daylight Flights Only.`;
     }
@@ -542,6 +601,9 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     if (corridorWaypoints[1]?.status === 'HOLD') {
       return `Weather at ${facility.shortName} is okay, but weather halfway along the flight route from ${shoreBaseFacility.code} is outside limits.`;
     }
+    if (deckMotionRaisesCaution) {
+      return `Deck motion may be too much: from the forecast waves (${waveVal} m) and swell (${wavePeriodVal}s), our rough estimate is that this ${isSemiSub ? 'semi-sub' : 'FPSO'} could be pitching, rolling or heaving beyond the landing limits. Only the vessel's own motion sensors know for sure.`;
+    }
     if (lightningStatus === 'CAUTION') {
       return `Wind (${gustVal} kt) and waves (${waveVal} m) are well within limits, but cold air + winter showers can trigger static lightning on helicopter blades — crews may wait 20–40 mins for heavy showers to pass.`;
     }
@@ -563,32 +625,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
       return `Weather at ${facility.shortName} is good, with minor weather caution at ${shoreBaseFacility.shortName} or en-route.`;
     }
     return `All clear for flights: Wind (${gustVal} kt gusts), waves (${waveVal} m), cloud height (${ceilVal.toLocaleString()} ft), and visibility (${visVal} km) are all comfortably inside normal limits.`;
-  }, [
-    evaluatedActive?.limits.daylightOnlyBlocked,
-    activeHour?.hourLabel,
-    gustStatus,
-    gustVal,
-    maxGustLimit,
-    waveStatus,
-    waveVal,
-    maxWaveLimit,
-    isFpso,
-    ceilStatus,
-    visStatus,
-    ceilVal,
-    visVal,
-    minCeilLimit,
-    minVisLimit,
-    lightningStatus,
-    iceStatus,
-    freezeVal,
-    corridorWaypoints,
-    facility.shortName,
-    shoreBaseFacility.shortName,
-    shoreBaseFacility.code,
-    fogStatus,
-    routeCombinedStatus,
-  ]);
+  })();
 
   return (
     <div className="flex flex-col h-full min-w-0 w-full bg-slate-950 text-slate-100 overflow-y-auto overflow-x-hidden p-3 sm:p-5 space-y-4">
@@ -751,7 +788,12 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             </div>
             {fiveModelConsensus && (
               <span className="px-2 py-1 rounded-md bg-slate-950/80 border border-white/15 text-[11px] font-mono font-bold text-white shrink-0">
-                Confidence: {fiveModelConsensus.goCount + fiveModelConsensus.cautionCount}/5 Models
+                {(currentStatus === 'GO'
+                  ? fiveModelConsensus.goCount
+                  : currentStatus === 'CAUTION'
+                  ? fiveModelConsensus.cautionCount + (deckMotionRaisesCaution ? fiveModelConsensus.goCount : 0)
+                  : fiveModelConsensus.holdCount)}
+                /{fiveModelConsensus.totalModels} models agree
               </span>
             )}
           </div>
@@ -846,7 +888,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               <div className="text-[10px] text-slate-400">
                 Max: {maxWaveLimit} m ({isNightHour ? 'Night · 6m Day' : 'Day'})
                 {isFpso && fpsoMotionEstimate
-                  ? ` · ${fpsoMotionEstimate.deckLightStatus}`
+                  ? ` · est. deck motion ${fpsoMotionEstimate.deckLightStatus === 'RED' ? 'over limit' : fpsoMotionEstimate.deckLightStatus === 'AMBER' ? 'near limit' : 'OK'}`
                   : ''}
               </div>
             </div>
@@ -873,8 +915,23 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 </span>
               </div>
               <div className="text-sm font-bold text-white font-mono">
-                {ceilVal.toLocaleString()} ft cloud
+                {facilityHasReportedCeiling && reportedCloud?.noCeiling
+                  ? 'No low cloud'
+                  : `${ceilVal.toLocaleString()} ft cloud`}
               </div>
+              <div className="text-[10px] text-slate-400">
+                {facilityHasReportedCeiling
+                  ? `Reported by ${metarStation} METAR${reportedCloud?.ceilingGroup ? ` (${reportedCloud.ceilingGroup})` : ''}`
+                  : 'Estimate from forecast model'}
+              </div>
+              {!facilityHasReportedCeiling && nearestReportedCloud && (
+                <div className="text-[10px] text-cyan-300/90">
+                  Nearest report: {nearestReportedCloud.icao} ({nearestReportedCloud.distanceNm} NM){' '}
+                  {nearestReportedCloud.cloud.noCeiling
+                    ? 'no low cloud'
+                    : `${nearestReportedCloud.cloud.ceilingGroup} = ${(nearestReportedCloud.cloud.ceilingFt ?? 0).toLocaleString()} ft`}
+                </div>
+              )}
               <div className="text-[10px] text-slate-400">
                 Min: {minCeilLimit} ft ({isNightHour ? `Night · ${preset.minCloudCeilingFt}ft Day` : 'Day'}) · Vis {visVal} km
               </div>
@@ -959,7 +1016,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             <span className="text-[11px] text-slate-300 flex items-center gap-1.5">
               <CloudLightning className="w-3.5 h-3.5 text-amber-400 shrink-0" />
               <span>
-                Triggered Lightning &amp; Fly-Around Corridor ({shoreBaseFacility.code} → {facility.code}):
+                Lightning risk estimate on the route ({shoreBaseFacility.code} → {facility.code}):
               </span>
             </span>
             <button
@@ -969,7 +1026,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               }}
               className="px-2.5 py-1 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-mono font-bold text-[11px] flex items-center gap-1 cursor-pointer shadow-sm"
             >
-              <span>⚡ Open Lightning &amp; Fly-Around Map →</span>
+              <span>⚡ Open Lightning Map →</span>
             </button>
           </div>
         </div>
@@ -1287,7 +1344,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                     <span className="text-xs sm:text-[10px] font-bold text-white leading-tight flex items-center gap-0.5">
                       {day.dayNameShort}
                       {day.hasLightningRisk && (
-                        <span title={`${day.lightningHoursCount}h triggered lightning / squall risk`}>
+                        <span title={`${day.lightningHoursCount}h estimated lightning / squall risk`}>
                           ⚡
                         </span>
                       )}
@@ -1379,7 +1436,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                         key={hr.hourIso}
                         onClick={() => onChangeSelectedHourIdx(hr.hourIndex)}
                         title={`${hr.hourLabel} UTC (${hrNight ? 'CAA Night' : 'Daylight'})${
-                          hrLightning ? ' · ⚡ Triggered Lightning Risk' : ''
+                          hrLightning ? ' · ⚡ Lightning Risk (est.)' : ''
                         } — ${hrEval?.reason || ''}`}
                         className={`py-2 sm:py-1 rounded text-[10px] sm:text-[9px] font-mono font-bold flex flex-col items-center cursor-pointer border ${
                           isSelHr
@@ -1636,7 +1693,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             <div className="p-2.5 rounded bg-slate-950/85 border border-cyan-500/30 space-y-2 font-mono text-[11px]">
               <div className="flex flex-wrap items-center justify-between gap-1.5">
                 <span className="text-cyan-300 font-bold text-[10px]">
-                  CAP 437 / HCA HMS DECK MOTION ({preset.id} {isNightHour ? 'NIGHT' : 'DAY'} · CAT 1 FLOATING)
+                  ESTIMATED DECK MOTION vs HCA LIMITS ({preset.id} {isNightHour ? 'NIGHT' : 'DAY'} · CAT 1 FLOATING)
                 </span>
                 {fpsoMotionEstimate && (
                   <span
@@ -1701,7 +1758,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             {(
               [
                 { id: 'go_nogo_matrix', label: 'Go/No-Go Matrix' },
-                { id: 'triggered_lightning', label: '⚡ Triggered Lightning' },
+                { id: 'triggered_lightning', label: '⚡ Lightning (est.)' },
                 { id: 'wind_950hpa', label: '950hPa (1,800ft) Wind' },
                 { id: 'wave_swell', label: 'Waves (Hs)' },
                 { id: 'freezing_icing', label: '0°C Icing' },

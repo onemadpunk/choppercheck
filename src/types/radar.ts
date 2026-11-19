@@ -30,6 +30,8 @@ export type FieldOperator =
   | 'Harbour Energy'
   | 'TotalEnergies'
   | 'Ithaca Energy'
+  | 'Dana Petroleum'
+  | 'Hibiscus Petroleum'
   | 'EnQuest'
   | 'CNOOC'
   | 'Spirit Energy'
@@ -353,7 +355,12 @@ export interface CorridorWaypointProfile {
   dewSpreadC?: number;
   capeJkg?: number;
   lightningRisk?: 'LOW' | 'MODERATE' | 'HIGH';
+  precipMmHr?: number;
+  isFpso?: boolean;
   status: 'GO' | 'CAUTION' | 'HOLD';
+  /** model_estimate: worked out from model temperature/dewpoint/low cloud. metar: reported by the airport. */
+  ceilingSource?: 'model_estimate' | 'metar';
+  ceilingStationIcao?: string;
 }
 
 export interface SpatialWeatherGridPoint {

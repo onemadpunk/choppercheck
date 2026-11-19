@@ -7,8 +7,8 @@ import {
   InstallationOrAirport,
 } from '../types/radar';
 import {
-  evaluateCorridorLightningBypass,
   evaluateGridPointStatus,
+  CorridorLightningBypassAssessment,
 } from '../services/multiModelWeatherService';
 
 interface WeatherStreamlineCanvasProps {
@@ -18,6 +18,7 @@ interface WeatherStreamlineCanvasProps {
   preset: AirframeLimitPreset;
   activeFacility?: InstallationOrAirport;
   shoreBaseFacility?: InstallationOrAirport;
+  corridorAssessment?: CorridorLightningBypassAssessment | null;
 }
 
 interface Particle {
@@ -136,7 +137,7 @@ function interpolateGrid(
       } else {
         r = 16;
         g = 185;
-        b = 129; // Clear Fly-Around Air Corridor (Emerald)
+        b = 129; // No shower/lightning signal (Emerald)
         ptAlpha = 0.13;
         scalar = 16;
       }
@@ -264,6 +265,7 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
   preset,
   activeFacility,
   shoreBaseFacility,
+  corridorAssessment,
 }) => {
   const heatmapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const particleCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -337,137 +339,104 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
         );
       }
 
-      // 2. Draw Shore Base -> Rig Flight Corridor & 18 NM Fly-Around Dog-Leg Bypass Route
+      // 2. Draw Shore Base -> Rig track and, when route samples are loaded, the 18 NM detours
       if (
         activeFacility &&
         shoreBaseFacility &&
+        corridorAssessment &&
         activeFacility.id !== shoreBaseFacility.id
       ) {
-        const assessment = evaluateCorridorLightningBypass(
-          shoreBaseFacility,
-          activeFacility,
-          gridPoints,
-          preset
-        );
-
-        const pBase = map.latLngToContainerPoint([
-          shoreBaseFacility.lat,
-          shoreBaseFacility.lon,
-        ]);
-        const pRig = map.latLngToContainerPoint([
-          activeFacility.lat,
-          activeFacility.lon,
-        ]);
+        const assessment = corridorAssessment;
+        const pBase = map.latLngToContainerPoint([shoreBaseFacility.lat, shoreBaseFacility.lon]);
+        const pRig = map.latLngToContainerPoint([activeFacility.lat, activeFacility.lon]);
         const pDirectMid = map.latLngToContainerPoint([
           assessment.directMidpoint.lat,
           assessment.directMidpoint.lon,
         ]);
-        const pNorthMid = map.latLngToContainerPoint([
-          assessment.northMidpoint.lat,
-          assessment.northMidpoint.lon,
+        const pLeftMid = map.latLngToContainerPoint([
+          assessment.leftMidpoint.lat,
+          assessment.leftMidpoint.lon,
         ]);
-        const pSouthMid = map.latLngToContainerPoint([
-          assessment.southMidpoint.lat,
-          assessment.southMidpoint.lon,
+        const pRightMid = map.latLngToContainerPoint([
+          assessment.rightMidpoint.lat,
+          assessment.rightMidpoint.lon,
         ]);
+        const riskColour = (r: 'LOW' | 'MODERATE' | 'HIGH') =>
+          r === 'LOW' ? '#10b981' : r === 'MODERATE' ? '#f59e0b' : '#f43f5e';
 
-        // Draw Direct Track (Shore Base -> Rig)
+        // Direct track
         heatCtx.save();
         heatCtx.beginPath();
         heatCtx.moveTo(pBase.x, pBase.y);
         heatCtx.lineTo(pRig.x, pRig.y);
+        heatCtx.strokeStyle = riskColour(assessment.directRisk);
+        heatCtx.lineWidth = assessment.directRisk === 'LOW' ? 2.8 : 2.4;
+        heatCtx.setLineDash(assessment.directRisk === 'LOW' ? [8, 5] : [5, 5]);
+        heatCtx.stroke();
+        heatCtx.restore();
 
-        if (assessment.directRisk === 'LOW') {
-          heatCtx.strokeStyle = '#10b981';
-          heatCtx.lineWidth = 2.8;
-          heatCtx.setLineDash([8, 5]);
-          heatCtx.stroke();
-          heatCtx.restore();
+        drawPillLabel(
+          heatCtx,
+          pDirectMid.x,
+          pDirectMid.y - 12,
+          assessment.directRisk === 'LOW'
+            ? `✓ ${shoreBaseFacility.code} → ${activeFacility.code} DIRECT: NO RISK FORECAST (EST.)`
+            : `⚡ DIRECT TRACK: ${assessment.directRisk} RISK (EST.)`,
+          assessment.directRisk === 'LOW'
+            ? 'rgba(6, 78, 59, 0.92)'
+            : assessment.directRisk === 'HIGH'
+            ? 'rgba(136, 19, 55, 0.94)'
+            : 'rgba(120, 53, 15, 0.94)',
+          riskColour(assessment.directRisk),
+          '#ffffff'
+        );
 
-          // Also draw subtle 18 NM North & South alternate corridor boundaries so pilots see corridor width
-          for (const altPt of [pNorthMid, pSouthMid]) {
+        // Detours are only drawn when the model was sampled along them (route_samples)
+        if (assessment.directRisk !== 'LOW' && assessment.dataSource === 'route_samples') {
+          const sides: Array<{
+            pt: { x: number; y: number };
+            risk: 'LOW' | 'MODERATE' | 'HIGH' | null;
+            label: string;
+            recommended: boolean;
+          }> = [
+            {
+              pt: pLeftMid,
+              risk: assessment.leftBypassRisk,
+              label: assessment.leftSideLabel,
+              recommended: assessment.recommendedRoute === 'BYPASS_LEFT',
+            },
+            {
+              pt: pRightMid,
+              risk: assessment.rightBypassRisk,
+              label: assessment.rightSideLabel,
+              recommended: assessment.recommendedRoute === 'BYPASS_RIGHT',
+            },
+          ];
+          for (const side of sides) {
+            if (!side.risk) continue;
             heatCtx.save();
             heatCtx.beginPath();
             heatCtx.moveTo(pBase.x, pBase.y);
-            heatCtx.lineTo(altPt.x, altPt.y);
+            heatCtx.lineTo(side.pt.x, side.pt.y);
             heatCtx.lineTo(pRig.x, pRig.y);
-            heatCtx.strokeStyle = 'rgba(34, 211, 238, 0.35)';
-            heatCtx.lineWidth = 1.3;
-            heatCtx.setLineDash([4, 6]);
+            heatCtx.strokeStyle = riskColour(side.risk);
+            heatCtx.globalAlpha = side.recommended ? 1 : 0.5;
+            heatCtx.lineWidth = side.recommended ? 3.0 : 1.5;
+            heatCtx.setLineDash([9, 4]);
             heatCtx.stroke();
             heatCtx.restore();
+            drawPillLabel(
+              heatCtx,
+              side.pt.x,
+              side.pt.y,
+              `${side.recommended ? '✓ ' : ''}${assessment.offsetNm} NM ${side.label.toUpperCase()} DETOUR: ${
+                side.risk === 'LOW' ? 'LOOKS CLEAR' : side.risk
+              } (EST.)`,
+              side.risk === 'LOW' ? 'rgba(6, 78, 59, 0.94)' : 'rgba(15, 23, 42, 0.94)',
+              riskColour(side.risk),
+              '#ffffff'
+            );
           }
-
-          drawPillLabel(
-            heatCtx,
-            pDirectMid.x,
-            pDirectMid.y - 12,
-            `✓ ${shoreBaseFacility.code} → ${activeFacility.code} DIRECT TRACK CLEAR`,
-            'rgba(6, 78, 59, 0.92)',
-            '#34d399',
-            '#d1fae5'
-          );
-        } else {
-          // Direct track has Moderate or High Triggered-Lightning Cell!
-          heatCtx.strokeStyle =
-            assessment.directRisk === 'HIGH' ? '#f43f5e' : '#f59e0b';
-          heatCtx.lineWidth = 2.4;
-          heatCtx.setLineDash([5, 5]);
-          heatCtx.stroke();
-          heatCtx.restore();
-
-          drawPillLabel(
-            heatCtx,
-            pDirectMid.x,
-            pDirectMid.y,
-            `⚡ DIRECT TRACK: ${assessment.directRisk} LIGHTNING RISK`,
-            assessment.directRisk === 'HIGH'
-              ? 'rgba(136, 19, 55, 0.94)'
-              : 'rgba(120, 53, 15, 0.94)',
-            assessment.directRisk === 'HIGH' ? '#fb7185' : '#fbbf24',
-            '#ffffff'
-          );
-
-          // Highlight the recommended 18 NM North or South Fly-Around Dog-Leg Bypass Corridor
-          const useNorth =
-            assessment.recommendedRoute === 'BYPASS_NORTH' ||
-            (assessment.recommendedRoute !== 'BYPASS_SOUTH' &&
-              assessment.northBypassRisk !== 'HIGH');
-          const bypassPt = useNorth ? pNorthMid : pSouthMid;
-          const bypassDirLabel = useNorth ? '18 NM NORTH BYPASS' : '18 NM SOUTH BYPASS';
-          const bypassRisk = useNorth
-            ? assessment.northBypassRisk
-            : assessment.southBypassRisk;
-
-          heatCtx.save();
-          heatCtx.beginPath();
-          heatCtx.moveTo(pBase.x, pBase.y);
-          heatCtx.lineTo(bypassPt.x, bypassPt.y);
-          heatCtx.lineTo(pRig.x, pRig.y);
-          heatCtx.strokeStyle =
-            bypassRisk === 'LOW'
-              ? '#10b981'
-              : bypassRisk === 'MODERATE'
-              ? '#22d3ee'
-              : '#fb7185';
-          heatCtx.lineWidth = 3.0;
-          heatCtx.setLineDash([9, 4]);
-          heatCtx.stroke();
-          heatCtx.restore();
-
-          drawPillLabel(
-            heatCtx,
-            bypassPt.x,
-            bypassPt.y + (useNorth ? -14 : 14),
-            bypassRisk === 'LOW'
-              ? `✓ FLY-AROUND: ${bypassDirLabel} (CLEAR)`
-              : `↪ ${bypassDirLabel} (${bypassRisk})`,
-            bypassRisk === 'LOW'
-              ? 'rgba(6, 78, 59, 0.94)'
-              : 'rgba(15, 23, 42, 0.94)',
-            bypassRisk === 'LOW' ? '#34d399' : '#38bdf8',
-            bypassRisk === 'LOW' ? '#d1fae5' : '#bae6fd'
-          );
         }
       }
     };
@@ -619,7 +588,7 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
       map.off('moveend zoomend resize', handleMapMove);
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [map, gridPoints, overlayMode, preset, activeFacility, shoreBaseFacility]);
+  }, [map, gridPoints, overlayMode, preset, activeFacility, shoreBaseFacility, corridorAssessment]);
 
   if (overlayMode === 'off') return null;
 

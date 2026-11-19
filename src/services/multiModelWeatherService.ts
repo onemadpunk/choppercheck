@@ -361,131 +361,233 @@ export function interpolateSpotWeatherAtLatLon(
   };
 }
 
+type RiskLevel = 'LOW' | 'MODERATE' | 'HIGH';
+
 export interface CorridorLightningBypassAssessment {
-  directRisk: 'LOW' | 'MODERATE' | 'HIGH';
-  northBypassRisk: 'LOW' | 'MODERATE' | 'HIGH';
-  southBypassRisk: 'LOW' | 'MODERATE' | 'HIGH';
+  directRisk: RiskLevel;
+  /** Risk on the detour to the left/right of the direct track; null when no route samples are loaded. */
+  leftBypassRisk: RiskLevel | null;
+  rightBypassRisk: RiskLevel | null;
+  /** Compass direction of each detour from the direct track, e.g. "north-east". */
+  leftSideLabel: string;
+  rightSideLabel: string;
   directMidpoint: { lat: number; lon: number };
-  northMidpoint: { lat: number; lon: number };
-  southMidpoint: { lat: number; lon: number };
+  leftMidpoint: { lat: number; lon: number };
+  rightMidpoint: { lat: number; lon: number };
   offsetNm: number;
-  recommendedRoute: 'DIRECT' | 'BYPASS_NORTH' | 'BYPASS_SOUTH' | 'HOLD_WIDESPREAD';
+  /** route_samples: model sampled every few NM along each track. coarse_grid: background grid only. */
+  dataSource: 'route_samples' | 'coarse_grid';
+  recommendedRoute: 'DIRECT' | 'BYPASS_LEFT' | 'BYPASS_RIGHT' | 'NO_CLEAR_TRACK';
   summaryText: string;
 }
 
+export const CORRIDOR_BYPASS_OFFSET_NM = 18;
+const CORRIDOR_SAMPLE_SPACING_NM = 8;
+const CORRIDOR_MAX_SAMPLES_PER_TRACK = 14;
+
+const COMPASS_8 = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
+
+export function compassWord(bearingDeg: number): string {
+  const idx = Math.round((((bearingDeg % 360) + 360) % 360) / 45) % 8;
+  return COMPASS_8[idx];
+}
+
+export interface CorridorTrackGeometry {
+  directMidpoint: { lat: number; lon: number };
+  leftMidpoint: { lat: number; lon: number };
+  rightMidpoint: { lat: number; lon: number };
+  leftSideLabel: string;
+  rightSideLabel: string;
+  /** Sample points along each track (direct leg, and the two dog-legs via the offset midpoints). */
+  direct: Array<{ lat: number; lon: number }>;
+  left: Array<{ lat: number; lon: number }>;
+  right: Array<{ lat: number; lon: number }>;
+}
+
+function samplesAlong(
+  from: { lat: number; lon: number },
+  to: { lat: number; lon: number },
+  count: number,
+  includeEnd: boolean
+): Array<{ lat: number; lon: number }> {
+  const out: Array<{ lat: number; lon: number }> = [];
+  const last = includeEnd ? count : count - 1;
+  for (let i = 1; i <= last; i++) {
+    const f = i / count;
+    out.push({
+      lat: Number((from.lat + (to.lat - from.lat) * f).toFixed(3)),
+      lon: Number((from.lon + (to.lon - from.lon) * f).toFixed(3)),
+    });
+  }
+  return out;
+}
+
 /**
- * Evaluates whether the direct Shore Base -> Rig flight corridor intersects a Triggered-Lightning
- * or Convective Cell on the 2D spatial grid, and checks 18 NM North/South dog-leg bypass corridors
- * so pilots and marine crew can immediately see if there is a clear fly-around track.
+ * Builds the direct shore-base -> rig track and two dog-leg detours offset 18 NM either side of the
+ * midpoint, with sample points roughly every 8 NM. Detours are named by real compass direction.
+ */
+export function buildCorridorTrackGeometry(
+  shoreBase: { lat: number; lon: number },
+  targetRig: { lat: number; lon: number }
+): CorridorTrackGeometry {
+  const cosLat = Math.cos((((shoreBase.lat + targetRig.lat) / 2) * Math.PI) / 180);
+  const midLat = (shoreBase.lat + targetRig.lat) / 2;
+  const midLon = (shoreBase.lon + targetRig.lon) / 2;
+  // Work in a local flat frame measured in degrees of latitude (1 deg lat = 60 NM)
+  const dy = targetRig.lat - shoreBase.lat;
+  const dx = (targetRig.lon - shoreBase.lon) * cosLat;
+  const len = Math.hypot(dx, dy) || 1;
+  // Left of track = rotate track vector 90 deg anticlockwise
+  const leftX = -dy / len;
+  const leftY = dx / len;
+  const offsetDeg = CORRIDOR_BYPASS_OFFSET_NM / 60;
+  const directMidpoint = { lat: Number(midLat.toFixed(3)), lon: Number(midLon.toFixed(3)) };
+  const leftMidpoint = {
+    lat: Number((midLat + leftY * offsetDeg).toFixed(3)),
+    lon: Number((midLon + (leftX * offsetDeg) / (cosLat || 1)).toFixed(3)),
+  };
+  const rightMidpoint = {
+    lat: Number((midLat - leftY * offsetDeg).toFixed(3)),
+    lon: Number((midLon - (leftX * offsetDeg) / (cosLat || 1)).toFixed(3)),
+  };
+  const leftBearing = (Math.atan2(leftX, leftY) * 180) / Math.PI;
+  const lengthNm = calculateDistanceNm(shoreBase.lat, shoreBase.lon, targetRig.lat, targetRig.lon);
+  const perTrack = Math.max(
+    3,
+    Math.min(CORRIDOR_MAX_SAMPLES_PER_TRACK, Math.ceil(lengthNm / CORRIDOR_SAMPLE_SPACING_NM))
+  );
+  const half = Math.max(2, Math.ceil(perTrack / 2));
+  const dogLeg = (mid: { lat: number; lon: number }) => [
+    ...samplesAlong(shoreBase, mid, half, true),
+    ...samplesAlong(mid, targetRig, half, false),
+  ];
+  return {
+    directMidpoint,
+    leftMidpoint,
+    rightMidpoint,
+    leftSideLabel: compassWord(leftBearing),
+    rightSideLabel: compassWord(leftBearing + 180),
+    direct: samplesAlong(shoreBase, targetRig, perTrack, false),
+    left: dogLeg(leftMidpoint),
+    right: dogLeg(rightMidpoint),
+  };
+}
+
+/**
+ * Samples the selected weather model directly along the direct track and both detours, so the
+ * route check uses the model's own grid (UKV is about 2 km over the UK) instead of the coarse
+ * background grid. Returns every sample point; match them back with buildCorridorTrackGeometry.
+ */
+export async function fetchCorridorTrackSamples(
+  shoreBase: { lat: number; lon: number; code: string },
+  targetRig: { lat: number; lon: number; code: string },
+  modelId: WeatherModelId,
+  selectedHourIso?: string
+): Promise<SpatialWeatherGridPoint[]> {
+  const geo = buildCorridorTrackGeometry(shoreBase, targetRig);
+  const coords = [...geo.direct, ...geo.left, ...geo.right];
+  return fetchWeatherPointsAt(
+    coords,
+    modelId,
+    selectedHourIso,
+    `route_${modelId}_${shoreBase.code}_${targetRig.code}`
+  );
+}
+
+/**
+ * Checks the shore base -> rig track for estimated lightning / shower risk.
+ *
+ * With route samples (the model sampled every ~8 NM along the direct track and an 18 NM detour on
+ * each side) it can say whether a detour looks clear. With only the coarse background grid it
+ * reports the area risk and gives no detour advice, because the grid cannot see shower cells.
+ * Either way this is an estimate from forecast models, not an observation or an official product.
  */
 export function evaluateCorridorLightningBypass(
   shoreBase: { lat: number; lon: number; code: string },
   targetRig: { lat: number; lon: number; code: string },
   gridPoints: SpatialWeatherGridPoint[],
-  preset: AirframeLimitPreset
+  preset: AirframeLimitPreset,
+  routeSamples?: SpatialWeatherGridPoint[]
 ): CorridorLightningBypassAssessment {
-  const midLat = (shoreBase.lat + targetRig.lat) / 2;
-  const midLon = (shoreBase.lon + targetRig.lon) / 2;
+  const geo = buildCorridorTrackGeometry(shoreBase, targetRig);
+  const rank = (r: RiskLevel) => (r === 'HIGH' ? 2 : r === 'MODERATE' ? 1 : 0);
+  const fromRank = (n: number): RiskLevel => (n >= 2 ? 'HIGH' : n === 1 ? 'MODERATE' : 'LOW');
+  const route = `${shoreBase.code} → ${targetRig.code}`;
 
-  // Compute perpendicular unit vector in degrees for an ~18 NM (0.30 deg lat) lateral dog-leg offset
-  const dLat = targetRig.lat - shoreBase.lat;
-  const dLon = (targetRig.lon - shoreBase.lon) * 0.56;
-  const len = Math.hypot(dLat, dLon) || 1;
-  // Perpendicular vector (-dLon, dLat)
-  let perpLat = -dLon / len;
-  let perpLon = dLat / len / 0.56;
+  const expected = geo.direct.length + geo.left.length + geo.right.length;
+  const hasRoute = Array.isArray(routeSamples) && routeSamples.length === expected;
 
-  // Ensure "North" midpoint always has higher latitude than "South" midpoint
-  if (perpLat < 0) {
-    perpLat = -perpLat;
-    perpLon = -perpLon;
+  const base = {
+    leftSideLabel: geo.leftSideLabel,
+    rightSideLabel: geo.rightSideLabel,
+    directMidpoint: geo.directMidpoint,
+    leftMidpoint: geo.leftMidpoint,
+    rightMidpoint: geo.rightMidpoint,
+    offsetNm: CORRIDOR_BYPASS_OFFSET_NM,
+  };
+
+  if (!hasRoute) {
+    // Coarse grid only: report the broad area risk along the direct track, no detour advice.
+    let worst = 0;
+    for (const s of geo.direct) {
+      const sp = interpolateSpotWeatherAtLatLon(s.lat, s.lon, gridPoints, preset);
+      if (sp) worst = Math.max(worst, rank(sp.lightningRisk));
+    }
+    const directRisk = fromRank(worst);
+    return {
+      ...base,
+      directRisk,
+      leftBypassRisk: null,
+      rightBypassRisk: null,
+      dataSource: 'coarse_grid',
+      recommendedRoute: directRisk === 'LOW' ? 'DIRECT' : 'NO_CLEAR_TRACK',
+      summaryText:
+        directRisk === 'LOW'
+          ? `${route}: no shower/lightning signal in the broad forecast (estimate)`
+          : `${route}: ${directRisk.toLowerCase()} estimated shower/lightning risk in the area. Route check still loading, so no detour advice yet. Check the live rain radar.`,
+    };
   }
 
-  const offsetDegLat = 0.3; // ~18 NM lateral dog-leg
-  const northMidpoint = {
-    lat: Number((midLat + perpLat * offsetDegLat).toFixed(3)),
-    lon: Number((midLon + perpLon * offsetDegLat).toFixed(3)),
-  };
-  const southMidpoint = {
-    lat: Number((midLat - perpLat * offsetDegLat).toFixed(3)),
-    lon: Number((midLon - perpLon * offsetDegLat).toFixed(3)),
-  };
-  const directMidpoint = {
-    lat: Number(midLat.toFixed(3)),
-    lon: Number(midLon.toFixed(3)),
-  };
-
-  const rank = (r: 'LOW' | 'MODERATE' | 'HIGH') =>
-    r === 'HIGH' ? 2 : r === 'MODERATE' ? 1 : 0;
-  const fromRank = (n: number): 'LOW' | 'MODERATE' | 'HIGH' =>
-    n >= 2 ? 'HIGH' : n === 1 ? 'MODERATE' : 'LOW';
-
-  const sampleTrackRisk = (mid: { lat: number; lon: number }): 'LOW' | 'MODERATE' | 'HIGH' => {
-    if (gridPoints.length === 0) return 'LOW';
-    const samples = [
-      {
-        lat: shoreBase.lat * 0.75 + mid.lat * 0.25,
-        lon: shoreBase.lon * 0.75 + mid.lon * 0.25,
-      },
-      mid,
-      {
-        lat: mid.lat * 0.25 + targetRig.lat * 0.75,
-        lon: mid.lon * 0.25 + targetRig.lon * 0.75,
-      },
-    ];
-    let worst = 0;
-    for (const s of samples) {
-      const sp = interpolateSpotWeatherAtLatLon(s.lat, s.lon, gridPoints, preset);
-      if (sp) {
-        worst = Math.max(worst, rank(sp.lightningRisk));
-      }
-    }
-    return fromRank(worst);
-  };
-
-  const directRisk = sampleTrackRisk(directMidpoint);
-  const northBypassRisk = sampleTrackRisk(northMidpoint);
-  const southBypassRisk = sampleTrackRisk(southMidpoint);
+  const samples = routeSamples as SpatialWeatherGridPoint[];
+  const worstOf = (pts: SpatialWeatherGridPoint[]) =>
+    fromRank(pts.reduce((m, p) => Math.max(m, rank(p.lightningRisk ?? 'LOW')), 0));
+  const nD = geo.direct.length;
+  const nL = geo.left.length;
+  const directRisk = worstOf(samples.slice(0, nD));
+  const leftBypassRisk = worstOf(samples.slice(nD, nD + nL));
+  const rightBypassRisk = worstOf(samples.slice(nD + nL));
 
   let recommendedRoute: CorridorLightningBypassAssessment['recommendedRoute'] = 'DIRECT';
-  let summaryText = `${shoreBase.code} → ${targetRig.code}: Direct track clear of triggered lightning`;
-
+  let summaryText = `${route}: direct track clear of estimated shower/lightning risk`;
   if (directRisk !== 'LOW') {
-    const dRank = rank(directRisk);
-    const nRank = rank(northBypassRisk);
-    const sRank = rank(southBypassRisk);
-
-    if (nRank < dRank && nRank <= sRank) {
-      recommendedRoute = 'BYPASS_NORTH';
-      summaryText = `⚡ Cell on ${shoreBase.code} → ${targetRig.code} direct track · Clear 18 NM NORTH Dog-Leg Bypass available`;
-    } else if (sRank < dRank) {
-      recommendedRoute = 'BYPASS_SOUTH';
-      summaryText = `⚡ Cell on ${shoreBase.code} → ${targetRig.code} direct track · Clear 18 NM SOUTH Dog-Leg Bypass available`;
-    } else if (directRisk === 'MODERATE') {
-      recommendedRoute = 'DIRECT';
-      summaryText = `⚡ Broad Moderate Triggered-Lightning Band across ${shoreBase.code} → ${targetRig.code} (Stay below 0°C isotherm / radar avoidance)`;
+    if (leftBypassRisk === 'LOW') {
+      recommendedRoute = 'BYPASS_LEFT';
+      summaryText = `${route}: estimated ${directRisk.toLowerCase()} risk on the direct track. The ${CORRIDOR_BYPASS_OFFSET_NM} NM detour to the ${geo.leftSideLabel} looks clear in the forecast.`;
+    } else if (rightBypassRisk === 'LOW') {
+      recommendedRoute = 'BYPASS_RIGHT';
+      summaryText = `${route}: estimated ${directRisk.toLowerCase()} risk on the direct track. The ${CORRIDOR_BYPASS_OFFSET_NM} NM detour to the ${geo.rightSideLabel} looks clear in the forecast.`;
     } else {
-      recommendedRoute = 'HOLD_WIDESPREAD';
-      summaryText = `⚡ Widespread High Triggered-Lightning Squall Band across ${shoreBase.code} → ${targetRig.code} corridor`;
+      recommendedRoute = 'NO_CLEAR_TRACK';
+      summaryText = `${route}: estimated ${directRisk.toLowerCase()} risk on the direct track and neither ${CORRIDOR_BYPASS_OFFSET_NM} NM detour looks clear.`;
     }
   }
 
   return {
+    ...base,
     directRisk,
-    northBypassRisk,
-    southBypassRisk,
-    directMidpoint,
-    northMidpoint,
-    southMidpoint,
-    offsetNm: 18,
+    leftBypassRisk,
+    rightBypassRisk,
+    dataSource: 'route_samples',
     recommendedRoute,
     summaryText,
   };
 }
 
 /**
- * Computes physical Cloud Ceiling (ft AMSL) from real 2m Temperature, 2m Dewpoint, Low Cloud Cover %, and Visibility
- * using the WMO / FAA Espy Lifting Condensation Level (LCL) equation: LCL_ft = ((T - Td) / 2.5) * 1000.
+ * ESTIMATES a cloud ceiling (ft) from model 2m temperature, dewpoint, low cloud cover % and visibility.
+ * Models do not forecast a cloud base directly here, so this is an estimate; reported METAR
+ * cloud is used instead where the app has it (see parseMetarCloudBase).
+ * Uses the Espy Lifting Condensation Level (LCL) equation: LCL_ft = ((T - Td) / 2.5) * 1000.
  * Under ICAO/CAA rules, a "ceiling" exists when cloud cover is Broken (BKN, >= 50%) or Overcast (OVC, >= 88%).
  */
 function computePhysicalCloudCeilingFt(
@@ -508,13 +610,10 @@ function computePhysicalCloudCeilingFt(
     return Math.max(150, Math.min(5000, lclBaseFt));
   }
 
-  // If low cloud is Scattered (25–49%), effective ceiling is higher than the scattered LCL puffs
-  if (lowCloudPct >= 25) {
-    return Math.max(1200, Math.round(lclBaseFt * 1.45));
-  }
-
-  // Few / Clear low clouds (< 25%): high ceiling
-  return Math.max(2800, Math.round(lclBaseFt * 2.1));
+  // Under 50% low cloud there is no broken/overcast layer in the low-cloud band (below about
+  // 6,500 ft), so there is no low ceiling. Return a fixed "no low ceiling" value rather than
+  // inventing a height.
+  return 5000;
 }
 
 /**
@@ -576,7 +675,8 @@ export function computeMinus10IsothermFt(
 }
 
 /**
- * Physics-based North Sea Triggered vs Natural Lightning classifier using:
+ * ChopperCheck's own rule-of-thumb estimate (not an official forecast product) of triggered vs natural
+ * lightning risk, using:
  * - Natural TS: WMO 95/96/99 or deep thunderstorm CAPE >= 500 J/kg
  * - Winter Triggered Lightning: Low 0°C level (<= 3,200 ft) + -10°C charging layer (<= 11,500 ft)
  *   + active convective showers or maritime cold-air instability (SST - T500 >= 31-34°C)
@@ -603,7 +703,7 @@ export function classifyNorthSeaConvection(params: {
 
   const isShowerWmo = wmo !== null && [80, 81, 82, 85, 86].includes(wmo);
   // Triggered lightning ONLY occurs inside active precipitating convective cells/showers (graupel + ice crystal collisions).
-  // Dry cold air outside of shower cells has zero triggered-lightning risk and provides clear fly-around corridors.
+  // Dry cold air outside of shower cells has zero triggered-lightning risk in this estimate.
   const hasPrecipCell = isShowerWmo || showers >= 0.2 || precip >= 0.35;
   if (!hasPrecipCell) {
     return { risk: 'LOW', type: 'NONE' };
@@ -1285,14 +1385,53 @@ export async function fetchFlightCorridorProfile(
       dewSpreadC,
       capeJkg: Math.round(capeVal),
       lightningRisk,
+      precipMmHr: precip,
+      isFpso: pt.isFpso,
       status: effectiveStatus,
+      ceilingSource: 'model_estimate',
     };
   });
 }
 
-// Cache 7-day 25-point spatial grid per modelId so scrubbing across days/hours is instant on the map
+/**
+ * Replaces a waypoint's model-estimated cloud ceiling with a reported (METAR) ceiling and
+ * re-evaluates its status with the same rules the corridor uses.
+ */
+export function applyReportedCeilingToWaypoint(
+  wp: CorridorWaypointProfile,
+  reportedCeilingFt: number,
+  stationIcao: string,
+  preset: AirframeLimitPreset
+): CorridorWaypointProfile {
+  const evalLim = evaluateAirframeLimits(
+    wp.windSpeed10mKts,
+    wp.windGust10mKts,
+    reportedCeilingFt,
+    wp.visibilityKm,
+    wp.freezingLevelFt,
+    wp.waveHeightM,
+    wp.precipMmHr ?? 0,
+    Boolean(wp.isFpso),
+    preset
+  );
+  const status: 'GO' | 'CAUTION' | 'HOLD' =
+    wp.lightningRisk === 'HIGH'
+      ? 'HOLD'
+      : wp.lightningRisk === 'MODERATE' && evalLim.status === 'GO'
+      ? 'CAUTION'
+      : evalLim.status;
+  return {
+    ...wp,
+    cloudCeilingFt: reportedCeilingFt,
+    ceilingSource: 'metar',
+    ceilingStationIcao: stationIcao,
+    status,
+  };
+}
+
+// Cache 7-day point data per request key (grid or route) so scrubbing across days/hours is instant on the map
 const spatialGridRawCache = new Map<
-  WeatherModelId,
+  string,
   {
     coords: Array<{ lat: number; lon: number }>;
     wxArr: unknown;
@@ -1302,9 +1441,10 @@ const spatialGridRawCache = new Map<
 >();
 
 /**
- * Fetches an 8x6 (48-point) higher-density 2D spatial weather & marine grid across Scotland, the North Sea,
- * West of Shetland & Irish Sea across all 7 forecast days so localized convective shower cells and clear fly-around
- * corridors can be resolved cleanly on the map.
+ * Fetches an 8x6 (48-point) background weather & marine grid across Scotland, the North Sea,
+ * West of Shetland & Irish Sea. Grid points are 55-110 NM apart, so this grid shows the broad
+ * pattern only: it cannot resolve individual shower cells. Route-level checks use
+ * fetchCorridorTrackSamples, which samples the model directly along each track.
  */
 export async function fetchSpatialWeatherGrid(
   modelId: WeatherModelId,
@@ -1319,8 +1459,21 @@ export async function fetchSpatialWeatherGrid(
       coords.push({ lat, lon });
     }
   }
+  return fetchWeatherPointsAt(coords, modelId, selectedHourIso, `grid_${modelId}`);
+}
 
-  let cached = spatialGridRawCache.get(modelId);
+/**
+ * Fetches model weather + marine data at an arbitrary list of points (one Open-Meteo multi-location
+ * request each for weather and marine), cached for 5 minutes per cacheKey.
+ */
+export async function fetchWeatherPointsAt(
+  coords: Array<{ lat: number; lon: number }>,
+  modelId: WeatherModelId,
+  selectedHourIso: string | undefined,
+  cacheKey: string
+): Promise<SpatialWeatherGridPoint[]> {
+  if (coords.length === 0) return [];
+  let cached = spatialGridRawCache.get(cacheKey);
 
   if (!cached || Date.now() - cached.fetchedAt > 300000) {
     const lats = coords.map((c) => c.lat.toFixed(2)).join(',');
@@ -1338,7 +1491,11 @@ export async function fetchSpatialWeatherGrid(
         marRes.status === 'fulfilled' && marRes.value.ok ? await marRes.value.json() : [];
 
       cached = { coords, wxArr, marArr, fetchedAt: Date.now() };
-      spatialGridRawCache.set(modelId, cached);
+      spatialGridRawCache.set(cacheKey, cached);
+      if (spatialGridRawCache.size > 24) {
+        const oldestKey = spatialGridRawCache.keys().next().value;
+        if (oldestKey !== undefined) spatialGridRawCache.delete(oldestKey);
+      }
     } catch {
       return [];
     }
