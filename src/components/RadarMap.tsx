@@ -38,6 +38,7 @@ import {
   Compass,
   Crosshair,
   Eye,
+  EyeOff,
   Globe,
   Layers,
   LocateFixed,
@@ -286,6 +287,8 @@ export const RadarMap: React.FC<RadarMapProps> = ({
   const [mapStyle, setMapStyle] = useState<MapStyleMode>('dark_radar');
   const [mobileDockOpen, setMobileDockOpen] = useState<boolean>(false);
   // Floating map cards can be folded into small chips so they never pile up over the map on phones.
+  // "Hide boxes" clean-map mode: hides every floating card, the weather dock and the side buttons in one tap.
+  const [boxesHidden, setBoxesHidden] = useState<boolean>(false);
   const [rigCardCollapsed, setRigCardCollapsed] = useState<boolean>(() =>
     readStoredFlag('choppercheck_rig_card_collapsed', false)
   );
@@ -745,7 +748,10 @@ export const RadarMap: React.FC<RadarMapProps> = ({
   const hudWave = activeHour?.waveHeightM ?? weather?.significantWaveHeightM ?? 2.1;
 
   return (
-    <div className="relative w-full h-full bg-[#07090e] overflow-hidden select-none">
+    <div
+      className="radar-map-root relative w-full h-full bg-[#07090e] overflow-hidden select-none"
+      data-clean-map={boxesHidden ? 'true' : undefined}
+    >
       {/* Main Leaflet Canvas */}
       <div ref={containerRef} className="w-full h-full z-0" />
 
@@ -761,7 +767,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
 
       {/* Top-left stack: rig card + overlay key flow in one column so they can never overlap.
           Each card folds down to a tappable chip to keep the map clear on phones. */}
-      <div className="map-top-left-stack absolute top-2.5 left-2.5 right-[68px] lg:right-auto z-[400] flex flex-col items-start gap-1.5 pointer-events-none max-h-[calc(100%-7rem)] overflow-y-auto no-scrollbar">
+      <div className="map-top-left-stack map-floating absolute top-2.5 left-2.5 right-[68px] lg:right-auto z-[400] flex flex-col items-start gap-1.5 pointer-events-none max-h-[calc(100%-7rem)] overflow-y-auto no-scrollbar">
         {rigCardCollapsed ? (
           <button
             onClick={() => setRigCardCollapsed(false)}
@@ -973,6 +979,21 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       {/* Right Map Floating Tactical Controls */}
       <div className="map-controls absolute top-3 right-3 z-[400] flex flex-col gap-1.5 pointer-events-auto">
         <button
+          data-clean-map-toggle="true"
+          onClick={() => setBoxesHidden((prev) => !prev)}
+          aria-pressed={boxesHidden}
+          title={boxesHidden ? 'Show map boxes again' : 'Hide all boxes for a clean map'}
+          aria-label={boxesHidden ? 'Show map boxes again' : 'Hide all boxes for a clean map'}
+          className={`min-w-[44px] min-h-[44px] rounded-lg flex flex-col items-center justify-center gap-0.5 border text-[9px] font-mono font-semibold transition-colors cursor-pointer ${
+            boxesHidden
+              ? 'bg-cyan-500 text-slate-950 border-cyan-300'
+              : 'bg-slate-950/90 hover:bg-slate-900 text-slate-200 border-slate-800'
+          }`}
+        >
+          {boxesHidden ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+          <span>{boxesHidden ? 'SHOW' : 'HIDE'}</span>
+        </button>
+        <button
           data-secondary-control="true"
           onClick={() =>
             mapRef.current?.fitBounds(
@@ -1076,7 +1097,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       </div>
 
       {/* Floating Multi-Model Offshore Weather, 7-Day Time Machine & Go/No-Go Control Dock */}
-      <div className="absolute bottom-2 right-2 left-2 sm:bottom-2.5 sm:right-2.5 sm:left-auto z-[400] bg-slate-950/94 backdrop-blur-md border border-slate-800 rounded-xl p-2 sm:p-2.5 pointer-events-auto shadow-2xl max-w-full sm:max-w-[580px] space-y-1.5">
+      <div className="map-floating absolute bottom-2 right-2 left-2 sm:bottom-2.5 sm:right-2.5 sm:left-auto z-[400] bg-slate-950/94 backdrop-blur-md border border-slate-800 rounded-xl p-2 sm:p-2.5 pointer-events-auto shadow-2xl max-w-full sm:max-w-[580px] space-y-1.5">
         {/* Compact Single-Row Summary Bar when collapsed (phones & tablets, < lg) */}
         <div className="flex lg:hidden items-center justify-between gap-1.5">
           <button
@@ -1335,7 +1356,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       </div>
 
       {/* Bottom-Left Live Ventusky-Style Spot-Check Cursor / Tap Weather Readout */}
-      <div className="hidden xl:flex absolute bottom-3 left-3 z-[400] items-center gap-2.5 bg-slate-950/92 backdrop-blur-md border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] font-mono text-slate-300 pointer-events-auto">
+      <div className="map-floating hidden xl:flex absolute bottom-3 left-3 z-[400] items-center gap-2.5 bg-slate-950/92 backdrop-blur-md border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] font-mono text-slate-300 pointer-events-auto">
         <span className="text-slate-400 tabular-nums">
           SPOT ({cursorCoords.lat.toFixed(2)}°N, {cursorCoords.lon.toFixed(2)}°E):
         </span>
