@@ -496,3 +496,18 @@ test('parseMetarWindVis reads reported wind and visibility', () => {
   const d = parseMetarWindVis('EGPD 191050Z 24010KT 9999 SCT030 10/02 Q1020 TEMPO 2000 SHRA');
   assert.equal(d?.visibilityKm, 10);
 });
+
+test('triggered lightning uses the Met Office 4 km / 12 km precipitation tables', () => {
+  const base = { cape: 150, wmo: 81, showers: 0, freezeFt: 2000, layerTempC: -3 };
+  // 4 km table: Low 2, Medium 4, High 10 mm/h
+  assert.equal(classifyNorthSeaConvection({ ...base, precip: 1.5, gridKm: 2 }).triggeredLevel, 'NONE');
+  assert.equal(classifyNorthSeaConvection({ ...base, precip: 2.5, gridKm: 2 }).triggeredLevel, 'LOW');
+  assert.equal(classifyNorthSeaConvection({ ...base, precip: 2.5, gridKm: 2 }).risk, 'MODERATE');
+  assert.equal(classifyNorthSeaConvection({ ...base, precip: 4.5, gridKm: 2 }).triggeredLevel, 'MEDIUM');
+  assert.equal(classifyNorthSeaConvection({ ...base, precip: 4.5, gridKm: 2 }).risk, 'HIGH');
+  assert.equal(classifyNorthSeaConvection({ ...base, precip: 11, gridKm: 2 }).triggeredLevel, 'HIGH');
+  // 12 km table (also coarser models): Low 1.1, Medium 2.7, High 4 mm/h
+  assert.equal(classifyNorthSeaConvection({ ...base, precip: 1.5, gridKm: 25 }).triggeredLevel, 'LOW');
+  assert.equal(classifyNorthSeaConvection({ ...base, precip: 3.0, gridKm: 25 }).triggeredLevel, 'MEDIUM');
+  assert.equal(classifyNorthSeaConvection({ ...base, precip: 4.0, gridKm: 25 }).triggeredLevel, 'HIGH');
+});

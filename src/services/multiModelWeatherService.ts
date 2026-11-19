@@ -675,28 +675,52 @@ export function computeMinus10IsothermFt(
 }
 
 /**
- * Helicopter-triggered lightning criteria from the Met Office algorithm in Wilkinson, Wells, Field &
- * Agnew (2013), "Investigation and prediction of helicopter-triggered lightning over the North Sea",
- * Meteorological Applications 20: 94-106, doi:10.1002/met.1314. A model grid point is at risk when:
+ * Helicopter-triggered lightning criteria from the Met Office algorithm.
+ *
+ * Source 1: Wilkinson, Wells, Field & Agnew (2013), "Investigation and prediction of
+ * helicopter-triggered lightning over the North Sea", Meteorological Applications 20: 94-106,
+ * doi:10.1002/met.1314. A grid point is at risk when:
  *   1. the average temperature between 2,000 and 3,000 ft is between -6 and -1 C,
- *   2. the total surface precipitation rate is 4 mm/h or more, and
+ *   2. the total surface precipitation rate is 4 mm/h or more (4 km model), and
  *   3. the freezing level is between 1,000 and 4,500 ft.
- * The paper's algorithm caught 80% of past triggered strikes using the 4 km UK model. Its two misses
- * had the showers in the right place but at only 1-2 mm/h, so ChopperCheck shows MODERATE when
- * criteria 1 and 3 are met with 1-4 mm/h. Coarser global models smooth shower rain even more.
- * The paper also only flags a cell when more than 10 cells in the surrounding 56 x 56 km box are at
- * risk; ChopperCheck does not apply that smoothing, so expect more isolated flags.
+ *
+ * Source 2: J. Wilkinson, "Helicopter-triggered lightning strike forecasting", Met Office
+ * presentation to the CAA Helicopter Safety Research Management Committee, 21 May 2013. The
+ * operational trial product added Low / Medium / High levels with precipitation thresholds that
+ * depend on the model grid, because coarser models spread shower rain out:
+ *            4 km model   12 km model
+ *   Low       2.0 mm/h     1.1 mm/h
+ *   Medium    4.0 mm/h     2.7 mm/h
+ *   High     10.0 mm/h     4.0 mm/h
+ * The trial also blended in radar rain rates and added smoothing/hysteresis; ChopperCheck does
+ * neither. The presentation quotes slightly tighter bands (-6 to -2 C, freezing level 1,000-3,000
+ * ft) for the original 2011 system; the published paper's bands are used here.
+ *
+ * ChopperCheck maps Met Office Low -> MODERATE (caution) and Medium/High -> HIGH (hold).
  */
 export const TRIGGERED_LIGHTNING_CRITERIA = {
   layerBottomFt: 2000,
   layerTopFt: 3000,
   layerTempMinC: -6,
   layerTempMaxC: -1,
-  precipHighMmHr: 4,
-  precipModerateMmHr: 1,
   freezeMinFt: 1000,
   freezeMaxFt: 4500,
+  precipMmHr: {
+    fine: { low: 2.0, medium: 4.0, high: 10.0 }, // models with a grid of about 5 km or finer
+    coarse: { low: 1.1, medium: 2.7, high: 4.0 }, // 12 km table, also used for coarser models
+  },
 } as const;
+
+/** Approximate grid spacing (km) of each model as served by Open-Meteo over the North Sea. */
+export const MODEL_GRID_KM: Record<WeatherModelId, number> = {
+  ukmo_seamless: 2,
+  icon_seamless: 7,
+  ecmwf_ifs025: 25,
+  gfs_seamless: 25,
+  gem_seamless: 25,
+};
+
+export type TriggeredLightningLevel = 'NONE' | 'LOW' | 'MEDIUM' | 'HIGH';
 
 /**
  * Average temperature over a height band (ft above sea level), by linear interpolation between
@@ -743,39 +767,45 @@ export function classifyNorthSeaConvection(params: {
   sstMinus500C?: number;
   /** Average temperature between 2,000 and 3,000 ft (see averageTempInLayerC); null when unknown. */
   layerTempC?: number | null;
+  /** Model grid spacing in km; picks the 4 km or 12 km precipitation table. Unknown = 12 km table. */
+  gridKm?: number | null;
 }): {
   risk: 'LOW' | 'MODERATE' | 'HIGH';
   type: 'NONE' | 'TRIGGERED_WINTER' | 'CONVECTIVE_SHOWER' | 'NATURAL_TS';
+  triggeredLevel: TriggeredLightningLevel;
 } {
   const { cape, wmo, precip, showers, freezeFt } = params;
   const C = TRIGGERED_LIGHTNING_CRITERIA;
   const layerTempC =
     typeof params.layerTempC === 'number' && Number.isFinite(params.layerTempC) ? params.layerTempC : null;
+  const table =
+    typeof params.gridKm === 'number' && params.gridKm <= 5 ? C.precipMmHr.fine : C.precipMmHr.coarse;
 
   if (wmo !== null && [95, 96, 99].includes(wmo)) {
-    return { risk: 'HIGH', type: 'NATURAL_TS' };
+    return { risk: 'HIGH', type: 'NATURAL_TS', triggeredLevel: 'NONE' };
   }
   if (cape !== null && cape >= 500 && (precip >= 0.25 || showers >= 0.15)) {
-    return { risk: 'HIGH', type: 'NATURAL_TS' };
+    return { risk: 'HIGH', type: 'NATURAL_TS', triggeredLevel: 'NONE' };
   }
 
-  // The paper uses total surface precipitation rate
+  // The Met Office criteria use total surface precipitation rate
   const totalPrecip = Math.max(precip, showers);
   const tempOk = layerTempC !== null && layerTempC >= C.layerTempMinC && layerTempC <= C.layerTempMaxC;
   const freezeOk = freezeFt >= C.freezeMinFt && freezeFt <= C.freezeMaxFt;
 
   if (tempOk && freezeOk) {
-    if (totalPrecip >= C.precipHighMmHr) return { risk: 'HIGH', type: 'TRIGGERED_WINTER' };
-    if (totalPrecip >= C.precipModerateMmHr) return { risk: 'MODERATE', type: 'TRIGGERED_WINTER' };
+    if (totalPrecip >= table.high) return { risk: 'HIGH', type: 'TRIGGERED_WINTER', triggeredLevel: 'HIGH' };
+    if (totalPrecip >= table.medium) return { risk: 'HIGH', type: 'TRIGGERED_WINTER', triggeredLevel: 'MEDIUM' };
+    if (totalPrecip >= table.low) return { risk: 'MODERATE', type: 'TRIGGERED_WINTER', triggeredLevel: 'LOW' };
   }
 
   const isShowerWmo = wmo !== null && [80, 81, 82, 85, 86].includes(wmo);
   const hasActiveShowers = isShowerWmo || showers >= 0.3;
   if (hasActiveShowers || (cape !== null && cape >= 300) || precip >= 3.5) {
-    return { risk: 'MODERATE', type: 'CONVECTIVE_SHOWER' };
+    return { risk: 'MODERATE', type: 'CONVECTIVE_SHOWER', triggeredLevel: 'NONE' };
   }
 
-  return { risk: 'LOW', type: 'NONE' };
+  return { risk: 'LOW', type: 'NONE', triggeredLevel: 'NONE' };
 }
 
 const SHORT_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -1046,6 +1076,7 @@ export async function fetchMultiModelRigForecast(
           freezeFt: freezingLevelFt,
           minus10Ft: minus10IsothermFt,
           sstMinus500C,
+          gridKm: MODEL_GRID_KM[m],
           layerTempC: averageTempInLayerC(
             [
               { heightM: 2, tempC: rawVal('temperature_2m') },
@@ -1664,6 +1695,7 @@ export async function fetchWeatherPointsAt(
       freezeFt: freezingLevelFt,
       minus10Ft: minus10IsothermFt,
       sstMinus500C,
+      gridKm: MODEL_GRID_KM[modelId],
       layerTempC: averageTempInLayerC(
         [
           { heightM: 2, tempC: pickRaw('temperature_2m') },
