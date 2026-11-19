@@ -42,5 +42,6 @@ export function cloudWords(ceilingFt: number | null, noLowCloud = false): string
   if (ceilingFt < 300) return 'Fog or very low cloud';
   if (ceilingFt < 800) return 'Low cloud';
   if (ceilingFt < 2000) return 'Some cloud';
+  if (ceilingFt >= 5000) return 'No low cloud';
   return 'Cloud high enough';
 }

@@ -14,6 +14,7 @@ import { calculateBearingDeg, calculateDistanceNm } from '../data/aircraftDecode
 import {
   ARA_MIN_DESCENT_HEIGHT_DAY_FT,
   assessIcing,
+  NO_LOW_CEILING_FT,
   HOFO_MIN_VISIBILITY_DAY_KM,
   CAA_MAX_HELIDECK_WIND_KTS,
   CAA_MAX_SIGNIFICANT_WAVE_HEIGHT_M,
@@ -666,13 +667,13 @@ function computePhysicalCloudCeilingFt(
 
   // If low cloud is Broken/Overcast (>= 50%), the ceiling is the physical LCL cloud base
   if (lowCloudPct >= 50) {
-    return Math.max(150, Math.min(5000, lclBaseFt));
+    return Math.max(150, Math.min(NO_LOW_CEILING_FT, lclBaseFt));
   }
 
   // Under 50% low cloud there is no broken/overcast layer in the low-cloud band (below about
   // 6,500 ft), so there is no low ceiling. Return a fixed "no low ceiling" value rather than
   // inventing a height.
-  return 5000;
+  return NO_LOW_CEILING_FT;
 }
 
 /**
@@ -925,6 +926,32 @@ export async function fetchJsonWithRetry(url: string, tries = 3): Promise<any | 
       // network error or timeout: retry
     }
     if (attempt < tries - 1) await new Promise((r) => setTimeout(r, 700 * (attempt + 1) ** 2));
+  }
+  return null;
+}
+
+/**
+ * ECMWF IFS 0.25 and GEM publish no visibility, and the Met Office has it only on its UKV domain.
+ * Grid and route checks request it from ICON and GFS alongside, so a gap is filled with a real
+ * forecast value instead of being guessed. Returns the raw per-point responses (or null).
+ */
+const VIS_BACKUP_MODELS = ['icon_seamless', 'gfs_seamless'] as const;
+async function fetchVisibilityBackup(lats: string, lons: string): Promise<unknown | null> {
+  return fetchJsonWithRetry(
+    `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&hourly=visibility&models=${VIS_BACKUP_MODELS.join(',')}&forecast_days=7`,
+    2
+  );
+}
+/** Visibility in metres at one point and hour from the backup response, or null. */
+function visibilityFromBackup(backup: unknown, idx: number, timeIso: string | undefined): number | null {
+  if (!backup || !timeIso) return null;
+  const entry = (Array.isArray(backup) ? backup[idx] : backup) as { hourly?: Record<string, unknown[]> } | undefined;
+  const times = (entry?.hourly?.time as string[] | undefined) ?? [];
+  const i = times.indexOf(timeIso);
+  if (i < 0) return null;
+  for (const m of VIS_BACKUP_MODELS) {
+    const v = entry?.hourly?.[`visibility_${m}`]?.[i];
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
   }
   return null;
 }
@@ -1433,7 +1460,7 @@ export function buildSevenDayFlightWindowSummaries(
 // Cache 7-day corridor raw response per ShoreBase+Rig so scrubbing hours is instantaneous
 const corridorRawCache = new Map<
   string,
-  { wxArr: unknown; marArr: unknown; fetchedAt: number }
+  { wxArr: unknown; marArr: unknown; visArr?: unknown; fetchedAt: number }
 >();
 
 /**
@@ -1505,11 +1532,15 @@ export async function fetchFlightCorridorProfile(
     const marUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${lats}&longitude=${lons}&hourly=wave_height&forecast_days=7`;
 
     try {
-      const [wxArr, marArrRaw] = await Promise.all([fetchJsonWithRetry(wxUrl), fetchJsonWithRetry(marUrl, 2)]);
+      const [wxArr, marArrRaw, visArr] = await Promise.all([
+        fetchJsonWithRetry(wxUrl),
+        fetchJsonWithRetry(marUrl, 2),
+        fetchVisibilityBackup(lats, lons),
+      ]);
       if (!wxArr) return [];
       const marArr = marArrRaw ?? [];
 
-      cached = { wxArr, marArr, fetchedAt: Date.now() };
+      cached = { wxArr, marArr, visArr, fetchedAt: Date.now() };
       corridorRawCache.set(cacheKey, cached);
     } catch {
       return [];
@@ -1577,8 +1608,10 @@ export async function fetchFlightCorridorProfile(
 
     const freezingLevelFt = computeNativeFreezingLevelFt(rawFreeze, t2m, t925, z925, t850, z850);
 
-    // Visibility from the model only; a gap is marked, never made up
-    const visKm = Number(Math.min(50, Math.max(0.2, core('visibility', 'visibility', 20000) / 1000)).toFixed(1));
+    // Visibility from the model, else ICON/GFS at the same point; a gap is marked, never made up
+    const visM = rawT('visibility') ?? visibilityFromBackup(cached?.visArr, idx, times[hrIdx]);
+    if (visM === null && !missingData.includes('visibility')) missingData.push('visibility');
+    const visKm = Number(Math.min(50, Math.max(0.2, (visM ?? 20000) / 1000)).toFixed(1));
     const lowCloud = core('cloud_cover_low', 'low cloud', 0);
     const cloudCeilingFt = computePhysicalCloudCeilingFt(t2m, dp2m, lowCloud, visKm);
     // No sea-state limit at an airfield, and no made-up waves where there is no sea data
@@ -1704,6 +1737,7 @@ const spatialGridRawCache = new Map<
     coords: Array<{ lat: number; lon: number }>;
     wxArr: unknown;
     marArr: unknown;
+    visArr?: unknown;
     fetchedAt: number;
   }
 >();
@@ -1751,11 +1785,15 @@ export async function fetchWeatherPointsAt(
     const marUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${lats}&longitude=${lons}&hourly=wave_height,wave_direction,sea_surface_temperature&forecast_days=7`;
 
     try {
-      const [wxArr, marArrRaw] = await Promise.all([fetchJsonWithRetry(wxUrl), fetchJsonWithRetry(marUrl, 2)]);
+      const [wxArr, marArrRaw, visArr] = await Promise.all([
+        fetchJsonWithRetry(wxUrl),
+        fetchJsonWithRetry(marUrl, 2),
+        fetchVisibilityBackup(lats, lons),
+      ]);
       if (!wxArr) return [];
       const marArr = marArrRaw ?? [];
 
-      cached = { coords, wxArr, marArr, fetchedAt: Date.now() };
+      cached = { coords, wxArr, marArr, visArr, fetchedAt: Date.now() };
       spatialGridRawCache.set(cacheKey, cached);
       if (spatialGridRawCache.size > 24) {
         const oldestKey = spatialGridRawCache.keys().next().value;
@@ -1854,8 +1892,10 @@ export async function fetchWeatherPointsAt(
       z500
     );
 
-    // Visibility from the model only; a gap is marked, never made up
-    const visKm = Number(Math.min(50, Math.max(0.2, core('visibility', 'visibility', 20000) / 1000)).toFixed(1));
+    // Visibility from the model, else ICON/GFS at the same point; a gap is marked, never made up
+    const visM = pickRaw('visibility') ?? visibilityFromBackup(cached?.visArr, idx, times[hr]);
+    if (visM === null && !missingData.includes('visibility')) missingData.push('visibility');
+    const visKm = Number(Math.min(50, Math.max(0.2, (visM ?? 20000) / 1000)).toFixed(1));
     const lowCloud = core('cloud_cover_low', 'low cloud', 0);
     const cloudCeilingFt = computePhysicalCloudCeilingFt(t2m, dp2m, lowCloud, visKm);
 

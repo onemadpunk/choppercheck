@@ -173,6 +173,16 @@ export const CAA_MAX_SIGNIFICANT_WAVE_HEIGHT_M = 6.0;
 export const ARA_MIN_DESCENT_HEIGHT_DAY_FT = 200;
 export const ARA_MIN_DESCENT_HEIGHT_NIGHT_FT = 300;
 /**
+ * The cloud-base estimate returns this when there is no broken/overcast low cloud (or the base is
+ * at least this high). It means "no low cloud", not a measured 5,000 ft, so show it that way.
+ */
+export const NO_LOW_CEILING_FT = 5000;
+/** Cloud base for display: "5,000+ ft" when there is no low ceiling. */
+export function formatCeilingFt(ft: number | null): string {
+  if (ft === null) return 'no data';
+  return ft >= NO_LOW_CEILING_FT ? 'no low cloud (5,000+ ft)' : `${ft.toLocaleString()} ft`;
+}
+/**
  * SPA.HOFO.130 (VFR between offshore locations, two pilots): 2 km day / 5 km night, reducible to
  * 800 m by day and 1,500 m at night when the destination or an intermediate structure stays in sight.
  */
@@ -411,8 +421,9 @@ export function computeEstimatedFpsoDeckMotion(params: {
   maxShrLimit?: number;
 }): EstimatedFpsoDeckMotion {
   const hs = Math.max(0, params.waveHeightM || 0);
-  const swellH = Math.max(0, params.swellWaveHeightM ?? hs * 0.8);
-  const tp = Math.max(4, params.swellWavePeriodSec || params.swellPeriodSec || 7.5);
+  // Without a separate swell height, the total wave height stands in (no made-up ratio)
+  const swellH = Math.max(0, params.swellWaveHeightM ?? hs);
+  const tp = Math.max(4, params.swellWavePeriodSec || params.swellPeriodSec || 0);
   // Effective excitation wave height combines total Hs with long-period swell energy
   const hEff = hs * 0.72 + swellH * 0.28;
 
@@ -689,7 +700,8 @@ export function evaluateFacilityHour(params: {
     isSemiSub
   );
   const deckMotion =
-    isFpso && hour.waveHeightM !== null
+    // Needs a real wave height and period; no estimate is made from guessed values
+    isFpso && hour.waveHeightM !== null && (hour.swellWavePeriodSec || hour.swellPeriodSec)
       ? computeEstimatedFpsoDeckMotion({
           waveHeightM: hour.waveHeightM,
           swellPeriodSec: hour.swellPeriodSec ?? 0,

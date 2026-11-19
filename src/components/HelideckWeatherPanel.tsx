@@ -34,6 +34,8 @@ import {
   decodeRawTafHighlights,
   evaluateFpsoSwellRisk,
   assessIcing,
+  formatCeilingFt,
+  NO_LOW_CEILING_FT,
   deriveEffectiveLimits,
   evaluateHourWithLimits,
   evaluateFacilityHour,
@@ -665,7 +667,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     if (routeCombinedStatus === 'CAUTION') {
       return `Weather at ${facility.shortName} is good, with minor weather caution at ${shoreBaseFacility.shortName} or en-route.`;
     }
-    return `All clear for flights: Wind (${ndU(gustVal, ' kt')} gusts), waves (${ndU(waveVal, ' m')}), cloud height (${ndFt(ceilVal)}), and visibility (${ndU(visVal, ' km')}) are all comfortably inside normal limits.`
+    return `All clear for flights: Wind (${ndU(gustVal, ' kt')} gusts), waves (${ndU(waveVal, ' m')}), cloud height (${formatCeilingFt(ceilVal)}), and visibility (${ndU(visVal, ' km')}) are all comfortably inside normal limits.`
       .replace(/, waves \(no data\)/, isShoreFacility ? '' : ', waves (no sea data)');
   })();
 
@@ -1070,7 +1072,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                   </div>
                   <div className="text-[10px] text-slate-500">
                     {ceilVal !== null && !(facilityHasReportedCeiling && reportedCloud?.noCeiling)
-                      ? `cloud base ${ceilVal.toLocaleString()} ft · `
+                      ? `cloud base ${formatCeilingFt(ceilVal)} · `
                       : ''}
                     {facilityHasReportedCeiling ? 'from the airport weather report' : 'forecast estimate'}
                   </div>
@@ -1082,6 +1084,8 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                   ? 'No low cloud'
                   : ceilVal === null
                   ? 'No data'
+                  : ceilVal >= NO_LOW_CEILING_FT
+                  ? 'No low cloud'
                   : `${ndFt(ceilVal)} cloud`}
               </div>
               <div className="text-[10px] text-slate-400">
@@ -1839,7 +1843,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 label: `3. Cloud Ceiling (${isNightHour ? 'Night' : 'Day'} ARA)${
                   facilityHasReportedCeiling ? ' · METAR' : ' · est. from dew point'
                 }`,
-                actual: `${ndFt(ceilVal)}`,
+                actual: formatCeilingFt(ceilVal),
                 limit: isNightHour
                   ? `Min ${minCeilLimit} ft (Night · ${preset.minCloudCeilingFt}ft Day)`
                   : `Min ${minCeilLimit} ft (Day)`,
@@ -2225,7 +2229,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                     </strong>
                   </div>
                   <div className="text-[10px] text-cyan-300 tabular-nums">
-                    Ceil {wp.cloudCeilingFt}ft · Vis {wp.visibilityKm}km
+                    Ceil {formatCeilingFt(wp.cloudCeilingFt)} · Vis {wp.visibilityKm}km
                   </div>
                   <div className="text-[10px] text-slate-400 tabular-nums">
                     950hPa {wp.windSpeed950hPaKts}kt ({wp.windDir950hPaDeg}°)
