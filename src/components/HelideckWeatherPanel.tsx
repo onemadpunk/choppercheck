@@ -31,6 +31,7 @@ import {
   deriveEffectiveLimits,
   evaluateHourWithLimits,
   parseMetarCloudBase,
+  parseMetarWindVis,
   NO_CEILING_FT,
   formatCrewOutlookSummary,
 } from '../utils/solarAndMetUtils';
@@ -227,13 +228,26 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   const facilityHasReportedCeiling = reportedCeilingFt !== null && metarStation === facility.code;
 
   const modelSnapshot = activeHour?.models[weatherModelId];
-  const activeModelSnapshot = useMemo(
+  // At an airport that issues its own METAR, use the reported wind and visibility too (current hour only)
+  const reportedWindVis = useMemo(
     () =>
-      modelSnapshot && facilityHasReportedCeiling && reportedCeilingFt !== null
-        ? { ...modelSnapshot, cloudCeilingFt: reportedCeilingFt }
-        : modelSnapshot,
-    [modelSnapshot, facilityHasReportedCeiling, reportedCeilingFt]
+      facilityHasReportedCeiling ? parseMetarWindVis(weather?.rawMetar) : null,
+    [facilityHasReportedCeiling, weather?.rawMetar]
   );
+  const activeModelSnapshot = useMemo(() => {
+    if (!modelSnapshot || !facilityHasReportedCeiling || reportedCeilingFt === null) return modelSnapshot;
+    const next = { ...modelSnapshot, cloudCeilingFt: reportedCeilingFt };
+    if (reportedWindVis?.windSpeedKts != null) {
+      const gust = Math.max(reportedWindVis.windSpeedKts, reportedWindVis.windGustKts ?? reportedWindVis.windSpeedKts);
+      next.windSpeed10mKts = reportedWindVis.windSpeedKts;
+      next.windGust10mKts = gust;
+      next.deckWindSpeedKts = reportedWindVis.windSpeedKts;
+      next.deckWindGustKts = gust;
+      if (reportedWindVis.windDirDeg !== null) next.windDir10mDeg = reportedWindVis.windDirDeg;
+    }
+    if (reportedWindVis?.visibilityKm != null) next.visibilityKm = reportedWindVis.visibilityKm;
+    return next;
+  }, [modelSnapshot, facilityHasReportedCeiling, reportedCeilingFt, reportedWindVis]);
 
   // Shore base leg of the route: use the reported ceiling when the METAR is from that airport
   const corridorWaypoints = useMemo(() => {
@@ -930,6 +944,16 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                   {nearestReportedCloud.cloud.noCeiling
                     ? 'no low cloud'
                     : `${nearestReportedCloud.cloud.ceilingGroup} = ${(nearestReportedCloud.cloud.ceilingFt ?? 0).toLocaleString()} ft`}
+                  {(() => {
+                    const wv = parseMetarWindVis(nearestReportedCloud.rawOb);
+                    if (!wv) return null;
+                    const wind =
+                      wv.windSpeedKts != null
+                        ? ` · wind ${wv.windDirDeg === null ? 'VRB' : String(wv.windDirDeg).padStart(3, '0')}/${wv.windSpeedKts}${wv.windGustKts ? `G${wv.windGustKts}` : ''} kt`
+                        : '';
+                    const vis = wv.visibilityKm != null ? ` · vis ${wv.visibilityKm >= 10 ? '10+' : wv.visibilityKm} km` : '';
+                    return wind + vis;
+                  })()}
                 </div>
               )}
               <div className="text-[10px] text-slate-400">

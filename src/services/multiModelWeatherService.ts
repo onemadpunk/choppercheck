@@ -1675,14 +1675,25 @@ const VERIFIED_METAR_STATIONS: Array<{
   lat: number;
   lon: number;
 }> = [
-  { icao: 'ENQA', label: 'Statfjord A Platform', lat: 61.26, lon: 1.85 },
-  { icao: 'ENOA', label: 'Oseberg A Platform', lat: 60.49, lon: 2.82 },
-  { icao: 'ENJS', label: 'Johan Sverdrup Platform', lat: 58.83, lon: 2.54 },
-  { icao: 'ENSL', label: 'Sleipner Platform', lat: 58.37, lon: 1.91 },
-  { icao: 'ENDR', label: 'Draupner Platform', lat: 58.2, lon: 1.6 },
-  { icao: 'ENWV', label: 'Valhall Platform', lat: 56.27, lon: 3.39 },
-  { icao: 'ENFB', label: 'Balder / Ringhorne Area', lat: 59.5, lon: 2.2 },
-  { icao: 'ENHE', label: 'Heidrun Platform', lat: 65.32, lon: 7.31 },
+  // Norwegian offshore installations that issue METAR / AUTOMETAR (Luftfartstilsynet AIC I 03/25).
+  // These are distributed internationally, so they reach aviationweather.gov. UK installations send
+  // their observations to HeliMet (login only), so none are listed here. Positions are approximate.
+  { icao: 'ENLE', label: 'Ekofisk L Platform (NO)', lat: 56.55, lon: 3.21 },
+  { icao: 'ENWV', label: 'Valhall PH Platform (NO)', lat: 56.28, lon: 3.39 },
+  { icao: 'ENLA', label: 'Ula Platform (NO)', lat: 57.11, lon: 2.85 },
+  { icao: 'ENSL', label: 'Sleipner A Platform (NO)', lat: 58.37, lon: 1.91 },
+  { icao: 'ENDP', label: 'Draupner Platform (NO)', lat: 58.19, lon: 2.47 },
+  { icao: 'ENJS', label: 'Johan Sverdrup Platform (NO)', lat: 58.84, lon: 2.6 },
+  { icao: 'ENWG', label: 'Gudrun Platform (NO)', lat: 58.85, lon: 1.72 },
+  { icao: 'ENXW', label: 'Grane Platform (NO)', lat: 59.17, lon: 2.49 },
+  { icao: 'ENOA', label: 'Oseberg A Platform (NO)', lat: 60.49, lon: 2.83 },
+  { icao: 'ENQA', label: 'Troll A Platform (NO)', lat: 60.64, lon: 3.73 },
+  { icao: 'ENQM', label: 'Martin Linge Platform (NO)', lat: 60.8, lon: 1.97 },
+  { icao: 'ENGC', label: 'Gullfaks C Platform (NO)', lat: 61.21, lon: 2.27 },
+  { icao: 'ENSF', label: 'Statfjord A Platform (NO)', lat: 61.26, lon: 1.85 },
+  { icao: 'ENFB', label: 'Statfjord B Platform (NO)', lat: 61.2, lon: 1.83 },
+  { icao: 'ENSE', label: 'Snorre A Platform (NO)', lat: 61.45, lon: 2.15 },
+  { icao: 'ENHE', label: 'Heidrun Platform (NO)', lat: 65.32, lon: 7.32 },
   { icao: 'EGPB', label: 'Sumburgh Airport', lat: 59.88, lon: -1.29 },
   { icao: 'EGPO', label: 'Stornoway (Hebrides)', lat: 58.21, lon: -6.33 },
   { icao: 'EGPL', label: 'Benbecula (Outer Hebrides)', lat: 57.48, lon: -7.36 },

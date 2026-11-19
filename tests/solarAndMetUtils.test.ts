@@ -14,6 +14,7 @@ import {
   isCaaNightForHour,
   parseSeaStateFromMetar,
   parseMetarCloudBase,
+  parseMetarWindVis,
 } from '../src/utils/solarAndMetUtils.ts';
 import {
   AIRFRAME_PRESETS,
@@ -450,4 +451,18 @@ test('parseMetarCloudBase reads the reported ceiling', () => {
   assert.equal(trend?.ceilingFt, null);
   assert.equal(parseMetarCloudBase(undefined), null);
   assert.equal(parseMetarCloudBase('EGPD 191050Z 24010KT 9999 10/02 Q1020'), null);
+});
+
+test('parseMetarWindVis reads reported wind and visibility', () => {
+  const a = parseMetarWindVis('EGPD 191050Z 24025G38KT 210V270 4000 -SHRA BKN012 08/06 Q1002');
+  assert.deepEqual(a, { windDirDeg: 240, windSpeedKts: 25, windGustKts: 38, visibilityKm: 4 });
+  const b = parseMetarWindVis('ENLE 191050Z AUTO 19010MPS 9999NDV OVC015 08/06 Q1002');
+  assert.equal(b?.windSpeedKts, 19);
+  assert.equal(b?.visibilityKm, 10);
+  const c = parseMetarWindVis('EGPB 191050Z VRB02KT CAVOK 10/02 Q1020');
+  assert.equal(c?.windDirDeg, null);
+  assert.equal(c?.visibilityKm, 10);
+  // Trend visibility is a forecast, not an observation
+  const d = parseMetarWindVis('EGPD 191050Z 24010KT 9999 SCT030 10/02 Q1020 TEMPO 2000 SHRA');
+  assert.equal(d?.visibilityKm, 10);
 });
