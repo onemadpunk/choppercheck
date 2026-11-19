@@ -195,6 +195,7 @@ test('UKMO UKV 2km is registered as 5th model and handles convection-permitting 
   assert.equal(WEATHER_MODELS_META.length, 5);
   assert.ok(WEATHER_MODELS_META.some((m) => m.id === 'ukmo_seamless' && m.shortName === 'UKMO UKV'));
 
+  // A 1.6 mm/h cell is below the strong-cell threshold: moderate, not high
   const ukvCell = classifyNorthSeaConvection({
     cape: 190,
     wmo: 71,
@@ -204,8 +205,44 @@ test('UKMO UKV 2km is registered as 5th model and handles convection-permitting 
     minus10Ft: 8500,
     sstMinus500C: 35,
   });
-  assert.equal(ukvCell.risk, 'HIGH');
+  assert.equal(ukvCell.risk, 'MODERATE');
   assert.equal(ukvCell.type, 'TRIGGERED_WINTER');
+
+  const ukvStrongCell = classifyNorthSeaConvection({
+    cape: 190,
+    wmo: 71,
+    precip: 2.6,
+    showers: 0,
+    freezeFt: 1800,
+    minus10Ft: 8500,
+    sstMinus500C: 35,
+  });
+  assert.equal(ukvStrongCell.risk, 'HIGH');
+});
+
+test('triggered lightning follows the research freezing-level and cruise-temperature bands', () => {
+  const base = {
+    cape: 220,
+    wmo: 81,
+    precip: 2.5,
+    showers: 2.5,
+    minus10Ft: 8000,
+    sstMinus500C: 36,
+  };
+  // Core setup: freezing level 2,000 ft, -1 C at cruise height
+  assert.equal(classifyNorthSeaConvection({ ...base, freezeFt: 2000, cruiseTempC: -1 }).risk, 'HIGH');
+  // Cruise air too cold (-8 C) for the mixed-phase band: not a triggered setup
+  const tooCold = classifyNorthSeaConvection({ ...base, freezeFt: 2000, cruiseTempC: -8 });
+  assert.notEqual(tooCold.type, 'TRIGGERED_WINTER');
+  // Freezing level right at the sea surface: below the 1,000 ft core band, so moderate at most
+  assert.equal(classifyNorthSeaConvection({ ...base, freezeFt: 300, cruiseTempC: -3 }).risk, 'MODERATE');
+  // Freezing level 3,300 ft: just outside the core, moderate
+  assert.equal(classifyNorthSeaConvection({ ...base, freezeFt: 3300, cruiseTempC: 1.5 }).risk, 'MODERATE');
+  // Weak shower (0.5 mm/h, slight shower code) in the core band: moderate, not high
+  assert.equal(
+    classifyNorthSeaConvection({ ...base, wmo: 80, precip: 0.5, showers: 0.5, freezeFt: 2000, cruiseTempC: -1 }).risk,
+    'MODERATE'
+  );
 });
 
 test('Deck-height wind, FPSO long-swell risk, runway crosswind, WMO sea-state and 5-model consensus work cleanly', () => {

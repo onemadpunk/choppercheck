@@ -675,12 +675,29 @@ export function computeMinus10IsothermFt(
 }
 
 /**
- * ChopperCheck's own rule-of-thumb estimate (not an official forecast product) of triggered vs natural
- * lightning risk, using:
- * - Natural TS: WMO 95/96/99 or deep thunderstorm CAPE >= 500 J/kg
- * - Winter Triggered Lightning: Low 0°C level (<= 3,200 ft) + -10°C charging layer (<= 11,500 ft)
- *   + active convective showers or maritime cold-air instability (SST - T500 >= 31-34°C)
+ * ChopperCheck's own rule-of-thumb estimate (not an official forecast product) of natural and
+ * helicopter-triggered lightning risk.
+ *
+ * Triggered-lightning criteria follow the published North Sea research summary (Met Office /
+ * Wilkinson et al. 2013, as summarised by Infoplaza): strikes cluster in winter showers where the
+ * freezing level is about 1,000-3,000 ft, the air at helicopter cruise height (~2,000-3,000 ft) is
+ * about -3 to +1 °C, and convective cells are strong (around 4 mm/h or 31 dBZ) with tops reaching
+ * roughly -10 to -15 °C. Model rain is an hourly, area average that smears out shower peaks, so
+ * "strong cell" here uses 2 mm/h or a moderate/heavy shower weather code instead of 4 mm/h.
+ * These thresholds are not verified against strike reports.
  */
+export const TRIGGERED_LIGHTNING_CRITERIA = {
+  freezeCoreMinFt: 1000,
+  freezeCoreMaxFt: 3000,
+  freezeOuterMaxFt: 3500,
+  cruiseTempCoreMinC: -3,
+  cruiseTempCoreMaxC: 1,
+  cruiseTempOuterMinC: -6,
+  cruiseTempOuterMaxC: 2,
+  strongCellPrecipMmHr: 2.0,
+  minus10MaxFt: 10500,
+} as const;
+
 export function classifyNorthSeaConvection(params: {
   cape: number | null;
   wmo: number | null;
@@ -689,11 +706,18 @@ export function classifyNorthSeaConvection(params: {
   freezeFt: number;
   minus10Ft: number;
   sstMinus500C: number;
+  /** Air temperature at helicopter cruise height (~925 hPa, about 2,500 ft); null when unknown. */
+  cruiseTempC?: number | null;
 }): {
   risk: 'LOW' | 'MODERATE' | 'HIGH';
   type: 'NONE' | 'TRIGGERED_WINTER' | 'CONVECTIVE_SHOWER' | 'NATURAL_TS';
 } {
   const { cape, wmo, precip, showers, freezeFt, minus10Ft, sstMinus500C } = params;
+  const cruiseTempC = typeof params.cruiseTempC === 'number' && Number.isFinite(params.cruiseTempC)
+    ? params.cruiseTempC
+    : null;
+  const C = TRIGGERED_LIGHTNING_CRITERIA;
+
   if (wmo !== null && [95, 96, 99].includes(wmo)) {
     return { risk: 'HIGH', type: 'NATURAL_TS' };
   }
@@ -702,34 +726,38 @@ export function classifyNorthSeaConvection(params: {
   }
 
   const isShowerWmo = wmo !== null && [80, 81, 82, 85, 86].includes(wmo);
-  // Triggered lightning ONLY occurs inside active precipitating convective cells/showers (graupel + ice crystal collisions).
-  // Dry cold air outside of shower cells has zero triggered-lightning risk in this estimate.
+  // Triggered lightning needs an active precipitating convective cell; dry cold air is LOW.
   const hasPrecipCell = isShowerWmo || showers >= 0.2 || precip >= 0.35;
   if (!hasPrecipCell) {
     return { risk: 'LOW', type: 'NONE' };
   }
 
-  // Convection-permitting models like UKMO UKV 2km place showers directly in precipitation rather than splitting showers
   const hasActiveShowers =
     isShowerWmo ||
     showers >= 0.3 ||
     (precip >= 0.8 && ((cape !== null && cape >= 80) || sstMinus500C >= 32));
-  const coldTopStrong = sstMinus500C >= 34 && minus10Ft <= 10500;
-  const coldTopMod = sstMinus500C >= 31 && minus10Ft <= 11500;
+  const strongCell =
+    (wmo !== null && [81, 82, 86].includes(wmo)) ||
+    showers >= C.strongCellPrecipMmHr ||
+    precip >= C.strongCellPrecipMmHr;
+  // Cloud tops reaching the -10 °C charging zone: needs the -10 °C level within reach of shallow
+  // winter convection plus some sign of depth (instability or a strong sea-air temperature contrast).
+  const deepEnough =
+    minus10Ft <= C.minus10MaxFt &&
+    ((cape !== null && cape >= 180) || (sstMinus500C >= 34 && minus10Ft <= C.minus10MaxFt));
 
-  if (
-    freezeFt <= 3000 &&
-    minus10Ft <= 10500 &&
-    (hasActiveShowers || precip >= 0.8) &&
-    ((cape !== null && cape >= 180) || coldTopStrong)
-  ) {
+  const freezeInCore = freezeFt >= C.freezeCoreMinFt && freezeFt <= C.freezeCoreMaxFt;
+  const freezeNearBand = freezeFt <= C.freezeOuterMaxFt;
+  const cruiseInCore =
+    cruiseTempC === null || (cruiseTempC >= C.cruiseTempCoreMinC && cruiseTempC <= C.cruiseTempCoreMaxC);
+  const cruiseInOuter =
+    cruiseTempC === null || (cruiseTempC >= C.cruiseTempOuterMinC && cruiseTempC <= C.cruiseTempOuterMaxC);
+
+  if (freezeInCore && cruiseInCore && strongCell && deepEnough) {
     return { risk: 'HIGH', type: 'TRIGGERED_WINTER' };
   }
 
-  if (
-    freezeFt <= 3500 &&
-    (hasActiveShowers || (cape !== null && cape >= 80) || (coldTopMod && precip >= 0.35))
-  ) {
+  if (freezeNearBand && cruiseInOuter && (hasActiveShowers || strongCell)) {
     return { risk: 'MODERATE', type: 'TRIGGERED_WINTER' };
   }
 
@@ -1008,6 +1036,7 @@ export async function fetchMultiModelRigForecast(
           freezeFt: freezingLevelFt,
           minus10Ft: minus10IsothermFt,
           sstMinus500C,
+          cruiseTempC: rawVal('temperature_925hPa') ?? rawVal('temperature_950hPa'),
         });
         const lightningRisk = conv.risk;
         const lightningType = conv.type;
@@ -1605,6 +1634,7 @@ export async function fetchWeatherPointsAt(
       freezeFt: freezingLevelFt,
       minus10Ft: minus10IsothermFt,
       sstMinus500C,
+      cruiseTempC: pickRaw('temperature_925hPa'),
     });
 
     return {
