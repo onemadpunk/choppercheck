@@ -460,7 +460,20 @@ export default function App() {
       let key = '';
       let message = '';
       let type: FlightAlertEvent['triggerType'] = 'AIRBORNE_LIFTOFF';
-      if (
+      if (f.turnback && !firedAlertKeysRef.current.has(f.hex + '_RTB')) {
+        type = 'TURNBACK';
+        key = f.hex + '_RTB';
+        message =
+          'TURNBACK: ' +
+          f.callsign +
+          ' (' +
+          f.typeCode +
+          ') turned back ' +
+          f.turnback.maxDistanceNm +
+          ' NM out and is heading back to ' +
+          f.turnback.baseName +
+          '. Reason not published.';
+      } else if (
         pinned &&
         f.altitudeReported &&
         f.speedReported &&
@@ -523,7 +536,7 @@ export default function App() {
         triggerType: type,
         message,
       });
-      playCockpitAlertChime(type === 'RING_10NM' || type === 'SAR_OR_7700');
+      playCockpitAlertChime(type === 'RING_10NM' || type === 'SAR_OR_7700' || type === 'TURNBACK');
       triggerBrowserNotification('ChopperCheck: ' + f.callsign, message);
     }
     const present = new Set(flights.map((f) => f.hex));
