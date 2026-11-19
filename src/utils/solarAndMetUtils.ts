@@ -1170,3 +1170,39 @@ export function parseMetarCloudBase(rawOb?: string | null): MetarCloudBase | nul
 
 /** Value used for "no ceiling reported" when a number is needed for limit checks. */
 export const NO_CEILING_FT = 5000;
+
+export interface MetarWindVis {
+  windDirDeg: number | null; // null for variable (VRB)
+  windSpeedKts: number | null;
+  windGustKts: number | null;
+  visibilityKm: number | null;
+}
+
+/**
+ * Reads the reported surface wind (KT or MPS) and prevailing visibility from a raw METAR.
+ * CAVOK and 9999 mean 10 km or more and are returned as 10.
+ */
+export function parseMetarWindVis(rawOb?: string | null): MetarWindVis | null {
+  if (!rawOb || typeof rawOb !== 'string') return null;
+  const body = ` ${rawOb.toUpperCase().split(/\s(?:TEMPO|BECMG|NOSIG|RMK)\b/)[0]} `;
+  let windDirDeg: number | null = null;
+  let windSpeedKts: number | null = null;
+  let windGustKts: number | null = null;
+  const w = body.match(/\s(\d{3}|VRB)(\d{2,3})(?:G(\d{2,3}))?(KT|MPS)\s/);
+  if (w) {
+    const factor = w[4] === 'MPS' ? 1.94384 : 1;
+    windDirDeg = w[1] === 'VRB' ? null : parseInt(w[1], 10);
+    windSpeedKts = Math.round(parseInt(w[2], 10) * factor);
+    windGustKts = w[3] ? Math.round(parseInt(w[3], 10) * factor) : null;
+  }
+  let visibilityKm: number | null = null;
+  if (/\sCAVOK\s/.test(body)) {
+    visibilityKm = 10;
+  } else {
+    // Prevailing visibility in metres follows the wind group (and optional variable-direction group)
+    const v = body.match(/(?:KT|MPS)\s(?:\d{3}V\d{3}\s)?(\d{4})(?:NDV)?\s/);
+    if (v) visibilityKm = v[1] === '9999' ? 10 : Number((parseInt(v[1], 10) / 1000).toFixed(1));
+  }
+  if (windSpeedKts === null && visibilityKm === null) return null;
+  return { windDirDeg, windSpeedKts, windGustKts, visibilityKm };
+}
