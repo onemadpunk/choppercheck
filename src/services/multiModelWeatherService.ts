@@ -675,11 +675,87 @@ export function computeMinus10IsothermFt(
 }
 
 /**
- * ChopperCheck's own rule-of-thumb estimate (not an official forecast product) of triggered vs natural
- * lightning risk, using:
- * - Natural TS: WMO 95/96/99 or deep thunderstorm CAPE >= 500 J/kg
- * - Winter Triggered Lightning: Low 0°C level (<= 3,200 ft) + -10°C charging layer (<= 11,500 ft)
- *   + active convective showers or maritime cold-air instability (SST - T500 >= 31-34°C)
+ * Helicopter-triggered lightning criteria from the Met Office algorithm.
+ *
+ * Source 1: Wilkinson, Wells, Field & Agnew (2013), "Investigation and prediction of
+ * helicopter-triggered lightning over the North Sea", Meteorological Applications 20: 94-106,
+ * doi:10.1002/met.1314. A grid point is at risk when:
+ *   1. the average temperature between 2,000 and 3,000 ft is between -6 and -1 C,
+ *   2. the total surface precipitation rate is 4 mm/h or more (4 km model), and
+ *   3. the freezing level is between 1,000 and 4,500 ft.
+ *
+ * Source 2: J. Wilkinson, "Helicopter-triggered lightning strike forecasting", Met Office
+ * presentation to the CAA Helicopter Safety Research Management Committee, 21 May 2013. The
+ * operational trial product added Low / Medium / High levels with precipitation thresholds that
+ * depend on the model grid, because coarser models spread shower rain out:
+ *            4 km model   12 km model
+ *   Low       2.0 mm/h     1.1 mm/h
+ *   Medium    4.0 mm/h     2.7 mm/h
+ *   High     10.0 mm/h     4.0 mm/h
+ * The trial also blended in radar rain rates and added smoothing/hysteresis; ChopperCheck does
+ * neither. The presentation quotes slightly tighter bands (-6 to -2 C, freezing level 1,000-3,000
+ * ft) for the original 2011 system; the published paper's bands are used here.
+ *
+ * ChopperCheck maps Met Office Low -> MODERATE (caution) and Medium/High -> HIGH (hold).
+ */
+export const TRIGGERED_LIGHTNING_CRITERIA = {
+  layerBottomFt: 2000,
+  layerTopFt: 3000,
+  layerTempMinC: -6,
+  layerTempMaxC: -1,
+  freezeMinFt: 1000,
+  freezeMaxFt: 4500,
+  precipMmHr: {
+    fine: { low: 2.0, medium: 4.0, high: 10.0 }, // models with a grid of about 5 km or finer
+    coarse: { low: 1.1, medium: 2.7, high: 4.0 }, // 12 km table, also used for coarser models
+  },
+} as const;
+
+/** Approximate grid spacing (km) of each model as served by Open-Meteo over the North Sea. */
+export const MODEL_GRID_KM: Record<WeatherModelId, number> = {
+  ukmo_seamless: 2,
+  icon_seamless: 7,
+  ecmwf_ifs025: 25,
+  gfs_seamless: 25,
+  gem_seamless: 25,
+};
+
+export type TriggeredLightningLevel = 'NONE' | 'LOW' | 'MEDIUM' | 'HIGH';
+
+/**
+ * Average temperature over a height band (ft above sea level), by linear interpolation between
+ * known (height, temperature) points, e.g. 2 m, 925 hPa and 850 hPa. Returns null if the band is
+ * not covered by the points.
+ */
+export function averageTempInLayerC(
+  points: Array<{ heightM: number; tempC: number | null }>,
+  bottomFt: number,
+  topFt: number
+): number | null {
+  const pts = points
+    .filter((p) => typeof p.tempC === 'number' && Number.isFinite(p.tempC) && Number.isFinite(p.heightM))
+    .map((p) => ({ h: p.heightM * 3.28084, t: p.tempC as number }))
+    .sort((x, y) => x.h - y.h);
+  if (pts.length < 2 || pts[0].h > bottomFt || pts[pts.length - 1].h < topFt) return null;
+  const at = (ft: number) => {
+    for (let i = 0; i < pts.length - 1; i++) {
+      const lo = pts[i];
+      const hi = pts[i + 1];
+      if (ft >= lo.h && ft <= hi.h) {
+        return hi.h === lo.h ? lo.t : lo.t + ((hi.t - lo.t) * (ft - lo.h)) / (hi.h - lo.h);
+      }
+    }
+    return null;
+  };
+  const samples = [0, 0.25, 0.5, 0.75, 1].map((f) => at(bottomFt + (topFt - bottomFt) * f));
+  if (samples.some((v) => v === null)) return null;
+  return Number(((samples as number[]).reduce((sum, v) => sum + v, 0) / samples.length).toFixed(1));
+}
+
+/**
+ * Classifies natural thunderstorm and helicopter-triggered lightning risk for one model point.
+ * Triggered risk uses the published Met Office criteria above. Natural thunderstorm and the
+ * general "convective shower" caution are ChopperCheck's own simpler rules.
  */
 export function classifyNorthSeaConvection(params: {
   cape: number | null;
@@ -687,57 +763,49 @@ export function classifyNorthSeaConvection(params: {
   precip: number;
   showers: number;
   freezeFt: number;
-  minus10Ft: number;
-  sstMinus500C: number;
+  minus10Ft?: number;
+  sstMinus500C?: number;
+  /** Average temperature between 2,000 and 3,000 ft (see averageTempInLayerC); null when unknown. */
+  layerTempC?: number | null;
+  /** Model grid spacing in km; picks the 4 km or 12 km precipitation table. Unknown = 12 km table. */
+  gridKm?: number | null;
 }): {
   risk: 'LOW' | 'MODERATE' | 'HIGH';
   type: 'NONE' | 'TRIGGERED_WINTER' | 'CONVECTIVE_SHOWER' | 'NATURAL_TS';
+  triggeredLevel: TriggeredLightningLevel;
 } {
-  const { cape, wmo, precip, showers, freezeFt, minus10Ft, sstMinus500C } = params;
+  const { cape, wmo, precip, showers, freezeFt } = params;
+  const C = TRIGGERED_LIGHTNING_CRITERIA;
+  const layerTempC =
+    typeof params.layerTempC === 'number' && Number.isFinite(params.layerTempC) ? params.layerTempC : null;
+  const table =
+    typeof params.gridKm === 'number' && params.gridKm <= 5 ? C.precipMmHr.fine : C.precipMmHr.coarse;
+
   if (wmo !== null && [95, 96, 99].includes(wmo)) {
-    return { risk: 'HIGH', type: 'NATURAL_TS' };
+    return { risk: 'HIGH', type: 'NATURAL_TS', triggeredLevel: 'NONE' };
   }
   if (cape !== null && cape >= 500 && (precip >= 0.25 || showers >= 0.15)) {
-    return { risk: 'HIGH', type: 'NATURAL_TS' };
+    return { risk: 'HIGH', type: 'NATURAL_TS', triggeredLevel: 'NONE' };
+  }
+
+  // The Met Office criteria use total surface precipitation rate
+  const totalPrecip = Math.max(precip, showers);
+  const tempOk = layerTempC !== null && layerTempC >= C.layerTempMinC && layerTempC <= C.layerTempMaxC;
+  const freezeOk = freezeFt >= C.freezeMinFt && freezeFt <= C.freezeMaxFt;
+
+  if (tempOk && freezeOk) {
+    if (totalPrecip >= table.high) return { risk: 'HIGH', type: 'TRIGGERED_WINTER', triggeredLevel: 'HIGH' };
+    if (totalPrecip >= table.medium) return { risk: 'HIGH', type: 'TRIGGERED_WINTER', triggeredLevel: 'MEDIUM' };
+    if (totalPrecip >= table.low) return { risk: 'MODERATE', type: 'TRIGGERED_WINTER', triggeredLevel: 'LOW' };
   }
 
   const isShowerWmo = wmo !== null && [80, 81, 82, 85, 86].includes(wmo);
-  // Triggered lightning ONLY occurs inside active precipitating convective cells/showers (graupel + ice crystal collisions).
-  // Dry cold air outside of shower cells has zero triggered-lightning risk in this estimate.
-  const hasPrecipCell = isShowerWmo || showers >= 0.2 || precip >= 0.35;
-  if (!hasPrecipCell) {
-    return { risk: 'LOW', type: 'NONE' };
-  }
-
-  // Convection-permitting models like UKMO UKV 2km place showers directly in precipitation rather than splitting showers
-  const hasActiveShowers =
-    isShowerWmo ||
-    showers >= 0.3 ||
-    (precip >= 0.8 && ((cape !== null && cape >= 80) || sstMinus500C >= 32));
-  const coldTopStrong = sstMinus500C >= 34 && minus10Ft <= 10500;
-  const coldTopMod = sstMinus500C >= 31 && minus10Ft <= 11500;
-
-  if (
-    freezeFt <= 3000 &&
-    minus10Ft <= 10500 &&
-    (hasActiveShowers || precip >= 0.8) &&
-    ((cape !== null && cape >= 180) || coldTopStrong)
-  ) {
-    return { risk: 'HIGH', type: 'TRIGGERED_WINTER' };
-  }
-
-  if (
-    freezeFt <= 3500 &&
-    (hasActiveShowers || (cape !== null && cape >= 80) || (coldTopMod && precip >= 0.35))
-  ) {
-    return { risk: 'MODERATE', type: 'TRIGGERED_WINTER' };
-  }
-
+  const hasActiveShowers = isShowerWmo || showers >= 0.3;
   if (hasActiveShowers || (cape !== null && cape >= 300) || precip >= 3.5) {
-    return { risk: 'MODERATE', type: 'CONVECTIVE_SHOWER' };
+    return { risk: 'MODERATE', type: 'CONVECTIVE_SHOWER', triggeredLevel: 'NONE' };
   }
 
-  return { risk: 'LOW', type: 'NONE' };
+  return { risk: 'LOW', type: 'NONE', triggeredLevel: 'NONE' };
 }
 
 const SHORT_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -1008,6 +1076,16 @@ export async function fetchMultiModelRigForecast(
           freezeFt: freezingLevelFt,
           minus10Ft: minus10IsothermFt,
           sstMinus500C,
+          gridKm: MODEL_GRID_KM[m],
+          layerTempC: averageTempInLayerC(
+            [
+              { heightM: 2, tempC: rawVal('temperature_2m') },
+              { heightM: rawVal('geopotential_height_925hPa') ?? NaN, tempC: rawVal('temperature_925hPa') },
+              { heightM: rawVal('geopotential_height_850hPa') ?? NaN, tempC: rawVal('temperature_850hPa') },
+            ],
+            TRIGGERED_LIGHTNING_CRITERIA.layerBottomFt,
+            TRIGGERED_LIGHTNING_CRITERIA.layerTopFt
+          ),
         });
         const lightningRisk = conv.risk;
         const lightningType = conv.type;
@@ -1338,12 +1416,24 @@ export async function fetchFlightCorridorProfile(
     const capeVal = typeof w?.hourly?.cape?.[hrIdx] === 'number' ? Number(w.hourly.cape[hrIdx]) : 0;
     const wmoCode = typeof w?.hourly?.weather_code?.[hrIdx] === 'number' ? Number(w.hourly.weather_code[hrIdx]) : 0;
     const dewSpreadC = Number(Math.max(0, t2m - dp2m).toFixed(1));
-    const lightningRisk: 'LOW' | 'MODERATE' | 'HIGH' =
-      [95, 96, 99].includes(wmoCode) || capeVal >= 600
-        ? 'HIGH'
-        : [80, 81, 82, 85, 86].includes(wmoCode) || capeVal >= 300
-        ? 'MODERATE'
-        : 'LOW';
+    const rawT = (f: string): number | null =>
+      typeof w?.hourly?.[f]?.[hrIdx] === 'number' ? Number(w.hourly[f][hrIdx]) : null;
+    const lightningRisk: 'LOW' | 'MODERATE' | 'HIGH' = classifyNorthSeaConvection({
+      cape: typeof w?.hourly?.cape?.[hrIdx] === 'number' ? capeVal : null,
+      wmo: typeof w?.hourly?.weather_code?.[hrIdx] === 'number' ? wmoCode : null,
+      precip,
+      showers: Number(w?.hourly?.showers?.[hrIdx] ?? 0),
+      freezeFt: freezingLevelFt,
+      layerTempC: averageTempInLayerC(
+        [
+          { heightM: 2, tempC: rawT('temperature_2m') },
+          { heightM: rawT('geopotential_height_925hPa') ?? NaN, tempC: rawT('temperature_925hPa') },
+          { heightM: rawT('geopotential_height_850hPa') ?? NaN, tempC: rawT('temperature_850hPa') },
+        ],
+        TRIGGERED_LIGHTNING_CRITERIA.layerBottomFt,
+        TRIGGERED_LIGHTNING_CRITERIA.layerTopFt
+      ),
+    }).risk;
 
     const evalLim = evaluateAirframeLimits(
       ws10,
@@ -1605,6 +1695,16 @@ export async function fetchWeatherPointsAt(
       freezeFt: freezingLevelFt,
       minus10Ft: minus10IsothermFt,
       sstMinus500C,
+      gridKm: MODEL_GRID_KM[modelId],
+      layerTempC: averageTempInLayerC(
+        [
+          { heightM: 2, tempC: pickRaw('temperature_2m') },
+          { heightM: pickRaw('geopotential_height_925hPa') ?? NaN, tempC: pickRaw('temperature_925hPa') },
+          { heightM: pickRaw('geopotential_height_850hPa') ?? NaN, tempC: pickRaw('temperature_850hPa') },
+        ],
+        TRIGGERED_LIGHTNING_CRITERIA.layerBottomFt,
+        TRIGGERED_LIGHTNING_CRITERIA.layerTopFt
+      ),
     });
 
     return {
