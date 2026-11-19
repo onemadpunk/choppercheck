@@ -493,7 +493,7 @@ export function evaluateHourWithLimits(
     const ltLabel =
       snap.lightningType === 'NATURAL_TS'
         ? 'Natural Thunderstorm (TS)'
-        : 'Winter Triggered-Lightning Setup (Low 0°C + Convective Showers)';
+        : 'Triggered-Lightning Conditions (Met Office criteria: −6 to −1°C at 2–3,000 ft, ≥4 mm/h, freezing level 1–4,500 ft)';
     return {
       status: 'HOLD',
       reason: `NO-GO (${phaseLabel} ${ltLabel})`,
@@ -549,7 +549,7 @@ export function evaluateHourWithLimits(
     if (snap.lightningRisk === 'MODERATE') {
       const ltLabel =
         snap.lightningType === 'TRIGGERED_WINTER'
-          ? 'WINTER TRIGGERED-LIGHTNING CAUTION: Low 0°C band + unstable convective showers'
+          ? 'TRIGGERED-LIGHTNING CAUTION: flight-level temperature and freezing level in the risk band with 1–4 mm/h showers'
           : 'CONVECTIVE SQUALL CAUTION: Heavy showers / instability forecast';
       return {
         status: 'CAUTION',

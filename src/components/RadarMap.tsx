@@ -976,11 +976,11 @@ export const RadarMap: React.FC<RadarMapProps> = ({
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block shrink-0" />
-                <span className="text-amber-300">Mod band (0°C ≤ 3,500ft + showers)</span>
+                <span className="text-amber-300">Moderate: −6 to −1°C at 2–3,000 ft + 1–4 mm/h</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block shrink-0" />
-                <span className="text-rose-300">High risk area</span>
+                <span className="text-rose-300">High: all 3 Met Office criteria (≥4 mm/h)</span>
               </div>
               <div
                 className={`pt-1 border-t border-slate-800 font-semibold ${

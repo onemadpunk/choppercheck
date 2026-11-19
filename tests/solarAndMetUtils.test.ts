@@ -19,6 +19,7 @@ import {
 import {
   AIRFRAME_PRESETS,
   classifyNorthSeaConvection,
+  averageTempInLayerC,
   computeMinus10IsothermFt,
   evaluateCorridorLightningBypass,
   buildCorridorTrackGeometry,
@@ -156,11 +157,12 @@ test('North Sea triggered-lightning physics separates winter triggered setup fro
   const winterTriggered = classifyNorthSeaConvection({
     cape: 210,
     wmo: 81,
-    precip: 1.5,
-    showers: 1.2,
+    precip: 4.5,
+    showers: 4.2,
     freezeFt: 2200,
     minus10Ft: minus10,
     sstMinus500C: 36,
+    layerTempC: -3,
   });
   assert.equal(winterTriggered.risk, 'HIGH');
   assert.equal(winterTriggered.type, 'TRIGGERED_WINTER');
@@ -191,58 +193,49 @@ test('North Sea triggered-lightning physics separates winter triggered setup fro
   assert.equal(dryColdAir.type, 'NONE');
 });
 
-test('UKMO UKV 2km is registered as 5th model and handles convection-permitting precipitation', () => {
+test('UKMO UKV 2km is registered as 5th model', () => {
   assert.equal(WEATHER_MODELS_META.length, 5);
   assert.ok(WEATHER_MODELS_META.some((m) => m.id === 'ukmo_seamless' && m.shortName === 'UKMO UKV'));
 
-  // A 1.6 mm/h cell is below the strong-cell threshold: moderate, not high
-  const ukvCell = classifyNorthSeaConvection({
-    cape: 190,
-    wmo: 71,
-    precip: 1.6,
-    showers: 0,
-    freezeFt: 1800,
-    minus10Ft: 8500,
-    sstMinus500C: 35,
-  });
-  assert.equal(ukvCell.risk, 'MODERATE');
-  assert.equal(ukvCell.type, 'TRIGGERED_WINTER');
-
-  const ukvStrongCell = classifyNorthSeaConvection({
-    cape: 190,
-    wmo: 71,
-    precip: 2.6,
-    showers: 0,
-    freezeFt: 1800,
-    minus10Ft: 8500,
-    sstMinus500C: 35,
-  });
-  assert.equal(ukvStrongCell.risk, 'HIGH');
 });
 
-test('triggered lightning follows the research freezing-level and cruise-temperature bands', () => {
-  const base = {
-    cape: 220,
-    wmo: 81,
-    precip: 2.5,
-    showers: 2.5,
-    minus10Ft: 8000,
-    sstMinus500C: 36,
-  };
-  // Core setup: freezing level 2,000 ft, -1 C at cruise height
-  assert.equal(classifyNorthSeaConvection({ ...base, freezeFt: 2000, cruiseTempC: -1 }).risk, 'HIGH');
-  // Cruise air too cold (-8 C) for the mixed-phase band: not a triggered setup
-  const tooCold = classifyNorthSeaConvection({ ...base, freezeFt: 2000, cruiseTempC: -8 });
-  assert.notEqual(tooCold.type, 'TRIGGERED_WINTER');
-  // Freezing level right at the sea surface: below the 1,000 ft core band, so moderate at most
-  assert.equal(classifyNorthSeaConvection({ ...base, freezeFt: 300, cruiseTempC: -3 }).risk, 'MODERATE');
-  // Freezing level 3,300 ft: just outside the core, moderate
-  assert.equal(classifyNorthSeaConvection({ ...base, freezeFt: 3300, cruiseTempC: 1.5 }).risk, 'MODERATE');
-  // Weak shower (0.5 mm/h, slight shower code) in the core band: moderate, not high
-  assert.equal(
-    classifyNorthSeaConvection({ ...base, wmo: 80, precip: 0.5, showers: 0.5, freezeFt: 2000, cruiseTempC: -1 }).risk,
-    'MODERATE'
+test('triggered lightning follows the Met Office (Wilkinson et al. 2013) criteria', () => {
+  const base = { cape: 150, wmo: 81, showers: 0, freezeFt: 2000 };
+  // All three criteria: -6..-1 C between 2,000-3,000 ft, >= 4 mm/h, freezing level 1,000-4,500 ft
+  assert.equal(classifyNorthSeaConvection({ ...base, precip: 4.2, layerTempC: -3 }).risk, 'HIGH');
+  // 1-4 mm/h with the right temperatures: moderate (the paper's two misses had 1-2 mm/h model rain)
+  const nearMiss = classifyNorthSeaConvection({ ...base, precip: 1.6, layerTempC: -3 });
+  assert.equal(nearMiss.risk, 'MODERATE');
+  assert.equal(nearMiss.type, 'TRIGGERED_WINTER');
+  // Layer too warm (0 C) or too cold (-8 C): not a triggered setup
+  assert.notEqual(classifyNorthSeaConvection({ ...base, precip: 5, layerTempC: 0 }).type, 'TRIGGERED_WINTER');
+  assert.notEqual(classifyNorthSeaConvection({ ...base, precip: 5, layerTempC: -8 }).type, 'TRIGGERED_WINTER');
+  // Freezing level below 1,000 ft or above 4,500 ft: not a triggered setup
+  assert.notEqual(
+    classifyNorthSeaConvection({ ...base, precip: 5, layerTempC: -3, freezeFt: 600 }).type,
+    'TRIGGERED_WINTER'
   );
+  assert.notEqual(
+    classifyNorthSeaConvection({ ...base, precip: 5, layerTempC: -3, freezeFt: 5000 }).type,
+    'TRIGGERED_WINTER'
+  );
+  // Unknown layer temperature: never claims a triggered setup
+  assert.notEqual(classifyNorthSeaConvection({ ...base, precip: 5, layerTempC: null }).type, 'TRIGGERED_WINTER');
+});
+
+test('averageTempInLayerC interpolates the 2,000-3,000 ft average', () => {
+  // 2 m at +1 C, 925 hPa at 760 m (2,493 ft) at -2.5 C, 850 hPa at 1,400 m at -6 C
+  const t = averageTempInLayerC(
+    [
+      { heightM: 2, tempC: 1 },
+      { heightM: 760, tempC: -2.5 },
+      { heightM: 1400, tempC: -6 },
+    ],
+    2000,
+    3000
+  );
+  assert.ok(t !== null && t < -1.5 && t > -3.5, `got ${t}`);
+  assert.equal(averageTempInLayerC([{ heightM: 2, tempC: 1 }], 2000, 3000), null);
 });
 
 test('Deck-height wind, FPSO long-swell risk, runway crosswind, WMO sea-state and 5-model consensus work cleanly', () => {
