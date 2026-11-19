@@ -458,9 +458,11 @@ export function evaluateHourWithLimits(
     lightningType?: 'NONE' | 'TRIGGERED_WINTER' | 'CONVECTIVE_SHOWER' | 'NATURAL_TS';
     fogSpreadRisk?: 'LOW' | 'MODERATE' | 'HIGH';
     dewSpreadC?: number;
+    missingData?: string[];
   },
-  waveHeightM: number,
-  swellPeriodSec: number,
+  /** null = no sea data or not applicable (shore base); sea-state checks are then skipped. */
+  waveHeightM: number | null,
+  swellPeriodSec: number | null,
   isNight: boolean,
   isFpso: boolean,
   basePreset: AirframeLimitPreset,
@@ -472,6 +474,9 @@ export function evaluateHourWithLimits(
   const phaseLabel = isNight ? 'NIGHT' : 'DAY';
   const effWind = snap.deckWindSpeedKts ?? snap.windSpeed10mKts;
   const effGust = snap.deckWindGustKts ?? snap.windGust10mKts;
+  const hasWave = typeof waveHeightM === 'number' && Number.isFinite(waveHeightM);
+  const wave = hasWave ? (waveHeightM as number) : 0;
+  const waveTxt = hasWave ? `Wave ${waveHeightM}m` : 'no sea data';
 
   if (limits.daylightOnlyBlocked) {
     const why = customOverride?.daylightOnlyDeck
@@ -479,7 +484,7 @@ export function evaluateHourWithLimits(
       : 'Outside Daylight Crew-Change Window (CAA Night)';
     return {
       status: 'HOLD',
-      reason: `NIGHT HOLD: ${why} · Gusts ${effGust}kt, Wave ${waveHeightM}m`,
+      reason: `NIGHT HOLD: ${why} · Gusts ${effGust}kt, ${waveTxt}`,
       limits,
     };
   }
@@ -507,10 +512,10 @@ export function evaluateHourWithLimits(
       limits,
     };
   }
-  if (waveHeightM > limits.maxFpsoWaveHeightM) {
+  if (hasWave && wave > limits.maxFpsoWaveHeightM) {
     return {
       status: 'HOLD',
-      reason: `NO-GO (${phaseLabel} Sea State): Wave Hs ${waveHeightM}m exceeds ${limits.maxFpsoWaveHeightM}m CAA sea state limit`,
+      reason: `NO-GO (${phaseLabel} Sea State): Wave Hs ${wave}m exceeds ${limits.maxFpsoWaveHeightM}m CAA sea state limit`,
       limits,
     };
   }
@@ -532,7 +537,7 @@ export function evaluateHourWithLimits(
     };
   }
 
-  const longPeriodSwellCaution = isFpso && swellPeriodSec >= 10.0 && waveHeightM >= 2.5;
+  const longPeriodSwellCaution = isFpso && hasWave && (swellPeriodSec ?? 0) >= 10.0 && wave >= 2.5;
   const approachShearCaution = (snap.approachShearKts ?? 0) >= 20;
 
   if (
@@ -544,7 +549,7 @@ export function evaluateHourWithLimits(
     approachShearCaution ||
     snap.cloudCeilingFt < limits.minCloudCeilingFt + 350 ||
     snap.visibilityKm < limits.minVisibilityKm + 2.0 ||
-    waveHeightM >= limits.maxFpsoWaveHeightM - 1.2
+    (hasWave && wave >= limits.maxFpsoWaveHeightM - 1.2)
   ) {
     if (snap.lightningRisk === 'MODERATE') {
       const ltLabel =
@@ -567,7 +572,7 @@ export function evaluateHourWithLimits(
     if (longPeriodSwellCaution) {
       return {
         status: 'CAUTION',
-        reason: `FPSO SWELL PERIOD CAUTION: ${waveHeightM}m @ ${swellPeriodSec}s long Atlantic swell (Pitch/Roll risk)`,
+        reason: `FPSO SWELL PERIOD CAUTION: ${wave}m @ ${swellPeriodSec}s long Atlantic swell (Pitch/Roll risk)`,
         limits,
       };
     }
@@ -585,24 +590,98 @@ export function evaluateHourWithLimits(
         limits,
       };
     }
-    if (isFpso && waveHeightM >= limits.maxFpsoWaveHeightM - 1.2) {
+    if (isFpso && hasWave && wave >= limits.maxFpsoWaveHeightM - 1.2) {
       return {
         status: 'CAUTION',
-        reason: `FPSO MOTION CAUTION (${phaseLabel}): Wave Hs ${waveHeightM}m near ${limits.maxFpsoWaveHeightM}m limit`,
+        reason: `FPSO MOTION CAUTION (${phaseLabel}): Wave Hs ${wave}m near ${limits.maxFpsoWaveHeightM}m limit`,
         limits,
       };
     }
     return {
       status: 'CAUTION',
-      reason: `CAUTION (${phaseLabel}): Gusts ${effGust} kt · Ceiling ${snap.cloudCeilingFt.toLocaleString()} ft · Wave ${waveHeightM}m`,
+      reason: `CAUTION (${phaseLabel}): Gusts ${effGust} kt · Ceiling ${snap.cloudCeilingFt.toLocaleString()} ft · ${waveTxt}`,
+      limits,
+    };
+  }
+
+  if (snap.missingData && snap.missingData.length > 0) {
+    return {
+      status: 'CAUTION',
+      reason: `NO DATA: the forecast has no ${snap.missingData.join(', ')} for this hour, so it is not counted as good to fly`,
       limits,
     };
   }
 
   return {
     status: 'GO',
-    reason: `GO (${basePreset.id} ${phaseLabel} Limits) — Deck gusts ${effGust} kt · Wave ${waveHeightM}m · 0°C ${snap.freezingLevelFt.toLocaleString()} ft`,
+    reason: `GO (${basePreset.id} ${phaseLabel} Limits) — Deck gusts ${effGust} kt · ${waveTxt} · 0°C ${snap.freezingLevelFt.toLocaleString()} ft`,
     limits,
+  };
+}
+
+/**
+ * The status the app shows for one hour at one facility: the limit check plus the wave-derived
+ * deck motion estimate on FPSOs and semi-subs. A red deck estimate turns GO into CAUTION (never
+ * HOLD, because it is only an estimate). The map card and the weather panel both use this, so
+ * they always agree.
+ */
+export function evaluateFacilityHour(params: {
+  snap: Parameters<typeof evaluateHourWithLimits>[0] & { windDir10mDeg?: number };
+  hour: Pick<
+    MultiModelHourEntry,
+    'waveHeightM' | 'swellPeriodSec' | 'swellWaveHeightM' | 'swellWavePeriodSec' | 'swellDirDeg'
+  >;
+  isNight: boolean;
+  isFpso: boolean;
+  isSemiSub: boolean;
+  preset: AirframeLimitPreset;
+  flightOpsMode: FlightOpsMode;
+  customOverride?: CustomRigOverride | null;
+}): {
+  status: 'GO' | 'CAUTION' | 'HOLD';
+  reason: string;
+  limits: EffectiveOperatingLimits;
+  deckMotion: EstimatedFpsoDeckMotion | null;
+  deckMotionRaisesCaution: boolean;
+} {
+  const { snap, hour, isNight, isFpso, isSemiSub, preset, flightOpsMode, customOverride } = params;
+  const ev = evaluateHourWithLimits(
+    snap,
+    hour.waveHeightM,
+    hour.swellPeriodSec,
+    isNight,
+    isFpso,
+    preset,
+    flightOpsMode,
+    customOverride,
+    isSemiSub
+  );
+  const deckMotion =
+    isFpso && hour.waveHeightM !== null
+      ? computeEstimatedFpsoDeckMotion({
+          waveHeightM: hour.waveHeightM,
+          swellPeriodSec: hour.swellPeriodSec ?? 0,
+          swellWaveHeightM: hour.swellWaveHeightM,
+          swellWavePeriodSec: hour.swellWavePeriodSec,
+          swellDirDeg: hour.swellDirDeg ?? undefined,
+          windDirDeg: snap.windDir10mDeg,
+          vesselHeadingDeg: customOverride?.vesselHeadingDeg,
+          maxPitchRollLimit: ev.limits.maxPitchRollDeg,
+          maxInclinationLimit: ev.limits.maxInclinationDeg,
+          maxShrLimit: ev.limits.maxShrMs,
+        })
+      : null;
+  const deckMotionRaisesCaution = ev.status === 'GO' && deckMotion?.deckLightStatus === 'RED';
+  return {
+    status: deckMotionRaisesCaution ? 'CAUTION' : ev.status,
+    reason: deckMotionRaisesCaution
+      ? `DECK MOTION CAUTION (estimate): wave-derived pitch/roll/heave may exceed the ${
+          isSemiSub ? 'semi-sub' : 'FPSO'
+        } limits. Check the live HMS deck status.`
+      : ev.reason,
+    limits: ev.limits,
+    deckMotion,
+    deckMotionRaisesCaution,
   };
 }
 
@@ -635,10 +714,16 @@ export function computeFiveModelConsensus(
   let freezeMaxFt = 0;
 
   const perModel: Array<{ id: WeatherModelId; status: 'GO' | 'CAUTION' | 'HOLD' }> = [];
+  const noDataModels: string[] = [];
 
   for (const mId of modelIds) {
     const snap = hourEntry.models[mId];
     if (!snap) continue;
+    // A model with gaps for this hour does not get a vote
+    if (snap.missingData && snap.missingData.length > 0) {
+      noDataModels.push(MODEL_SHORT_LABELS[mId] || mId);
+      continue;
+    }
     const ev = evaluateHourWithLimits(
       snap,
       hourEntry.waveHeightM,
@@ -662,7 +747,25 @@ export function computeFiveModelConsensus(
     if (snap.freezingLevelFt > freezeMaxFt) freezeMaxFt = snap.freezingLevelFt;
   }
 
-  const totalModels = perModel.length || 5;
+  const totalModels = perModel.length;
+  if (totalModels === 0) {
+    return {
+      totalModels: 0,
+      goCount: 0,
+      cautionCount: 0,
+      holdCount: 0,
+      agreementCount: 0,
+      consensusStatus: 'CAUTION',
+      isSplit: false,
+      headline: 'NO COMPLETE MODEL DATA FOR THIS HOUR',
+      gustMinKts: 0,
+      gustMaxKts: 0,
+      freezeMinFt: 0,
+      freezeMaxFt: 0,
+      dissentingModels: [],
+      noDataModels,
+    };
+  }
   const consensusStatus: 'GO' | 'CAUTION' | 'HOLD' =
     holdCount >= Math.ceil(totalModels / 2)
       ? 'HOLD'
@@ -700,6 +803,7 @@ export function computeFiveModelConsensus(
     freezeMinFt: freezeMinFt === 99999 ? 0 : freezeMinFt,
     freezeMaxFt,
     dissentingModels,
+    noDataModels,
   };
 }
 
@@ -742,7 +846,7 @@ export function buildContextAwareSevenDaySummaries(
         : dayHours;
 
     let maxGustKts = 0;
-    let maxWaveM = 0;
+    let maxWaveM: number | null = null;
     let minCeilingFt = 99999;
     let minFreezingFt = 99999;
     let goCount = 0;
@@ -770,7 +874,7 @@ export function buildContextAwareSevenDaySummaries(
 
       const gustReading = snap.deckWindGustKts ?? snap.windGust10mKts;
       if (gustReading > maxGustKts) maxGustKts = gustReading;
-      if (h.waveHeightM > maxWaveM) maxWaveM = h.waveHeightM;
+      if (h.waveHeightM !== null && (maxWaveM === null || h.waveHeightM > maxWaveM)) maxWaveM = h.waveHeightM;
       if (snap.cloudCeilingFt < minCeilingFt) minCeilingFt = snap.cloudCeilingFt;
       if (snap.freezingLevelFt < minFreezingFt) minFreezingFt = snap.freezingLevelFt;
 
@@ -977,7 +1081,7 @@ export function formatCrewOutlookSummary(params: {
   lines.push('7-Day Window (Model Guidance):');
   for (const d of daySummaries.slice(0, 7)) {
     lines.push(
-      `• ${d.dayNameShort} ${d.dateShort}: ${d.overallStatus} (Max ${d.maxGustKts}kt, ${d.maxWaveM}m, ${d.goHoursCount}h GO)`
+      `• ${d.dayNameShort} ${d.dateShort}: ${d.overallStatus} (Max ${d.maxGustKts}kt, ${d.maxWaveM === null ? "no sea data" : `${d.maxWaveM}m`}, ${d.goHoursCount}h GO)`
     );
   }
   lines.push('');

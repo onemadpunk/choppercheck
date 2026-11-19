@@ -17,6 +17,7 @@ import {
   WEATHER_MODELS_META,
   fetchNearbyOffshoreOrUpwindMetars,
   applyReportedCeilingToWaypoint,
+  SHORE_ASSET_TYPES,
 } from '../services/multiModelWeatherService';
 import { calculateBearingDeg, calculateDistanceNm } from '../data/aircraftDecoder';
 import { BaseOutlookCard, SHORE_BASE_ASSET_TYPES } from './BaseOutlookCard';
@@ -31,6 +32,7 @@ import {
   evaluateFpsoSwellRisk,
   deriveEffectiveLimits,
   evaluateHourWithLimits,
+  evaluateFacilityHour,
   parseMetarCloudBase,
   parseMetarWindVis,
   NO_CEILING_FT,
@@ -265,19 +267,19 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     ];
   }, [corridorWaypointsModel, reportedCeilingFt, metarStation, shoreBaseFacility.code, preset]);
 
+  // Same evaluation as the map card (limits + deck motion estimate), so the two always agree
   const evaluatedActive = useMemo(() => {
     if (!activeModelSnapshot || !activeHour) return null;
-    return evaluateHourWithLimits(
-      activeModelSnapshot,
-      activeHour.waveHeightM,
-      activeHour.swellPeriodSec,
-      isNightHour,
+    return evaluateFacilityHour({
+      snap: activeModelSnapshot,
+      hour: activeHour,
+      isNight: isNightHour,
       isFpso,
+      isSemiSub,
       preset,
       flightOpsMode,
       customOverride,
-      isSemiSub
-    );
+    });
   }, [
     isSemiSub,
     activeModelSnapshot,
@@ -356,67 +358,51 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   const maxInclinationLimit = effLimits?.maxInclinationDeg ?? fallbackLimits.maxInclinationDeg;
   const maxShrLimit = effLimits?.maxShrMs ?? fallbackLimits.maxShrMs;
 
-  const deckWindVal =
-    activeModelSnapshot?.deckWindSpeedKts ??
-    activeModelSnapshot?.windSpeed10mKts ??
-    weather?.windSpeedKts ??
-    0;
-  const gustVal =
-    activeModelSnapshot?.deckWindGustKts ??
-    activeModelSnapshot?.windGust10mKts ??
-    weather?.windGustKts ??
-    0;
+  // Values the forecast did not supply are null and shown as "no data", never a made-up number
+  const missingSet = new Set(activeModelSnapshot?.missingData ?? []);
+  const fromSnap = <T,>(v: T | undefined, ...needs: string[]): T | null =>
+    activeModelSnapshot && v !== undefined && !needs.some((n) => missingSet.has(n)) ? v : null;
+  const deckWindVal: number | null = activeModelSnapshot
+    ? fromSnap(activeModelSnapshot.deckWindSpeedKts ?? activeModelSnapshot.windSpeed10mKts, 'wind')
+    : weather?.windSpeedKts ?? null;
+  const gustVal: number | null = activeModelSnapshot
+    ? fromSnap(activeModelSnapshot.deckWindGustKts ?? activeModelSnapshot.windGust10mKts, 'gusts')
+    : weather?.windGustKts ?? null;
   const approachShearKts = activeModelSnapshot?.approachShearKts ?? 0;
   const gustStatus =
-    Math.max(gustVal, deckWindVal) > maxGustLimit
+    gustVal === null || deckWindVal === null
+      ? 'NODATA'
+      : Math.max(gustVal, deckWindVal) > maxGustLimit
       ? 'HOLD'
       : gustVal >= cautionGustLimit || approachShearKts >= 20
       ? 'CAUTION'
       : 'GO';
 
-  const waveVal = activeHour?.waveHeightM ?? weather?.significantWaveHeightM ?? 0;
-  const wavePeriodVal = activeHour?.swellPeriodSec ?? weather?.swellPeriodSec ?? 7;
+  const waveVal: number | null = activeHour
+    ? activeHour.waveHeightM
+    : weather?.significantWaveHeightM ?? null;
+  const wavePeriodVal: number | null = activeHour
+    ? activeHour.swellPeriodSec
+    : weather?.swellPeriodSec ?? null;
+  const isShoreFacility = SHORE_ASSET_TYPES.has(facility.assetType);
   // FPSO Wind-Over-Deck Sector if heading saved
-  const windDirNow = activeModelSnapshot?.windDir10mDeg ?? weather?.windDirectionDeg ?? 230;
+  const windDirNow: number | null = activeModelSnapshot
+    ? fromSnap(activeModelSnapshot.windDir10mDeg, 'wind')
+    : weather?.windDirectionDeg ?? null;
   const windOverDeck =
-    isFpso && typeof customOverride?.vesselHeadingDeg === 'number'
+    isFpso && windDirNow !== null && typeof customOverride?.vesselHeadingDeg === 'number'
       ? computeWindOverDeckSector(windDirNow, customOverride.vesselHeadingDeg)
       : null;
 
-  const fpsoMotionEstimate = (() => {
-    if (!isFpso) return null;
-    return computeEstimatedFpsoDeckMotion({
-      waveHeightM: waveVal,
-      swellPeriodSec: wavePeriodVal,
-      swellWaveHeightM: activeHour?.swellWaveHeightM,
-      swellWavePeriodSec: activeHour?.swellWavePeriodSec,
-      swellDirDeg: activeHour?.swellDirDeg,
-      windDirDeg: windDirNow,
-      vesselHeadingDeg: customOverride?.vesselHeadingDeg,
-      maxPitchRollLimit,
-      maxInclinationLimit,
-      maxShrLimit,
-    });
-  })();
-
-  // The wave-derived deck motion estimate feeds the verdict: if it says the deck may move more than
-  // the limits, a GO becomes CAUTION. It never makes a HOLD on its own because it is only an estimate;
-  // the vessel's live helideck monitoring system (HMS) decides.
-  const baseStatus: 'GO' | 'CAUTION' | 'HOLD' =
-    evaluatedActive?.status ||
-    activeModelSnapshot?.status ||
-    (!weather || weather.cap437Status === 'UNAVAILABLE' ? 'GO' : weather.cap437Status);
-  const baseReason =
-    evaluatedActive?.reason ||
-    activeModelSnapshot?.statusReason ||
-    weather?.cap437Reason ||
-    '7-Day Multi-Model Offshore Operating Limits Active';
-  const deckMotionRaisesCaution =
-    isFpso && fpsoMotionEstimate?.deckLightStatus === 'RED' && baseStatus === 'GO';
-  const currentStatus: 'GO' | 'CAUTION' | 'HOLD' = deckMotionRaisesCaution ? 'CAUTION' : baseStatus;
-  const currentReason = deckMotionRaisesCaution
-    ? `DECK MOTION CAUTION (estimate): wave-derived pitch/roll/heave may exceed the ${isSemiSub ? 'semi-sub' : 'FPSO'} limits. Check the live HMS deck status.`
-    : baseReason;
+  // Wave-derived deck motion estimate (FPSOs and semi-subs). Only from forecast sea data; a red
+  // estimate turns GO into CAUTION, never HOLD, because the vessel's HMS decides.
+  const fpsoMotionEstimate = evaluatedActive?.deckMotion ?? null;
+  const hasForecast = Boolean(evaluatedActive);
+  const deckMotionRaisesCaution = evaluatedActive?.deckMotionRaisesCaution ?? false;
+  // With no forecast loaded the app must never say GO
+  const currentStatus: 'GO' | 'CAUTION' | 'HOLD' = evaluatedActive?.status ?? 'CAUTION';
+  const currentReason =
+    evaluatedActive?.reason ?? 'NO DATA: the forecast has not loaded, so there is no flying estimate yet.';
 
   const statusColor =
     currentStatus === 'GO'
@@ -426,21 +412,23 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
       : 'text-rose-400 border-rose-500/50 bg-rose-950/30';
 
   const swellRisk = evaluateFpsoSwellRisk(
-    waveVal,
-    wavePeriodVal,
+    waveVal ?? 0,
+    wavePeriodVal ?? 0,
     activeHour?.swellWaveHeightM,
     activeHour?.swellWavePeriodSec,
-    isFpso
+    isFpso && waveVal !== null
   );
   const longSwellRisk = swellRisk.isResonantSwell;
   const waveStatus =
-    waveVal > maxWaveLimit
+    waveVal === null
+      ? 'NODATA'
+      : waveVal > maxWaveLimit
       ? 'HOLD'
       : waveVal >= maxWaveLimit - 1.2 || longSwellRisk
       ? 'CAUTION'
       : 'GO';
 
-  const ceilVal = activeModelSnapshot?.cloudCeilingFt ?? 2200;
+  const ceilVal: number | null = fromSnap(activeModelSnapshot?.cloudCeilingFt, 'low cloud', 'temperature', 'dew point');
   // Nearest airport/platform METAR that reports cloud, shown beside the offshore model estimate
   const nearestReportedCloud = (() => {
     if (!isCurrentHour) return null;
@@ -463,20 +451,42 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     );
   })();
   const ceilStatus =
-    ceilVal < minCeilLimit ? 'HOLD' : ceilVal < minCeilLimit + 350 ? 'CAUTION' : 'GO';
+    ceilVal === null
+      ? 'NODATA'
+      : ceilVal < minCeilLimit
+      ? 'HOLD'
+      : ceilVal < minCeilLimit + 350
+      ? 'CAUTION'
+      : 'GO';
 
-  const visVal = activeModelSnapshot?.visibilityKm ?? weather?.visibilityKm ?? 10;
+  const visVal: number | null = activeModelSnapshot
+    ? fromSnap(activeModelSnapshot.visibilityKm, 'temperature', 'dew point')
+    : weather?.visibilityKm ?? null;
   const visStatus =
-    visVal < minVisLimit ? 'HOLD' : visVal < minVisLimit + 2.0 ? 'CAUTION' : 'GO';
+    visVal === null ? 'NODATA' : visVal < minVisLimit ? 'HOLD' : visVal < minVisLimit + 2.0 ? 'CAUTION' : 'GO';
 
-  const freezeVal = activeModelSnapshot?.freezingLevelFt ?? 4000;
+  const freezeVal: number | null = fromSnap(activeModelSnapshot?.freezingLevelFt, 'freezing level');
   const precipVal = activeModelSnapshot?.precipMmHr ?? 0;
   const icingActive =
+    freezeVal !== null &&
     freezeVal > 0 &&
     freezeVal < preset.minIcingFreezingLevelFt &&
-    (ceilVal < 2500 || precipVal > 0.2);
+    ((ceilVal ?? 99999) < 2500 || precipVal > 0.2);
   const iceStatus =
-    icingActive && freezeVal < 1000 ? 'HOLD' : icingActive ? 'CAUTION' : 'GO';
+    freezeVal === null
+      ? 'NODATA'
+      : icingActive && freezeVal < 1000
+      ? 'HOLD'
+      : icingActive
+      ? 'CAUTION'
+      : 'GO';
+  /** Formats a value for display, or "no data" when the forecast did not supply it */
+  const nd = (v: number | null, f: (n: number) => string = (n) => String(n)) => (v === null ? 'no data' : f(v));
+  /** Value with its unit, or "no data" */
+  const ndU = (v: number | null, unit: string) => (v === null ? 'no data' : `${v}${unit}`);
+  const dash = (v: number | null | undefined, f: (n: number) => string = (n) => String(n)) =>
+    v === null || v === undefined ? '—' : f(v);
+  const ndFt = (v: number | null) => (v === null ? 'no data' : `${v.toLocaleString()} ft`);
 
   const lightningRisk = activeModelSnapshot?.lightningRisk ?? 'LOW';
   const lightningType = activeModelSnapshot?.lightningType ?? 'NONE';
@@ -491,7 +501,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   const lightningStatus =
     lightningRisk === 'HIGH' ? 'HOLD' : lightningRisk === 'MODERATE' ? 'CAUTION' : 'GO';
 
-  const dewSpreadVal = activeModelSnapshot?.dewSpreadC ?? 2.5;
+  const dewSpreadVal: number | null = fromSnap(activeModelSnapshot?.dewSpreadC, 'temperature', 'dew point');
   const fogSpreadRisk = activeModelSnapshot?.fogSpreadRisk ?? 'LOW';
   const fogStatus =
     fogSpreadRisk === 'HIGH' ? 'CAUTION' : fogSpreadRisk === 'MODERATE' ? 'CAUTION' : 'GO';
@@ -590,25 +600,28 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
 
   // Plain-English explanation for casual offshore passengers & crew
   const plainEnglishSummary = (() => {
+    if (!hasForecast) {
+      return 'No forecast has loaded for this location yet, so ChopperCheck has no flying estimate. Check your connection, or use the official forecast.';
+    }
     if (evaluatedActive?.limits.daylightOnlyBlocked) {
       return `Night flight hold: ${activeHour?.hourLabel || 'This hour'} UTC is outside daylight hours and the deck is set to Daylight Flights Only.`;
     }
     if (gustStatus === 'HOLD') {
-      return `Too windy at the helideck: Wind gusts are ${gustVal} kt, which is over the ${maxGustLimit} kt helicopter limit.`;
+      return `Too windy at the helideck: Wind gusts are ${ndU(gustVal, ' kt')}, which is over the ${maxGustLimit} kt helicopter limit.`;
     }
     if (waveStatus === 'HOLD') {
-      return `Seas are too rough: Wave height is ${waveVal} m, which exceeds the ${maxWaveLimit} m limit for ${
+      return `Seas are too rough: Wave height is ${ndU(waveVal, ' m')}, which exceeds the ${maxWaveLimit} m limit for ${
         isFpso ? 'floating FPSO helideck pitch, roll & heave' : 'offshore helicopter operations'
       }.`;
     }
     if (ceilStatus === 'HOLD' || visStatus === 'HOLD') {
-      return `Low cloud or sea fog (haar): Cloud base (${ceilVal.toLocaleString()} ft) or visibility (${visVal} km) is below the ${minCeilLimit} ft / ${minVisLimit} km helicopter approach minimum.`;
+      return `Low cloud or sea fog (haar): Cloud base (${ndFt(ceilVal)}) or visibility (${ndU(visVal, ' km')}) is below the ${minCeilLimit} ft / ${minVisLimit} km helicopter approach minimum.`;
     }
     if (lightningStatus === 'HOLD') {
       return `High lightning / squall risk: Cold winter showers or thunderstorms can trigger lightning on rotor blades — flights hold until the cells pass.`;
     }
     if (iceStatus === 'HOLD') {
-      return `Icing hold: The 0°C freezing level is very low (${freezeVal.toLocaleString()} ft) with cloud/moisture.`;
+      return `Icing hold: The 0°C freezing level is very low (${ndFt(freezeVal)}) with cloud/moisture.`;
     }
     if (corridorWaypoints[0]?.status === 'HOLD') {
       return `Weather at ${facility.shortName} is okay, but your shore airport (${shoreBaseFacility.shortName}) is currently below flight limits.`;
@@ -617,29 +630,33 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
       return `Weather at ${facility.shortName} is okay, but weather halfway along the flight route from ${shoreBaseFacility.code} is outside limits.`;
     }
     if (deckMotionRaisesCaution) {
-      return `Deck motion may be too much: from the forecast waves (${waveVal} m) and swell (${wavePeriodVal}s), our rough estimate is that this ${isSemiSub ? 'semi-sub' : 'FPSO'} could be pitching, rolling or heaving beyond the landing limits. Only the vessel's own motion sensors know for sure.`;
+      return `Deck motion may be too much: from the forecast waves (${ndU(waveVal, ' m')}) and swell (${ndU(wavePeriodVal, 's')}), our rough estimate is that this ${isSemiSub ? 'semi-sub' : 'FPSO'} could be pitching, rolling or heaving beyond the landing limits. Only the vessel's own motion sensors know for sure.`;
     }
     if (lightningStatus === 'CAUTION') {
-      return `Wind (${gustVal} kt) and waves (${waveVal} m) are well within limits, but cold air + winter showers can trigger static lightning on helicopter blades — crews may wait 20–40 mins for heavy showers to pass.`;
+      return `Wind (${ndU(gustVal, ' kt')}) and waves (${ndU(waveVal, ' m')}) are well within limits, but cold air + winter showers can trigger static lightning on helicopter blades — crews may wait 20–40 mins for heavy showers to pass.`;
     }
     if (gustStatus === 'CAUTION') {
-      return `Breezy at the helideck (${gustVal} kt gusts vs ${maxGustLimit} kt limit) — flights can still operate, with a small chance of wind or turbulence delays.`;
+      return `Breezy at the helideck (${ndU(gustVal, ' kt')} gusts vs ${maxGustLimit} kt limit) — flights can still operate, with a small chance of wind or turbulence delays.`;
     }
     if (waveStatus === 'CAUTION') {
-      return `Moderate-to-rough seas (${waveVal} m waves vs ${maxWaveLimit} m limit)${
+      return `Moderate-to-rough seas (${ndU(waveVal, ' m')} waves vs ${maxWaveLimit} m limit)${
         isFpso ? ' — floating FPSO deck motion could cause brief waits for a steady window' : ''
       }.`;
     }
     if (ceilStatus === 'CAUTION' || visStatus === 'CAUTION' || fogStatus === 'CAUTION') {
-      return `Low cloud (${ceilVal.toLocaleString()} ft) or mist (${visVal} km) — within radar approach limits (min ${minCeilLimit} ft), so flights can normally go ahead unless fog thickens.`;
+      return `Low cloud (${ndFt(ceilVal)}) or mist (${ndU(visVal, ' km')}) — within radar approach limits (min ${minCeilLimit} ft), so flights can normally go ahead unless fog thickens.`;
     }
     if (iceStatus === 'CAUTION') {
-      return `Freezing level is ${freezeVal.toLocaleString()} ft — pilots may fly at a lower cruise altitude to stay below icing.`;
+      return `Freezing level is ${ndFt(freezeVal)} — pilots may fly at a lower cruise altitude to stay below icing.`;
+    }
+    if (missingSet.size > 0) {
+      return `The forecast has no ${[...missingSet].join(', ')} for this hour, so ChopperCheck won't call it good to fly. Try another model, or check the official forecast.`;
     }
     if (routeCombinedStatus === 'CAUTION') {
       return `Weather at ${facility.shortName} is good, with minor weather caution at ${shoreBaseFacility.shortName} or en-route.`;
     }
-    return `All clear for flights: Wind (${gustVal} kt gusts), waves (${waveVal} m), cloud height (${ceilVal.toLocaleString()} ft), and visibility (${visVal} km) are all comfortably inside normal limits.`;
+    return `All clear for flights: Wind (${ndU(gustVal, ' kt')} gusts), waves (${ndU(waveVal, ' m')}), cloud height (${ndFt(ceilVal)}), and visibility (${ndU(visVal, ' km')}) are all comfortably inside normal limits.`
+      .replace(/, waves \(no data\)/, isShoreFacility ? '' : ', waves (no sea data)');
   })();
 
   return (
@@ -806,7 +823,9 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 {currentStatus === 'CAUTION' && <AlertTriangle className="w-5 h-5 shrink-0 text-amber-400" />}
                 {currentStatus === 'HOLD' && <ShieldAlert className="w-5 h-5 shrink-0 text-rose-400" />}
                 <span>
-                  {currentStatus === 'GO'
+                  {!hasForecast
+                    ? 'NO FORECAST LOADED — NO ESTIMATE YET'
+                    : currentStatus === 'GO'
                     ? 'GOOD TO FLY — LOW DELAY RISK'
                     : currentStatus === 'CAUTION'
                     ? 'POSSIBLE DELAYS — WATCH WEATHER'
@@ -822,6 +841,8 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                   ? fiveModelConsensus.cautionCount + (deckMotionRaisesCaution ? fiveModelConsensus.goCount : 0)
                   : fiveModelConsensus.holdCount)}
                 /{fiveModelConsensus.totalModels} models agree
+                {fiveModelConsensus.noDataModels.length > 0 &&
+                  ` · ${fiveModelConsensus.noDataModels.length} with gaps left out`}
               </span>
             )}
           </div>
@@ -879,17 +900,19 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 </span>
                 <span
                   className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
-                    gustStatus === 'GO'
+                    gustStatus === 'NODATA'
+                      ? 'bg-slate-700/40 text-slate-300'
+                      : gustStatus === 'GO'
                       ? 'bg-emerald-500/20 text-emerald-300'
                       : gustStatus === 'CAUTION'
                       ? 'bg-amber-500/25 text-amber-300'
                       : 'bg-rose-500/30 text-rose-300'
                   }`}
                 >
-                  {gustStatus === 'GO' ? 'OK' : gustStatus === 'CAUTION' ? 'Breezy' : 'Over Limit'}
+                  {gustStatus === 'NODATA' ? 'No data' : gustStatus === 'GO' ? 'OK' : gustStatus === 'CAUTION' ? 'Breezy' : 'Over Limit'}
                 </span>
               </div>
-              <div className="text-sm font-bold text-white font-mono">{gustVal} kt gusts</div>
+              <div className="text-sm font-bold text-white font-mono">{gustVal === null ? 'No data' : `${gustVal} kt gusts`}</div>
               <div className="text-[10px] text-slate-400">
                 Max: {maxGustLimit} kt ({isNightHour ? 'Night · 60kt Day' : 'Day'})
               </div>
@@ -902,17 +925,21 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 </span>
                 <span
                   className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
-                    waveStatus === 'GO'
+                    waveStatus === 'NODATA'
+                      ? 'bg-slate-700/40 text-slate-300'
+                      : waveStatus === 'GO'
                       ? 'bg-emerald-500/20 text-emerald-300'
                       : waveStatus === 'CAUTION'
                       ? 'bg-amber-500/25 text-amber-300'
                       : 'bg-rose-500/30 text-rose-300'
                   }`}
                 >
-                  {waveStatus === 'GO' ? 'OK' : waveStatus === 'CAUTION' ? 'Rough' : 'Over Limit'}
+                  {waveStatus === 'NODATA' ? (isShoreFacility ? 'N/A' : 'No data') : waveStatus === 'GO' ? 'OK' : waveStatus === 'CAUTION' ? 'Rough' : 'Over Limit'}
                 </span>
               </div>
-              <div className="text-sm font-bold text-white font-mono">{waveVal} m waves</div>
+              <div className="text-sm font-bold text-white font-mono">
+                {waveVal === null ? (isShoreFacility ? 'Not at sea' : 'No sea data') : `${waveVal} m waves`}
+              </div>
               <div className="text-[10px] text-slate-400">
                 Max: {maxWaveLimit} m ({isNightHour ? 'Night · 6m Day' : 'Day'})
                 {isFpso && fpsoMotionEstimate
@@ -928,14 +955,18 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 </span>
                 <span
                   className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
-                    ceilStatus === 'GO' && visStatus === 'GO'
+                    ceilStatus === 'NODATA' || visStatus === 'NODATA'
+                      ? 'bg-slate-700/40 text-slate-300'
+                      : ceilStatus === 'GO' && visStatus === 'GO'
                       ? 'bg-emerald-500/20 text-emerald-300'
                       : ceilStatus === 'HOLD' || visStatus === 'HOLD'
                       ? 'bg-rose-500/30 text-rose-300'
                       : 'bg-amber-500/25 text-amber-300'
                   }`}
                 >
-                  {ceilStatus === 'GO' && visStatus === 'GO'
+                  {ceilStatus === 'NODATA' || visStatus === 'NODATA'
+                    ? 'No data'
+                    : ceilStatus === 'GO' && visStatus === 'GO'
                     ? 'Clear'
                     : ceilStatus === 'HOLD' || visStatus === 'HOLD'
                     ? 'Too Low'
@@ -945,7 +976,9 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               <div className="text-sm font-bold text-white font-mono">
                 {facilityHasReportedCeiling && reportedCloud?.noCeiling
                   ? 'No low cloud'
-                  : `${ceilVal.toLocaleString()} ft cloud`}
+                  : ceilVal === null
+                  ? 'No data'
+                  : `${ndFt(ceilVal)} cloud`}
               </div>
               <div className="text-[10px] text-slate-400">
                 {facilityHasReportedCeiling
@@ -971,7 +1004,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 </div>
               )}
               <div className="text-[10px] text-slate-400">
-                Min: {minCeilLimit} ft ({isNightHour ? `Night · ${preset.minCloudCeilingFt}ft Day` : 'Day'}) · Vis {visVal} km
+                Min: {minCeilLimit} ft ({isNightHour ? `Night · ${preset.minCloudCeilingFt}ft Day` : 'Day'}) · Vis {ndU(visVal, ' km')}
               </div>
             </div>
 
@@ -982,14 +1015,18 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 </span>
                 <span
                   className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
-                    lightningStatus === 'GO' && iceStatus === 'GO'
+                    lightningStatus === 'GO' && iceStatus === 'NODATA'
+                      ? 'bg-slate-700/40 text-slate-300'
+                      : lightningStatus === 'GO' && iceStatus === 'GO'
                       ? 'bg-emerald-500/20 text-emerald-300'
                       : lightningStatus === 'HOLD' || iceStatus === 'HOLD'
                       ? 'bg-rose-500/30 text-rose-300'
                       : 'bg-amber-500/25 text-amber-300'
                   }`}
                 >
-                  {lightningStatus === 'GO' && iceStatus === 'GO'
+                  {lightningStatus === 'GO' && iceStatus === 'NODATA'
+                    ? 'No data'
+                    : lightningStatus === 'GO' && iceStatus === 'GO'
                     ? 'Clear'
                     : lightningStatus === 'HOLD' || iceStatus === 'HOLD'
                     ? 'Hold Risk'
@@ -999,12 +1036,14 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               <div className="text-sm font-bold text-white font-mono truncate">
                 {lightningStatus !== 'GO'
                   ? 'Winter Showers'
+                  : iceStatus === 'NODATA'
+                  ? 'No data'
                   : iceStatus !== 'GO'
-                  ? `Ice ${freezeVal.toLocaleString()}ft`
+                  ? `Ice ${ndFt(freezeVal)}`
                   : 'No Lightning'}
               </div>
               <div className="text-[10px] text-slate-400">
-                0°C Freeze: {freezeVal.toLocaleString()} ft
+                0°C Freeze: {ndFt(freezeVal)}
               </div>
             </div>
           </div>
@@ -1405,7 +1444,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                       {day.maxGustKts}kt
                     </span>
                     <span className="text-[10px] sm:text-[8px] font-mono text-cyan-300 tabular-nums">
-                      {day.maxWaveM}m
+                      {day.maxWaveM === null ? "—" : `${day.maxWaveM}m`}
                     </span>
                     {day.consensusBadge && (
                       <span className="text-[9px] sm:text-[7px] font-mono text-slate-400 tabular-nums">
@@ -1449,19 +1488,18 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                     const hrLightning =
                       snap?.lightningRisk === 'HIGH' || snap?.lightningRisk === 'MODERATE';
                     const hrEval = snap
-                      ? evaluateHourWithLimits(
+                      ? evaluateFacilityHour({
                           snap,
-                          hr.waveHeightM,
-                          hr.swellPeriodSec,
-                          hrNight,
+                          hour: hr,
+                          isNight: hrNight,
                           isFpso,
+                          isSemiSub,
                           preset,
                           flightOpsMode,
                           customOverride,
-                          isSemiSub
-                        )
+                        })
                       : null;
-                    const st = hrEval?.status || snap?.status || 'GO';
+                    const st = hrEval?.status || snap?.status || 'CAUTION';
                     const isSelHr = hr.hourIndex === selectedHourIdx;
                     const badgeClr =
                       st === 'HOLD'
@@ -1554,7 +1592,9 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               <span className="break-words">
                 {facility.shortName} ({activeHour?.dayNameShort || 'NOW'}{' '}
                 {activeHour?.hourLabel || ''}):{' '}
-                {currentStatus === 'GO'
+                {!hasForecast
+                  ? 'NO FORECAST DATA'
+                  : currentStatus === 'GO'
                   ? 'WITHIN LIMITS (GO)'
                   : currentStatus === 'CAUTION'
                   ? 'MARGINAL (DELAY RISK)'
@@ -1628,7 +1668,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                         approachShearKts >= 20 ? ` · Shear +${approachShearKts}kt` : ''
                       }`
                     : '1. Helideck Wind & Gusts',
-                actual: `${deckWindVal}G${gustVal} kt`,
+                actual: `${nd(deckWindVal)}G${ndU(gustVal, ' kt')}`,
                 limit: isNightHour
                   ? `Max ${maxGustLimit} kt (Night · 60kt Day)`
                   : `Max ${maxGustLimit} kt (Day)`,
@@ -1638,7 +1678,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 label: isFpso
                   ? '2. FPSO Sea State & Swell Period'
                   : '2. Significant Wave Height (Hs)',
-                actual: `${waveVal} m (${wavePeriodVal}s${
+                actual: `${ndU(waveVal, ' m')} (${nd(wavePeriodVal)}s${
                   longSwellRisk ? ' · Resonant' : activeHour?.swellWaveHeightM ? ` · Swell ${activeHour.swellWaveHeightM}m` : ''
                 })`,
                 limit: isFpso
@@ -1650,7 +1690,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               },
               {
                 label: `3. Cloud Ceiling (${isNightHour ? 'Night' : 'Day'} ARA)`,
-                actual: `${ceilVal.toLocaleString()} ft`,
+                actual: `${ndFt(ceilVal)}`,
                 limit: isNightHour
                   ? `Min ${minCeilLimit} ft (Night · ${preset.minCloudCeilingFt}ft Day)`
                   : `Min ${minCeilLimit} ft (Day)`,
@@ -1658,7 +1698,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               },
               {
                 label: `4. Horizontal Visibility (${isNightHour ? 'Night' : 'Day'})`,
-                actual: `${visVal} km`,
+                actual: `${ndU(visVal, ' km')}`,
                 limit: isNightHour
                   ? `Min ${minVisLimit} km (Night · 0.8km Day)`
                   : `Min ${minVisLimit} km (Day)`,
@@ -1666,7 +1706,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               },
               {
                 label: '5. 0°C Rotor Icing Altitude',
-                actual: `${freezeVal.toLocaleString()} ft`,
+                actual: `${ndFt(freezeVal)}`,
                 limit: `Safe > ${preset.minIcingFreezingLevelFt} ft`,
                 st: iceStatus,
               },
@@ -1684,7 +1724,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               },
               {
                 label: '7. Sea Haar / Fog Dewpoint Spread',
-                actual: `T-Td ${dewSpreadVal}°C (${fogSpreadRisk})`,
+                actual: `T-Td ${ndU(dewSpreadVal, '°C')} (${fogSpreadRisk})`,
                 limit: 'Safe > 2.2°C',
                 st: fogStatus,
               },
@@ -1697,14 +1737,16 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                   <span className="break-words min-w-0">{item.label}</span>
                   <span
                     className={`sm:hidden shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold ${
-                      item.st === 'GO'
+                      item.st === 'NODATA'
+                      ? 'bg-slate-700/40 text-slate-300'
+                      : item.st === 'GO'
                         ? 'bg-emerald-500/25 text-emerald-300'
                         : item.st === 'CAUTION'
                         ? 'bg-amber-500/25 text-amber-300'
                         : 'bg-rose-500/30 text-rose-300'
                     }`}
                   >
-                    {item.st === 'GO' ? 'PASS' : item.st}
+                    {item.st === 'GO' ? 'PASS' : item.st === 'NODATA' ? 'NO DATA' : item.st}
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0 sm:justify-end tabular-nums">
@@ -1712,14 +1754,16 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                   <span className="text-slate-400 text-[10px]">({item.limit})</span>
                   <span
                     className={`hidden sm:inline-block shrink-0 px-1.5 py-0.2 rounded text-[9px] font-bold ${
-                      item.st === 'GO'
+                      item.st === 'NODATA'
+                      ? 'bg-slate-700/40 text-slate-300'
+                      : item.st === 'GO'
                         ? 'bg-emerald-500/25 text-emerald-300'
                         : item.st === 'CAUTION'
                         ? 'bg-amber-500/25 text-amber-300'
                         : 'bg-rose-500/30 text-rose-300'
                     }`}
                   >
-                    {item.st === 'GO' ? 'PASS' : item.st}
+                    {item.st === 'GO' ? 'PASS' : item.st === 'NODATA' ? 'NO DATA' : item.st}
                   </span>
                 </div>
               </div>
@@ -1783,7 +1827,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 </div>
               </div>
               <p className="text-[10px] font-sans text-slate-400 leading-snug">
-                <strong className="text-emerald-300">Estimates only (No Login Required):</strong> Pitch/Roll, Inclination (INC), and Heave Rate (SHR) are estimated inside ChopperCheck from live marine wave height ({waveVal}m) &amp; swell period ({wavePeriodVal}s), not measured by the deck&apos;s HMS. They are compared with the HCA Category 1 limits for this helicopter type; the HLL / HeliMet reading is what counts.
+                <strong className="text-emerald-300">Estimates only (No Login Required):</strong> Pitch/Roll, Inclination (INC), and Heave Rate (SHR) are estimated inside ChopperCheck from live marine wave height ({ndU(waveVal, 'm')}) &amp; swell period ({ndU(wavePeriodVal, 's')}), not measured by the deck&apos;s HMS. They are compared with the HCA Category 1 limits for this helicopter type; the HLL / HeliMet reading is what counts.
               </p>
             </div>
           )}
@@ -2079,20 +2123,20 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               <Wind className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
             </div>
             <div className="text-lg sm:text-xl font-mono font-bold tabular-nums text-white mt-1">
-              {deckWindVal} <span className="text-xs font-normal text-slate-400">G</span>{' '}
+              {dash(deckWindVal)} <span className="text-xs font-normal text-slate-400">G</span>{' '}
               <span
                 className={
-                  gustVal >= cautionGustLimit ? 'text-amber-400' : 'text-white'
+                  gustVal !== null && gustVal >= cautionGustLimit ? 'text-amber-400' : 'text-white'
                 }
               >
-                {gustVal}
+                {dash(gustVal)}
               </span>{' '}
               <span className="text-xs font-normal text-slate-400">KT</span>
             </div>
             <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
-              10m {activeModelSnapshot?.windSpeed10mKts ?? 0}kt · 80m{' '}
-              {activeModelSnapshot?.windSpeed80mKts ?? deckWindVal}kt · 950hPa{' '}
-              {activeModelSnapshot?.windSpeed950hPaKts ?? 25}kt
+              10m {dash(fromSnap(activeModelSnapshot?.windSpeed10mKts, 'wind'))}kt · 80m{' '}
+              {dash(activeModelSnapshot?.windSpeed80mKts)}kt · 950hPa{' '}
+              {dash(activeModelSnapshot?.windSpeed950hPaKts)}kt
             </div>
           </div>
 
@@ -2102,11 +2146,17 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               <Waves className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
             </div>
             <div className="text-lg sm:text-xl font-mono font-bold tabular-nums text-white mt-1">
-              {waveVal} <span className="text-xs font-normal text-slate-400">m</span>
+              {waveVal === null ? (
+                <span className="text-sm text-slate-400">{isShoreFacility ? 'Not at sea' : 'No sea data'}</span>
+              ) : (
+                <>
+                  {waveVal} <span className="text-xs font-normal text-slate-400">m</span>
+                </>
+              )}
             </div>
             <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
-              {swellRisk.label} ({activeHour?.swellDirDeg ?? 240}°) · SST{' '}
-              {activeHour?.seaSurfaceTempC ?? weather?.temperatureC ?? 9}°C
+              {waveVal === null ? '—' : swellRisk.label} ({dash(activeHour?.swellDirDeg)}°) · SST{' '}
+              {dash(activeHour?.seaSurfaceTempC)}°C
             </div>
           </div>
 
@@ -2116,12 +2166,12 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               <Snowflake className="w-3.5 h-3.5 text-purple-400 shrink-0" />
             </div>
             <div className="text-base sm:text-lg font-mono font-bold tabular-nums text-white mt-1">
-              {freezeVal.toLocaleString()}{' '}
+              {dash(freezeVal, (n) => n.toLocaleString())}{' '}
               <span className="text-xs font-normal text-slate-400">ft</span> ·{' '}
-              {activeModelSnapshot?.temp2mC ?? weather?.temperatureC ?? 8}°C
+              {dash(activeModelSnapshot ? fromSnap(activeModelSnapshot.temp2mC, 'temperature') : weather?.temperatureC)}°C
             </div>
             <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
-              Td {activeModelSnapshot?.dewPoint2mC ?? 5.5}°C (Spread {dewSpreadVal}°C) ·{' '}
+              Td {dash(fromSnap(activeModelSnapshot?.dewPoint2mC, 'dew point'))}°C (Spread {dash(dewSpreadVal)}°C) ·{' '}
               {precipVal}mm/h
             </div>
           </div>
@@ -2132,14 +2182,14 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               <CloudLightning className="w-3.5 h-3.5 text-amber-400 shrink-0" />
             </div>
             <div className="text-base sm:text-lg font-mono font-bold tabular-nums text-white mt-1">
-              {ceilVal.toLocaleString()}{' '}
-              <span className="text-xs font-normal text-slate-400">ft</span> · {visVal}{' '}
+              {dash(ceilVal, (n) => n.toLocaleString())}{' '}
+              <span className="text-xs font-normal text-slate-400">ft</span> · {dash(visVal)}{' '}
               <span className="text-xs font-normal text-slate-400">km</span>
             </div>
             <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
-              QNH {activeModelSnapshot?.qnhHpa ?? weather?.pressureMslHpa ?? 1013} hPa · -10°C{' '}
-              {(activeModelSnapshot?.minus10IsothermFt ?? 8500).toLocaleString()}ft · ΔT{' '}
-              {activeModelSnapshot?.sstMinus500C ?? 25}°C
+              QNH {dash(activeModelSnapshot ? activeModelSnapshot.qnhHpa : weather?.pressureMslHpa)} hPa · -10°C{' '}
+              {dash(activeModelSnapshot?.minus10IsothermFt, (n) => n.toLocaleString())}ft · ΔT{' '}
+              {dash(activeModelSnapshot?.sstMinus500C)}°C
             </div>
           </div>
         </div>

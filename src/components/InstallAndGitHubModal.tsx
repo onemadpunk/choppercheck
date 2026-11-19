@@ -54,6 +54,17 @@ export const InstallAndGitHubModal: React.FC<InstallAndGitHubModalProps> = ({
   const { isInstallable, isInstalled, install } = usePWAInstall();
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [showAdminDns, setShowAdminDns] = useState<boolean>(false);
+  // The owner setup is only for the site owner: open the site once with ?owner=1 to show it
+  const [isOwner] = useState<boolean>(() => {
+    try {
+      if (new URLSearchParams(window.location.search).get('owner') === '1') {
+        localStorage.setItem('choppercheck_owner', '1');
+      }
+      return localStorage.getItem('choppercheck_owner') === '1';
+    } catch {
+      return false;
+    }
+  });
   const [workerUrl, setWorkerUrl] = useState<string>(() => {
     try {
       return localStorage.getItem('choppercheck_worker_url') || '';
@@ -194,7 +205,8 @@ export const InstallAndGitHubModal: React.FC<InstallAndGitHubModalProps> = ({
             </p>
           </div>
 
-          {/* 3. Collapsed Admin Section for onemadpunk */}
+          {/* 3. Collapsed Admin Section for onemadpunk (hidden from normal users) */}
+          {isOwner && (
           <div className="border-t border-slate-800 pt-3">
             <button
               onClick={() => setShowAdminDns((prev) => !prev)}
@@ -230,8 +242,8 @@ export const InstallAndGitHubModal: React.FC<InstallAndGitHubModalProps> = ({
                     </button>
                   </div>
                   <p className="text-slate-300 leading-relaxed">
-                    <strong>Why live flights need a relay on GitHub Pages:</strong> Open-Meteo's 4
-                    weather models (<strong>ICON, ECMWF, GFS, GEM</strong>) allow direct browser
+                    <strong>Why live flights need a relay on GitHub Pages:</strong> Open-Meteo's 5
+                    weather models (<strong>UKMO UKV, ICON, ECMWF, GFS, GEM</strong>) allow direct browser
                     access (`Access-Control-Allow-Origin: *`), so the new Weather Streamlines &
                     Go/No-Go Matrix work 100% on GitHub Pages with zero backend. However, live ADS-B
                     providers (`adsb.fi` / `adsb.lol`) block browser CORS and use Cloudflare Bot
@@ -335,6 +347,7 @@ export const InstallAndGitHubModal: React.FC<InstallAndGitHubModalProps> = ({
               </div>
             )}
           </div>
+          )}
         </div>
 
         <button

@@ -742,7 +742,8 @@ export default function App() {
         shoreBaseFacility,
         activeFacility,
         activePreset,
-        selectedHourIso
+        selectedHourIso,
+        weatherModelId
       );
       if (!cancelled) {
         setCorridorWaypoints(corridor);
@@ -752,7 +753,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [shoreBaseFacility, activeFacility, activePreset, selectedHourIso]);
+  }, [shoreBaseFacility, activeFacility, activePreset, selectedHourIso, weatherModelId]);
 
   // Sample the selected model along the shore base -> rig track and both 18 NM detours, only while
   // the lightning overlay is on, so the route check is not limited to the coarse background grid.
