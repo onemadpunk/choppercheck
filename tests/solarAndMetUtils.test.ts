@@ -15,6 +15,8 @@ import {
   parseSeaStateFromMetar,
   parseMetarCloudBase,
   parseMetarWindVis,
+  computeLunarIllumination,
+  computeSarMissionProfile,
 } from '../src/utils/solarAndMetUtils.ts';
 import {
   AIRFRAME_PRESETS,
@@ -517,3 +519,135 @@ test('triggered lightning uses the Met Office 4 km / 12 km precipitation tables'
   assert.equal(classifyNorthSeaConvection({ ...base, precip: 3.0, gridKm: 25 }).triggeredLevel, 'MEDIUM');
   assert.equal(classifyNorthSeaConvection({ ...base, precip: 4.0, gridKm: 25 }).triggeredLevel, 'HIGH');
 });
+
+test('Coastguard SAR & Offshore Medevac Mission Planner computes Rescue base scramble ETE, Bingo loiter, trauma hospital routing, transfer verdict, and NVG lunar illumination', () => {
+  const fullMoon = computeLunarIllumination(new Date('2026-11-24T14:53:00Z'));
+  assert.ok(fullMoon.illuminationPct >= 95);
+  assert.equal(fullMoon.phaseName, 'Full Moon');
+
+  // Test Glen Lyon FPSO (60.3589, -4.0652) under calm vs red-deck vs low-cloud conditions
+  const glenLyonDeckLanding = computeSarMissionProfile({
+    targetLat: 60.3589,
+    targetLon: -4.0652,
+    dateInput: new Date('2026-11-24T12:00:00Z'),
+    windSpeed950hPaKts: 25,
+    windDir950hPaDeg: 240,
+    deckGustKts: 28,
+    cloudCeilingFt: 1800,
+    visibilityKm: 15,
+    waveHeightM: 2.4,
+    seaSurfaceTempC: 8.5,
+    isFpso: true,
+    fpsoMotion: {
+      estPitchRollDeg: 1.1,
+      estInclinationDeg: 1.3,
+      estShrMs: 0.4,
+      deckLightStatus: 'GREEN',
+      summaryLabel: 'EST. GREEN DECK',
+      encounterAngleDeg: 15,
+      periodFactor: 0.9,
+    },
+  });
+
+  assert.equal(glenLyonDeckLanding.nearestSarBases.length, 2);
+  assert.equal(glenLyonDeckLanding.nearestSarBases[0].base.icao, 'EGPB');
+  assert.equal(glenLyonDeckLanding.nearestSarBases[0].base.callsign, 'Rescue 900');
+  assert.ok(
+    glenLyonDeckLanding.nearestSarBases[0].distanceNm > 75 &&
+      glenLyonDeckLanding.nearestSarBases[0].distanceNm < 100
+  );
+  assert.ok(glenLyonDeckLanding.nearestSarBases[0].outboundEteMin > 30);
+  assert.ok(glenLyonDeckLanding.nearestSarBases[0].estTimeOnSceneMin >= 45);
+  assert.equal(glenLyonDeckLanding.nearestHospitals[0].hospital.code, 'GBH');
+  assert.equal(glenLyonDeckLanding.transferMode, 'DECK_LANDING');
+  assert.ok(glenLyonDeckLanding.coldShockLabel.includes('Severe Cold Shock'));
+
+  // When FPSO deck motion is RED, SAR helicopter switches to Auto-Hover Winch / Hi-Line Transfer
+  const glenLyonWinchOnly = computeSarMissionProfile({
+    targetLat: 60.3589,
+    targetLon: -4.0652,
+    dateInput: new Date('2026-11-24T12:00:00Z'),
+    windSpeed950hPaKts: 42,
+    windDir950hPaDeg: 250,
+    deckGustKts: 48,
+    cloudCeilingFt: 1200,
+    visibilityKm: 8,
+    waveHeightM: 6.4,
+    seaSurfaceTempC: 8.5,
+    isFpso: true,
+    fpsoMotion: {
+      estPitchRollDeg: 3.4,
+      estInclinationDeg: 4.1,
+      estShrMs: 1.45,
+      deckLightStatus: 'RED',
+      summaryLabel: 'EST. RED DECK',
+      encounterAngleDeg: 85,
+      periodFactor: 1.35,
+    },
+  });
+  assert.equal(glenLyonWinchOnly.transferMode, 'WINCH_HI_LINE_ONLY');
+
+  // When cloud base is below 250 ft commercial ARA minima (e.g. 150 ft), SAR helicopter uses Offshore FMS / RadAlt Cloud-Break & Auto-Hover
+  const glenLyonCloudBreak = computeSarMissionProfile({
+    targetLat: 60.3589,
+    targetLon: -4.0652,
+    dateInput: new Date('2026-11-24T12:00:00Z'),
+    windSpeed950hPaKts: 18,
+    windDir950hPaDeg: 210,
+    deckGustKts: 22,
+    cloudCeilingFt: 150,
+    visibilityKm: 0.9,
+    waveHeightM: 1.8,
+    seaSurfaceTempC: 8.5,
+    isFpso: true,
+    fpsoMotion: {
+      estPitchRollDeg: 0.9,
+      estInclinationDeg: 1.1,
+      estShrMs: 0.3,
+      deckLightStatus: 'GREEN',
+      summaryLabel: 'EST. GREEN DECK',
+      encounterAngleDeg: 10,
+      periodFactor: 0.85,
+    },
+  });
+  assert.equal(glenLyonCloudBreak.transferMode, 'CLOUD_BREAK_AUTO_HOVER');
+
+  // Test Prestwick Rescue 199 (EGPK) Mountain Rescue tasking to Goatfell, Isle of Arran (2,867 ft) in winter cloud & ridge wind
+  const arranMrt = resolveHeliAdminStopCode('ARRAN');
+  assert.equal(arranMrt?.primaryShoreBase, 'EGPK');
+  assert.equal(arranMrt?.elevationFt, 2867);
+
+  const islayRwy = computeBestRunwayWind('EGPI', 300, 22, 32);
+  assert.equal(islayRwy?.runwayLabel, 'RWY 31');
+
+  const arranMission = computeSarMissionProfile({
+    targetLat: 55.6258,
+    targetLon: -5.1917,
+    targetElevationFt: 2867,
+    dateInput: new Date('2026-11-24T12:00:00Z'),
+    windSpeed950hPaKts: 28,
+    windDir950hPaDeg: 250,
+    windSpeed850hPaKts: 42,
+    windDir850hPaDeg: 260,
+    freezingLevelFt: 2200,
+    deckGustKts: 36,
+    cloudCeilingFt: 1900,
+    visibilityKm: 6,
+    waveHeightM: 1.8,
+    seaSurfaceTempC: 10.2,
+    isFpso: false,
+  });
+  assert.equal(arranMission.nearestSarBases[0].base.icao, 'EGPK');
+  assert.equal(arranMission.nearestSarBases[0].base.callsign, 'Rescue 199');
+  assert.equal(arranMission.mountainRescue.isHighGround, true);
+  assert.equal(arranMission.mountainRescue.isSummitInCloud, true);
+  assert.equal(arranMission.mountainRescue.isSummitBelowFreezing, true);
+  assert.equal(arranMission.mountainRescue.leeTurbulenceSeverity, 'SEVERE');
+  assert.equal(arranMission.transferMode, 'CLOUD_BREAK_AUTO_HOVER');
+  assert.ok(
+    arranMission.nearestHospitals.some(
+      (h) => h.hospital.code === 'UHC' || h.hospital.code === 'QEUH'
+    )
+  );
+});
+

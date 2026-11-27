@@ -100,6 +100,7 @@ interface RadarMapProps {
   shoreBaseFacility?: InstallationOrAirport;
   /** Model samples along the direct track and both detours (see fetchCorridorTrackSamples). */
   corridorRouteSamples?: SpatialWeatherGridPoint[];
+  onLockMapSpot?: (lat: number, lon: number) => void;
 }
 
 type MapStyleMode = 'dark_radar' | 'daylight_osm' | 'satellite' | 'nautical_ocean';
@@ -291,6 +292,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
   onChangeViewMode,
   shoreBaseFacility: shoreBaseFacilityProp,
   corridorRouteSamples,
+  onLockMapSpot,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -788,6 +790,7 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         activeFacility={activeFacility}
         shoreBaseFacility={shoreBaseFacility}
         corridorAssessment={corridorBypass}
+        cleanMapMode={boxesHidden}
       />
 
       {/* Top-left stack: rig card + overlay key flow in one column so they can never overlap.
@@ -1448,6 +1451,15 @@ export const RadarMap: React.FC<RadarMapProps> = ({
           </>
         ) : (
           <span className="text-slate-400">Move cursor over North Sea</span>
+        )}
+        {onLockMapSpot && (
+          <button
+            onClick={() => onLockMapSpot(cursorCoords.lat, cursorCoords.lon)}
+            title="Lock this map spot to plan SAR scramble ETE, Mountain Rescue & 7-Day Weather"
+            className="ml-1 px-2 py-0.5 rounded bg-orange-500/20 hover:bg-orange-500/35 border border-orange-500/50 text-orange-300 font-bold text-[10px] cursor-pointer transition-colors"
+          >
+            🚁 Plan SAR / 7-Day Here
+          </button>
         )}
       </div>
     </div>

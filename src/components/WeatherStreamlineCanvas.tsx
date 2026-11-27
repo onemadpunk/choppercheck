@@ -20,6 +20,7 @@ interface WeatherStreamlineCanvasProps {
   activeFacility?: InstallationOrAirport;
   shoreBaseFacility?: InstallationOrAirport;
   corridorAssessment?: CorridorLightningBypassAssessment | null;
+  cleanMapMode?: boolean;
 }
 
 interface Particle {
@@ -272,6 +273,7 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
   activeFacility,
   shoreBaseFacility,
   corridorAssessment,
+  cleanMapMode = false,
 }) => {
   const heatmapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const particleCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -295,6 +297,7 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
 
     const drawTriggeredLightningAnnotations = () => {
       if (overlayMode !== 'triggered_lightning') return;
+      const suppressCanvasTextLabels = Boolean(cleanMapMode) || heatCanvas.width < 640;
 
       // 1. Draw Convective / Triggered-Lightning Cell Badges at active grid nodes
       for (const pt of gridPoints) {
@@ -328,23 +331,25 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
         heatCtx.stroke();
         heatCtx.restore();
 
-        const precipTag =
-          typeof pt.precipMmHr === 'number' && pt.precipMmHr > 0
-            ? ` · ${pt.precipMmHr}mm/h`
-            : '';
-        const label = isHigh
-          ? `⚡ HIGH CELL · 0°C ${pt.freezingLevelFt}ft${precipTag}`
-          : `⚡ SHOWER CELL · 0°C ${pt.freezingLevelFt}ft${precipTag}`;
+        if (!suppressCanvasTextLabels) {
+          const precipTag =
+            typeof pt.precipMmHr === 'number' && pt.precipMmHr > 0
+              ? ` · ${pt.precipMmHr}mm/h`
+              : '';
+          const label = isHigh
+            ? `⚡ HIGH CELL · 0°C ${pt.freezingLevelFt}ft${precipTag}`
+            : `⚡ SHOWER CELL · 0°C ${pt.freezingLevelFt}ft${precipTag}`;
 
-        drawPillLabel(
-          heatCtx,
-          screenPt.x,
-          screenPt.y,
-          label,
-          isHigh ? 'rgba(136, 19, 55, 0.92)' : 'rgba(120, 53, 15, 0.92)',
-          isHigh ? '#fb7185' : '#fbbf24',
-          isHigh ? '#ffe4e6' : '#fef3c7'
-        );
+          drawPillLabel(
+            heatCtx,
+            screenPt.x,
+            screenPt.y,
+            label,
+            isHigh ? 'rgba(136, 19, 55, 0.92)' : 'rgba(120, 53, 15, 0.92)',
+            isHigh ? '#fb7185' : '#fbbf24',
+            isHigh ? '#ffe4e6' : '#fef3c7'
+          );
+        }
       }
 
       // 2. Draw Shore Base -> Rig track and, when route samples are loaded, the 18 NM detours
@@ -383,21 +388,23 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
         heatCtx.stroke();
         heatCtx.restore();
 
-        drawPillLabel(
-          heatCtx,
-          pDirectMid.x,
-          pDirectMid.y - 12,
-          assessment.directRisk === 'LOW'
-            ? `✓ ${shoreBaseFacility.code} → ${activeFacility.code} DIRECT: NO RISK FORECAST (EST.)`
-            : `⚡ DIRECT TRACK: ${assessment.directRisk} RISK (EST.)`,
-          assessment.directRisk === 'LOW'
-            ? 'rgba(6, 78, 59, 0.92)'
-            : assessment.directRisk === 'HIGH'
-            ? 'rgba(136, 19, 55, 0.94)'
-            : 'rgba(120, 53, 15, 0.94)',
-          riskColour(assessment.directRisk),
-          '#ffffff'
-        );
+        if (!suppressCanvasTextLabels) {
+          drawPillLabel(
+            heatCtx,
+            pDirectMid.x,
+            pDirectMid.y - 12,
+            assessment.directRisk === 'LOW'
+              ? `✓ ${shoreBaseFacility.code} → ${activeFacility.code} DIRECT: NO RISK FORECAST (EST.)`
+              : `⚡ DIRECT TRACK: ${assessment.directRisk} RISK (EST.)`,
+            assessment.directRisk === 'LOW'
+              ? 'rgba(6, 78, 59, 0.92)'
+              : assessment.directRisk === 'HIGH'
+              ? 'rgba(136, 19, 55, 0.94)'
+              : 'rgba(120, 53, 15, 0.94)',
+            riskColour(assessment.directRisk),
+            '#ffffff'
+          );
+        }
 
         // Detours are only drawn when the model was sampled along them (route_samples)
         if (assessment.directRisk !== 'LOW' && assessment.dataSource === 'route_samples') {
@@ -433,17 +440,19 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
             heatCtx.setLineDash([9, 4]);
             heatCtx.stroke();
             heatCtx.restore();
-            drawPillLabel(
-              heatCtx,
-              side.pt.x,
-              side.pt.y,
-              `${side.recommended ? '✓ ' : ''}${assessment.offsetNm} NM ${side.label.toUpperCase()} DETOUR: ${
-                side.risk === 'LOW' ? 'LOOKS CLEAR' : side.risk
-              } (EST.)`,
-              side.risk === 'LOW' ? 'rgba(6, 78, 59, 0.94)' : 'rgba(15, 23, 42, 0.94)',
-              riskColour(side.risk),
-              '#ffffff'
-            );
+            if (!suppressCanvasTextLabels) {
+              drawPillLabel(
+                heatCtx,
+                side.pt.x,
+                side.pt.y,
+                `${side.recommended ? '✓ ' : ''}${assessment.offsetNm} NM ${side.label.toUpperCase()} DETOUR: ${
+                  side.risk === 'LOW' ? 'LOOKS CLEAR' : side.risk
+                } (EST.)`,
+                side.risk === 'LOW' ? 'rgba(6, 78, 59, 0.94)' : 'rgba(15, 23, 42, 0.94)',
+                riskColour(side.risk),
+                '#ffffff'
+              );
+            }
           }
         }
       }
@@ -646,7 +655,7 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
       clearZoomTransform();
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [map, gridPoints, overlayMode, preset, activeFacility, shoreBaseFacility, corridorAssessment]);
+  }, [map, gridPoints, overlayMode, preset, activeFacility, shoreBaseFacility, corridorAssessment, cleanMapMode]);
 
   if (overlayMode === 'off') return null;
 

@@ -1075,6 +1075,35 @@ export default function App() {
     [handleSelectFacility]
   );
 
+  const handleLockMapSpot = useCallback(
+    (lat: number, lon: number) => {
+      const latNum = Number(lat.toFixed(3));
+      const lonNum = Number(lon.toFixed(3));
+      const label = `Map Pin (${latNum.toFixed(2)}°N, ${Math.abs(lonNum).toFixed(2)}°${
+        lonNum < 0 ? 'W' : 'E'
+      })`;
+      const pinFac: InstallationOrAirport = {
+        id: 'custom-sar-pin',
+        code: 'PIN',
+        name: `SAR / Weather Pin (${latNum.toFixed(3)}°N, ${lonNum.toFixed(3)}°E)`,
+        shortName: label,
+        fieldOperator: 'HM Coastguard / SAR',
+        assetType: 'Custom location',
+        sector: 'scotland_airports',
+        lat: latNum,
+        lon: lonNum,
+        elevationFt: 0,
+        primaryShoreBase: lonNum < -3.0 ? 'EGPK' : 'EGPD',
+        helicopterOperators: ['Bristow', 'HM Coastguard'],
+        regionLabel: 'Custom SAR / Weather Spot Pin',
+      };
+      setFacilities((prev) => [pinFac, ...prev.filter((f) => f.id !== 'custom-sar-pin')]);
+      handleSelectFacility(pinFac);
+      setDockTab('weather');
+    },
+    [handleSelectFacility]
+  );
+
   const handleMapCenterChanged = useCallback(
     (lat: number, lon: number, bounds?: ViewBounds) => {
       setQueryCenter((prev) => {
@@ -1525,6 +1554,7 @@ export default function App() {
             customOverride={activeRigOverride}
             viewMode={viewMode}
             onChangeViewMode={handleSetViewMode}
+            onLockMapSpot={handleLockMapSpot}
           />
 
           {/* Floating Selected Aircraft Card on Desktop/Mobile so it never crushes the Weather Dock */}
@@ -1676,6 +1706,8 @@ export default function App() {
                   }
                   viewMode={viewMode}
                   onChangeViewMode={handleSetViewMode}
+                  allFacilities={facilities}
+                  onSelectFacility={handleSelectFacility}
                 />
               ))}
           </div>

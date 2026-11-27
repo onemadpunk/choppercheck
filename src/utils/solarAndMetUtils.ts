@@ -1259,6 +1259,16 @@ export const SHORE_AIRPORT_RUNWAYS: Record<
   ],
   ENBR: [{ name: '17/35', hdg1: 170, hdg2: 350 }],
   EKVG: [{ name: '12/30', hdg1: 120, hdg2: 300 }],
+  EGPI: [
+    { name: '13/31', hdg1: 125, hdg2: 305 },
+    { name: '08/26', hdg1: 76, hdg2: 256 },
+  ],
+  EGEC: [{ name: '11/29', hdg1: 112, hdg2: 292 }],
+  EGEO: [{ name: '01/19', hdg1: 10, hdg2: 190 }],
+  EGPU: [
+    { name: '05/23', hdg1: 48, hdg2: 228 },
+    { name: '11/29', hdg1: 112, hdg2: 292 },
+  ],
 };
 
 export function computeBestRunwayWind(
@@ -1424,3 +1434,603 @@ export function parseMetarWindVis(rawOb?: string | null): MetarWindVis | null {
   if (windSpeedKts === null && visibilityKm === null) return null;
   return { windDirDeg, windSpeedKts, windGustKts, visibilityKm };
 }
+
+/**
+ * Computes synodic Lunar Illumination % and Moon Phase for Night Vision Goggle (NVG) SAR operations.
+ */
+export function computeLunarIllumination(dateInput: Date | string): {
+  illuminationPct: number;
+  phaseName: string;
+  nvgRating: 'HIGH_MOON' | 'MODERATE_MOON' | 'LOW_DARK_NVG';
+} {
+  const d = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
+  // Known New Moon reference epoch: 2000-01-06 18:14 UTC
+  const knownNewMoonMs = Date.UTC(2000, 0, 6, 18, 14, 0);
+  const synodicMonthDays = 29.530588853;
+  const elapsedDays = (d.getTime() - knownNewMoonMs) / 86400000;
+  const cyclePos = ((elapsedDays % synodicMonthDays) + synodicMonthDays) % synodicMonthDays;
+  const phaseFraction = cyclePos / synodicMonthDays; // 0 = New, 0.5 = Full
+  const illuminationPct = Math.round(((1 - Math.cos(2 * Math.PI * phaseFraction)) / 2) * 100);
+
+  let phaseName = 'New Moon';
+  if (phaseFraction < 0.03 || phaseFraction > 0.97) phaseName = 'New Moon';
+  else if (phaseFraction < 0.22) phaseName = 'Waxing Crescent';
+  else if (phaseFraction < 0.28) phaseName = 'First Quarter';
+  else if (phaseFraction < 0.47) phaseName = 'Waxing Gibbous';
+  else if (phaseFraction < 0.53) phaseName = 'Full Moon';
+  else if (phaseFraction < 0.72) phaseName = 'Waning Gibbous';
+  else if (phaseFraction < 0.78) phaseName = 'Last Quarter';
+  else phaseName = 'Waning Crescent';
+
+  const nvgRating =
+    illuminationPct >= 60
+      ? 'HIGH_MOON'
+      : illuminationPct >= 25
+      ? 'MODERATE_MOON'
+      : 'LOW_DARK_NVG';
+
+  return { illuminationPct, phaseName, nvgRating };
+}
+
+export interface SarBaseMeta {
+  icao: string;
+  callsign: string;
+  name: string;
+  airframe: 'S-92A' | 'AW189';
+  lat: number;
+  lon: number;
+  dashSpeedKts: number;
+  maxEnduranceMin: number;
+}
+
+export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
+  {
+    icao: 'EGPB',
+    callsign: 'Rescue 900',
+    name: 'Sumburgh SAR (Shetland)',
+    airframe: 'S-92A',
+    lat: 59.8789,
+    lon: -1.2956,
+    dashSpeedKts: 145,
+    maxEnduranceMin: 250,
+  },
+  {
+    icao: 'EGPO',
+    callsign: 'Rescue 948',
+    name: 'Stornoway SAR (Hebrides)',
+    airframe: 'S-92A',
+    lat: 58.2156,
+    lon: -6.3311,
+    dashSpeedKts: 145,
+    maxEnduranceMin: 250,
+  },
+  {
+    icao: 'EGPE',
+    callsign: 'Rescue 151',
+    name: 'Inverness SAR (Moray Firth)',
+    airframe: 'AW189',
+    lat: 57.5425,
+    lon: -4.0475,
+    dashSpeedKts: 150,
+    maxEnduranceMin: 225,
+  },
+  {
+    icao: 'EGPK',
+    callsign: 'Rescue 199',
+    name: 'Prestwick SAR (Ayrshire)',
+    airframe: 'AW189',
+    lat: 55.5094,
+    lon: -4.5944,
+    dashSpeedKts: 150,
+    maxEnduranceMin: 225,
+  },
+  {
+    icao: 'EGNJ',
+    callsign: 'Rescue 912',
+    name: 'Humberside SAR (Humber / SNS)',
+    airframe: 'S-92A',
+    lat: 53.5744,
+    lon: -0.3508,
+    dashSpeedKts: 145,
+    maxEnduranceMin: 250,
+  },
+  {
+    icao: 'EGCK',
+    callsign: 'Rescue 936',
+    name: 'Caernarfon SAR (Irish Sea)',
+    airframe: 'S-92A',
+    lat: 53.1018,
+    lon: -4.3376,
+    dashSpeedKts: 145,
+    maxEnduranceMin: 250,
+  },
+  {
+    icao: 'EGDX',
+    callsign: 'Rescue 187',
+    name: 'St Athan SAR (South Wales)',
+    airframe: 'AW189',
+    lat: 51.4056,
+    lon: -3.4375,
+    dashSpeedKts: 150,
+    maxEnduranceMin: 225,
+  },
+  {
+    icao: 'EGHQ',
+    callsign: 'Rescue 924',
+    name: 'Newquay SAR (Cornwall / SW)',
+    airframe: 'S-92A',
+    lat: 50.4406,
+    lon: -4.9954,
+    dashSpeedKts: 145,
+    maxEnduranceMin: 250,
+  },
+  {
+    icao: 'EGHF',
+    callsign: 'Rescue 175',
+    name: 'Lee-on-Solent SAR (Channel)',
+    airframe: 'AW189',
+    lat: 50.8156,
+    lon: -1.2067,
+    dashSpeedKts: 150,
+    maxEnduranceMin: 225,
+  },
+  {
+    icao: 'EGMD',
+    callsign: 'Rescue 163',
+    name: 'Lydd SAR (Dover Strait)',
+    airframe: 'AW189',
+    lat: 50.9562,
+    lon: 0.9391,
+    dashSpeedKts: 150,
+    maxEnduranceMin: 225,
+  },
+  {
+    icao: 'EIDW',
+    callsign: 'Rescue 116',
+    name: 'Dublin SAR (Irish Coast Guard)',
+    airframe: 'S-92A',
+    lat: 53.4213,
+    lon: -6.2701,
+    dashSpeedKts: 145,
+    maxEnduranceMin: 250,
+  },
+  {
+    icao: 'EISG',
+    callsign: 'Rescue 118',
+    name: 'Sligo SAR (NW Ireland)',
+    airframe: 'S-92A',
+    lat: 54.2802,
+    lon: -8.5992,
+    dashSpeedKts: 145,
+    maxEnduranceMin: 250,
+  },
+  {
+    icao: 'EINN',
+    callsign: 'Rescue 115',
+    name: 'Shannon SAR (W Ireland)',
+    airframe: 'S-92A',
+    lat: 52.7019,
+    lon: -8.9248,
+    dashSpeedKts: 145,
+    maxEnduranceMin: 250,
+  },
+  {
+    icao: 'EIWF',
+    callsign: 'Rescue 117',
+    name: 'Waterford SAR (SE Ireland)',
+    airframe: 'S-92A',
+    lat: 52.1872,
+    lon: -7.0869,
+    dashSpeedKts: 145,
+    maxEnduranceMin: 250,
+  },
+];
+
+export interface TraumaHospitalHelipad {
+  code: string;
+  name: string;
+  city: string;
+  lat: number;
+  lon: number;
+}
+
+export const MAJOR_TRAUMA_HOSPITAL_HELIPADS: TraumaHospitalHelipad[] = [
+  {
+    code: 'ARI',
+    name: 'Aberdeen Royal Infirmary (Foresterhill MTC Pad)',
+    city: 'Aberdeen',
+    lat: 57.1553,
+    lon: -2.1378,
+  },
+  {
+    code: 'GBH',
+    name: 'Gilbert Bain Hospital / Clickimin HLS (Lerwick)',
+    city: 'Lerwick, Shetland',
+    lat: 60.1512,
+    lon: -1.1614,
+  },
+  {
+    code: 'RAIG',
+    name: 'Raigmore Hospital Helipad (Inverness)',
+    city: 'Inverness',
+    lat: 57.4747,
+    lon: -4.1911,
+  },
+  {
+    code: 'QEUH',
+    name: 'Queen Elizabeth Univ. Hospital Roof Pad (Glasgow MTC)',
+    city: 'Glasgow',
+    lat: 55.8622,
+    lon: -4.3414,
+  },
+  {
+    code: 'UHC',
+    name: 'Univ. Hospital Crosshouse Helipad (Ayrshire Trauma)',
+    city: 'Kilmarnock / Ayrshire',
+    lat: 55.6164,
+    lon: -4.5333,
+  },
+  {
+    code: 'DGRI',
+    name: 'Dumfries & Galloway Royal Infirmary Helipad',
+    city: 'Dumfries',
+    lat: 55.0558,
+    lon: -3.6331,
+  },
+  {
+    code: 'RVH',
+    name: 'Royal Victoria Hospital Helipad (Belfast MTC)',
+    city: 'Belfast, NI',
+    lat: 54.5942,
+    lon: -5.9553,
+  },
+  {
+    code: 'BELF',
+    name: 'Belford Hospital HLS (Lochaber / Ben Nevis MRT)',
+    city: 'Fort William',
+    lat: 56.8208,
+    lon: -5.1056,
+  },
+  {
+    code: 'LIH',
+    name: 'Lorn & Islands Hospital HLS (Argyll & Islands)',
+    city: 'Oban',
+    lat: 56.4044,
+    lon: -5.4686,
+  },
+  {
+    code: 'RIE',
+    name: 'Royal Infirmary of Edinburgh Helipad (Little France MTC)',
+    city: 'Edinburgh',
+    lat: 55.9217,
+    lon: -3.1361,
+  },
+  {
+    code: 'WIH',
+    name: 'Western Isles Hospital HLS (Stornoway)',
+    city: 'Stornoway',
+    lat: 58.2158,
+    lon: -6.3881,
+  },
+  {
+    code: 'HRI',
+    name: 'Hull Royal Infirmary Helipad (Humber MTC)',
+    city: 'Hull',
+    lat: 53.7442,
+    lon: -0.3583,
+  },
+  {
+    code: 'JCUH',
+    name: 'James Cook Univ. Hospital Pad (Teesside MTC)',
+    city: 'Middlesbrough',
+    lat: 54.5514,
+    lon: -1.215,
+  },
+  {
+    code: 'NNUH',
+    name: 'Norfolk & Norwich Univ. Hospital Helipad',
+    city: 'Norwich',
+    lat: 52.6181,
+    lon: 1.2211,
+  },
+  {
+    code: 'RPH',
+    name: 'Royal Preston Hospital Helipad (Lancashire MTC)',
+    city: 'Preston / Blackpool',
+    lat: 53.7908,
+    lon: -2.7047,
+  },
+  {
+    code: 'AUH',
+    name: 'Aintree Univ. Hospital Helipad (Liverpool MTC)',
+    city: 'Liverpool',
+    lat: 53.4672,
+    lon: -2.9292,
+  },
+  {
+    code: 'YGB',
+    name: 'Ysbyty Gwynedd Hospital Helipad (Bangor)',
+    city: 'Bangor, North Wales',
+    lat: 53.2089,
+    lon: -4.1597,
+  },
+];
+
+function haversineNm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const toRad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * toRad;
+  const dLon = (lon2 - lon1) * toRad;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLon / 2) ** 2;
+  return 3440.065 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function initialBearingDeg(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const toRad = Math.PI / 180;
+  const dLon = (lon2 - lon1) * toRad;
+  const y = Math.sin(dLon) * Math.cos(lat2 * toRad);
+  const x =
+    Math.cos(lat1 * toRad) * Math.sin(lat2 * toRad) -
+    Math.sin(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.cos(dLon);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+export interface MountainRescueProfile {
+  isHighGround: boolean;
+  summitElevationFt: number;
+  cloudClearanceFt: number;
+  isSummitInCloud: boolean;
+  cloudStatusLabel: string;
+  freezingLevelFt: number;
+  isSummitBelowFreezing: boolean;
+  icingStatusLabel: string;
+  ridgeWind850Kts: number;
+  ridgeWind850DirDeg: number;
+  leeTurbulenceSeverity: 'LOW' | 'MODERATE' | 'SEVERE';
+  leeTurbulenceLabel: string;
+}
+
+export interface SarMissionProfile {
+  nearestSarBases: Array<{
+    base: SarBaseMeta;
+    distanceNm: number;
+    outboundTrackDeg: number;
+    inboundTrackDeg: number;
+    outboundGroundspeedKts: number;
+    outboundEteMin: number;
+    returnEteMin: number;
+    estTimeOnSceneMin: number;
+    requiresRefuelStop: boolean;
+  }>;
+  nearestHospitals: Array<{
+    hospital: TraumaHospitalHelipad;
+    distanceNm: number;
+    trackDeg: number;
+    groundspeedKts: number;
+    eteMin: number;
+  }>;
+  transferMode: 'DECK_LANDING' | 'WINCH_HI_LINE_ONLY' | 'CLOUD_BREAK_AUTO_HOVER';
+  transferHeadline: string;
+  transferDetail: string;
+  seaSurfaceTempC: number;
+  coldShockLabel: string;
+  uninsulatedFunctionalTimeLabel: string;
+  immersionSuitSurvivalLabel: string;
+  mountainRescue: MountainRescueProfile;
+  lunar: {
+    illuminationPct: number;
+    phaseName: string;
+    nvgRating: 'HIGH_MOON' | 'MODERATE_MOON' | 'LOW_DARK_NVG';
+  };
+}
+
+/**
+ * Computes a complete Coastguard SAR, Mountain Rescue (MRT) & Offshore Medevac Mission Profile for any
+ * offshore installation, mountain summit, island airfield, or coordinate using live 950 hPa (~1,800 ft)
+ * & 850 hPa (~5,000 ft) winds, deck gusts, cloud ceiling, freezing level, wave/FPSO motion, SST, and lunar NVG illumination.
+ */
+export function computeSarMissionProfile(params: {
+  targetLat: number;
+  targetLon: number;
+  targetElevationFt?: number;
+  windSpeed950hPaKts: number;
+  windDir950hPaDeg: number;
+  windSpeed850hPaKts?: number;
+  windDir850hPaDeg?: number;
+  freezingLevelFt?: number;
+  deckGustKts: number;
+  cloudCeilingFt: number;
+  visibilityKm: number;
+  waveHeightM: number;
+  seaSurfaceTempC: number;
+  isFpso: boolean;
+  fpsoMotion?: EstimatedFpsoDeckMotion | null;
+  dateInput?: Date | string;
+}): SarMissionProfile {
+  const {
+    targetLat,
+    targetLon,
+    targetElevationFt = 0,
+    windSpeed950hPaKts,
+    windDir950hPaDeg,
+    windSpeed850hPaKts = windSpeed950hPaKts,
+    windDir850hPaDeg = windDir950hPaDeg,
+    freezingLevelFt = 4500,
+    deckGustKts,
+    cloudCeilingFt,
+    visibilityKm,
+    waveHeightM,
+    seaSurfaceTempC,
+    isFpso,
+    fpsoMotion,
+    dateInput = new Date(),
+  } = params;
+
+  const nearestSarBases = COASTGUARD_SAR_BASES.map((base) => {
+    const distNm = Math.round(haversineNm(base.lat, base.lon, targetLat, targetLon));
+    const outTrack = Math.round(initialBearingDeg(base.lat, base.lon, targetLat, targetLon));
+    const inTrack = (outTrack + 180) % 360;
+
+    // Wind is FROM windDir950hPaDeg: headwind component = ws * cos(windDir - track)
+    const outHeadwind =
+      windSpeed950hPaKts * Math.cos(((windDir950hPaDeg - outTrack) * Math.PI) / 180);
+    const inHeadwind =
+      windSpeed950hPaKts * Math.cos(((windDir950hPaDeg - inTrack) * Math.PI) / 180);
+
+    const outGs = Math.max(75, Math.round(base.dashSpeedKts - outHeadwind));
+    const inGs = Math.max(75, Math.round(base.dashSpeedKts - inHeadwind));
+
+    const outboundEteMin = Math.max(1, Math.round((distNm / outGs) * 60));
+    const returnEteMin = Math.max(1, Math.round((distNm / inGs) * 60));
+
+    // Usable mission time = maxEnduranceMin - 30 min reserve - outbound - return
+    const usableMin = base.maxEnduranceMin - 30 - outboundEteMin - returnEteMin;
+    const estTimeOnSceneMin = Math.max(0, usableMin);
+    const requiresRefuelStop = usableMin < 15;
+
+    return {
+      base,
+      distanceNm: distNm,
+      outboundTrackDeg: outTrack,
+      inboundTrackDeg: inTrack,
+      outboundGroundspeedKts: outGs,
+      outboundEteMin,
+      returnEteMin,
+      estTimeOnSceneMin,
+      requiresRefuelStop,
+    };
+  })
+    .sort((a, b) => a.outboundEteMin - b.outboundEteMin)
+    .slice(0, 2);
+
+  const nearestHospitals = MAJOR_TRAUMA_HOSPITAL_HELIPADS.map((hospital) => {
+    const distNm = Math.round(haversineNm(targetLat, targetLon, hospital.lat, hospital.lon));
+    const trackDeg = Math.round(
+      initialBearingDeg(targetLat, targetLon, hospital.lat, hospital.lon)
+    );
+    const headwind =
+      windSpeed950hPaKts * Math.cos(((windDir950hPaDeg - trackDeg) * Math.PI) / 180);
+    const gs = Math.max(75, Math.round(145 - headwind));
+    const eteMin = Math.max(1, Math.round((distNm / gs) * 60));
+    return {
+      hospital,
+      distanceNm: distNm,
+      trackDeg,
+      groundspeedKts: gs,
+      eteMin,
+    };
+  })
+    .sort((a, b) => a.eteMin - b.eteMin)
+    .slice(0, 2);
+
+  // Mountain Rescue (MRT) High-Ground & Ridge-Wind Assessment (for Prestwick Rescue 199 / Inverness Rescue 151 / Caernarfon Rescue 936)
+  const isHighGround = targetElevationFt >= 800;
+  const cloudClearanceFt = Math.round(cloudCeilingFt - targetElevationFt);
+  const isSummitInCloud = isHighGround && cloudCeilingFt < targetElevationFt + 300;
+  const isSummitBelowFreezing = isHighGround && freezingLevelFt <= targetElevationFt + 200;
+  const leeTurbulenceSeverity: MountainRescueProfile['leeTurbulenceSeverity'] =
+    windSpeed850hPaKts >= 38
+      ? 'SEVERE'
+      : windSpeed850hPaKts >= 25
+      ? 'MODERATE'
+      : 'LOW';
+  const leeTurbulenceLabel =
+    leeTurbulenceSeverity === 'SEVERE'
+      ? `SEVERE Lee-Corrie Downdrafts & Rotor Risk (850 hPa ${windSpeed850hPaKts} kt @ ${windDir850hPaDeg}°)`
+      : leeTurbulenceSeverity === 'MODERATE'
+      ? `MODERATE Lee-Slope Turbulence (850 hPa ${windSpeed850hPaKts} kt @ ${windDir850hPaDeg}°)`
+      : `Clean Ridge Air (${windSpeed850hPaKts} kt @ ${windDir850hPaDeg}°)`;
+
+  const mountainRescue: MountainRescueProfile = {
+    isHighGround,
+    summitElevationFt: targetElevationFt,
+    cloudClearanceFt,
+    isSummitInCloud,
+    cloudStatusLabel: isSummitInCloud
+      ? `SUMMIT IN CLOUD (Cloud base ${cloudCeilingFt.toLocaleString()} ft vs Summit ${targetElevationFt.toLocaleString()} ft)`
+      : `Visual above Summit (+${Math.max(0, cloudClearanceFt).toLocaleString()} ft cloud clearance)`,
+    freezingLevelFt,
+    isSummitBelowFreezing,
+    icingStatusLabel: isSummitBelowFreezing
+      ? `SUMMIT ABOVE 0°C FREEZING LEVEL (${freezingLevelFt.toLocaleString()} ft · Sub-zero on ridge & airframe icing in cloud)`
+      : `0°C Freezing Level (${freezingLevelFt.toLocaleString()} ft) above summit`,
+    ridgeWind850Kts: windSpeed850hPaKts,
+    ridgeWind850DirDeg: windDir850hPaDeg,
+    leeTurbulenceSeverity,
+    leeTurbulenceLabel,
+  };
+
+  // SAR Transfer Mode Logic (Deck Landing vs Winch/Hi-Line Transfer vs Offshore/Valley Cloud-Break)
+  let transferMode: SarMissionProfile['transferMode'] = 'DECK_LANDING';
+  let transferHeadline = isHighGround
+    ? 'VISUAL RIDGE / SUMMIT WINCH OR HOVER-STEP FEASIBLE'
+    : 'HELIDECK LANDING FEASIBLE (WITHIN SAR DECK LIMITS)';
+  let transferDetail = isHighGround
+    ? `Cloud base ${cloudCeilingFt.toLocaleString()} ft is above ${targetElevationFt.toLocaleString()} ft summit with 850 hPa ridge winds ${windSpeed850hPaKts} kt.`
+    : `Deck gusts ${deckGustKts} kt and sea state ${waveHeightM}m allow standard SAR helideck landing.`;
+
+  if (isHighGround) {
+    if (isSummitInCloud) {
+      transferMode = 'CLOUD_BREAK_AUTO_HOVER';
+      transferHeadline = 'SUMMIT IN CLOUD (IMC) — VALLEY CLOUD-BREAK / MRT DROP BELOW CLOUD BASE';
+      transferDetail = `Cloud base (${cloudCeilingFt.toLocaleString()} ft) shrouds summit (${targetElevationFt.toLocaleString()} ft). Plan valley hover-up to cloud base or deploy MRT below ${cloudCeilingFt.toLocaleString()} ft.${
+        isSummitBelowFreezing ? ` Warning: 0°C level at ${freezingLevelFt.toLocaleString()} ft (icing in cloud).` : ''
+      }`;
+    } else if (leeTurbulenceSeverity === 'SEVERE' || deckGustKts > 50) {
+      transferMode = 'WINCH_HI_LINE_ONLY';
+      transferHeadline = 'SEVERE OROGRAPHIC LEE TURBULENCE — HIGH-POWER HOVER & ESCAPE ROUTE REQUIRED';
+      transferDetail = `850 hPa ridge wind ${windSpeed850hPaKts} kt (${windDir850hPaDeg}°) / surface gusts ${deckGustKts} kt create severe lee-corrie downdrafts. Approach from windward shoulder with immediate valley escape route.`;
+    }
+  } else if (
+    (isFpso && fpsoMotion?.deckLightStatus === 'RED') ||
+    deckGustKts > 60 ||
+    (isFpso && waveHeightM > 6.0)
+  ) {
+    transferMode = 'WINCH_HI_LINE_ONLY';
+    transferHeadline = 'WINCH / HI-LINE TRANSFER RECOMMENDED (DECK MOTION / WIND EXCEEDS LANDING)';
+    transferDetail = isFpso && fpsoMotion
+      ? `Deck motion Est. ±${fpsoMotion.estPitchRollDeg}° P/R · ${fpsoMotion.estShrMs} m/s SHR (${waveHeightM}m waves) exceeds helideck landing limit — plan auto-hover winch / hi-line transfer.`
+      : `Deck gusts ${deckGustKts} kt exceed 60 kt landing limit — plan into-wind auto-hover winch transfer.`;
+  } else if (cloudCeilingFt < 250 || visibilityKm < 0.8) {
+    transferMode = 'CLOUD_BREAK_AUTO_HOVER';
+    transferHeadline = 'SAR OFFSHORE CLOUD-BREAK / RADALT LET-DOWN REQUIRED';
+    transferDetail = `Ceiling ${cloudCeilingFt} ft / Vis ${visibilityKm} km is below commercial ARA (250 ft), requiring SAR FMS/RadAlt offshore cloud-break & auto-hover approach (SAR min ~100–150 ft).`;
+  }
+
+  // Maritime Cold-Water Immersion & Survival Windows based on live Sea Surface Temperature (SST °C)
+  const sst = Number((seaSurfaceTempC || 9.5).toFixed(1));
+  const coldShockLabel =
+    sst <= 12
+      ? 'Severe Cold Shock (0–3 min gasp reflex)'
+      : 'Moderate Cold Shock (0–2 min)';
+  const uninsulatedFunctionalTimeLabel =
+    sst <= 6
+      ? '10–20 min useful swim/grip'
+      : sst <= 10
+      ? '20–40 min useful swim/grip (Hypothermia ~1–2 hr)'
+      : sst <= 14
+      ? '45–90 min useful swim/grip (Hypothermia ~2–4 hr)'
+      : '2–4 hr functional window';
+  const immersionSuitSurvivalLabel =
+    sst <= 6
+      ? '~4–8 hr in CAA Helicopter Immersion Suit'
+      : '~8–18+ hr in CAA Helicopter Immersion Suit / Lifejacket';
+
+  const lunar = computeLunarIllumination(dateInput);
+
+  return {
+    nearestSarBases,
+    nearestHospitals,
+    transferMode,
+    transferHeadline,
+    transferDetail,
+    seaSurfaceTempC: sst,
+    coldShockLabel,
+    uninsulatedFunctionalTimeLabel,
+    immersionSuitSurvivalLabel,
+    mountainRescue,
+    lunar,
+  };
+}
+

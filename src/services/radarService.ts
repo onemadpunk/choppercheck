@@ -7,7 +7,7 @@ import { RecentTurnback, TurnbackTracker } from '../utils/turnbackDetection';
 // Production relay. Set the GitHub repository variable FLIGHT_API_ORIGIN (e.g. the relay/ Worker's URL) to switch
 // without a code change; until then the original relay is used.
 export const FLIGHT_API_ORIGIN = import.meta.env?.DEV ? '/live-api'
-  : (import.meta.env?.VITE_FLIGHT_API_ORIGIN || 'https://choppercheck-flight-api.ornatehinny4.chatgpt.site').replace(/\/+$/, '');
+  : (import.meta.env?.VITE_FLIGHT_API_ORIGIN || 'https://choppercheck-relay.one-mad-punk.workers.dev').replace(/\/+$/, '');
 export const MAX_POSITION_AGE_MS = 45_000;
 export const MAX_PREDICTION_MS = 10_000;
 const history = new Map<string, TrailPoint[]>();

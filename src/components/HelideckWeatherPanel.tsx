@@ -43,6 +43,7 @@ import {
   parseMetarWindVis,
   NO_CEILING_FT,
   formatCrewOutlookSummary,
+  computeSarMissionProfile,
 } from '../utils/solarAndMetUtils';
 import {
   AlertTriangle,
@@ -100,6 +101,8 @@ interface HelideckWeatherPanelProps {
   onToggleFullScreen?: () => void;
   viewMode?: 'simple' | 'detailed';
   onChangeViewMode?: (mode: 'simple' | 'detailed') => void;
+  allFacilities?: InstallationOrAirport[];
+  onSelectFacility?: (fac: InstallationOrAirport) => void;
 }
 
 export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
@@ -132,6 +135,8 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   onToggleFullScreen,
   viewMode: externalViewMode,
   onChangeViewMode: externalOnChangeViewMode,
+  allFacilities = [],
+  onSelectFacility,
 }) => {
   const [copiedOutlook, setCopiedOutlook] = useState(false);
   const [copiedRigLink, setCopiedRigLink] = useState(false);
@@ -693,6 +698,79 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
       ? `Flights may be delayed at this time because of ${cause}.`
       : `Flights are unlikely at this time because of ${cause}.`;
   })();
+
+  const [showSarPlanner, setShowSarPlanner] = useState<boolean>(false);
+
+  const sarMissionProfile = useMemo(
+    () =>
+      computeSarMissionProfile({
+        targetLat: facility.lat,
+        targetLon: facility.lon,
+        targetElevationFt: facility.elevationFt || 0,
+        windSpeed950hPaKts: activeModelSnapshot?.windSpeed950hPaKts ?? deckWindVal ?? 20,
+        windDir950hPaDeg: activeModelSnapshot?.windDir950hPaDeg ?? windDirNow ?? 240,
+        windSpeed850hPaKts:
+          activeModelSnapshot?.windSpeed850hPaKts ??
+          activeModelSnapshot?.windSpeed950hPaKts ??
+          deckWindVal ??
+          25,
+        windDir850hPaDeg:
+          activeModelSnapshot?.windDir850hPaDeg ??
+          activeModelSnapshot?.windDir950hPaDeg ??
+          windDirNow ??
+          240,
+        freezingLevelFt: freezeVal ?? 4500,
+        deckGustKts: gustVal ?? 25,
+        cloudCeilingFt: ceilVal ?? 2500,
+        visibilityKm: visVal ?? 10,
+        waveHeightM: waveVal ?? 1.5,
+        seaSurfaceTempC: activeHour?.seaSurfaceTempC ?? weather?.temperatureC ?? 9.5,
+        isFpso,
+        fpsoMotion: fpsoMotionEstimate,
+        dateInput: activeHour?.hourIso ? new Date(activeHour.hourIso + 'Z') : new Date(),
+      }),
+    [
+      facility.lat,
+      facility.lon,
+      facility.elevationFt,
+      activeModelSnapshot?.windSpeed950hPaKts,
+      activeModelSnapshot?.windDir950hPaDeg,
+      activeModelSnapshot?.windSpeed850hPaKts,
+      activeModelSnapshot?.windDir850hPaDeg,
+      freezeVal,
+      deckWindVal,
+      windDirNow,
+      gustVal,
+      ceilVal,
+      visVal,
+      waveVal,
+      activeHour?.seaSurfaceTempC,
+      activeHour?.hourIso,
+      weather?.temperatureC,
+      isFpso,
+      fpsoMotionEstimate,
+    ]
+  );
+
+  const prestwickSarQuickSites = useMemo(
+    () =>
+      allFacilities.filter((f) =>
+        [
+          'apt-egpk',
+          'sar-goatfell-arran',
+          'sar-galloway-merrick',
+          'sar-ben-lomond-mrt',
+          'sar-glencoe-mrt',
+          'sar-ben-nevis-mrt',
+          'sar-ailsa-craig-clyde',
+          'apt-egpi',
+          'apt-egec',
+          'apt-egeo',
+          'apt-egpu',
+        ].includes(f.id)
+      ),
+    [allFacilities]
+  );
 
   return (
     <div className="flex flex-col h-full min-w-0 w-full bg-slate-950 text-slate-100 overflow-y-auto overflow-x-hidden p-3 sm:p-5 space-y-4">
@@ -1695,17 +1773,297 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
           </div>
         )}
 
-        {viewMode === 'simple' ? (
-          <button
-            onClick={() => handleSetViewMode('detailed')}
-            className="w-full py-3 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-cyan-300 flex items-center justify-center gap-2 cursor-pointer transition-colors"
-          >
-            <SlidersHorizontal className="w-4 h-4" />
-            <span>
-              Open Heli-Admin &amp; Technical Details (Pitch/Roll/SHR, 5 Weather Models, Custom Limits &amp; Raw METARs)
-            </span>
-          </button>
-        ) : (
+        {viewMode === 'simple' && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <button
+              onClick={() => setShowSarPlanner((p) => !p)}
+              className={`w-full py-2.5 px-3 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition-colors ${
+                showSarPlanner
+                  ? 'bg-orange-500 text-slate-950 border-orange-400 font-bold'
+                  : 'bg-orange-950/50 hover:bg-orange-900/50 border-orange-500/45 text-orange-200'
+              }`}
+            >
+              <Radio className="w-4 h-4 shrink-0" />
+              <span>
+                {showSarPlanner
+                  ? 'Hide Coastguard SAR & Medevac Planner'
+                  : '🚁 Coastguard SAR & Medevac Planner (Scramble ETE, Winch, Trauma Hospitals & NVG)'}
+              </span>
+            </button>
+            <button
+              onClick={() => handleSetViewMode('detailed')}
+              className="w-full py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-cyan-300 flex items-center justify-center gap-2 cursor-pointer transition-colors"
+            >
+              <SlidersHorizontal className="w-4 h-4 shrink-0" />
+              <span>
+                Open Heli-Admin &amp; Pro View (Pitch/Roll/SHR, 5 Weather Models &amp; Custom HLL)
+              </span>
+            </button>
+          </div>
+        )}
+
+        {/* COASTGUARD SAR, MOUNTAIN RESCUE (MRT) & OFFSHORE MEDEVAC MISSION PLANNER */}
+        {(viewMode === 'detailed' || showSarPlanner) && (
+          <div className="p-3.5 bg-slate-900/95 border border-orange-500/45 rounded-xl space-y-3 min-w-0">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded bg-orange-500 text-slate-950 font-mono font-extrabold text-[10px]">
+                  HM COASTGUARD / SAR OPS
+                </span>
+                <span className="text-xs sm:text-sm font-bold text-white">
+                  SAR Scramble, Mountain Rescue (MRT) &amp; Medevac Planner ({facility.code})
+                </span>
+              </div>
+              <span className="text-[10px] font-mono text-orange-300">
+                950hPa {dash(activeModelSnapshot?.windSpeed950hPaKts ?? deckWindVal)}kt · 850hPa (Ridge){' '}
+                {sarMissionProfile.mountainRescue.ridgeWind850Kts}kt @{' '}
+                {String(sarMissionProfile.mountainRescue.ridgeWind850DirDeg).padStart(3, '0')}°
+              </span>
+            </div>
+
+            {/* Prestwick (Rescue 199) West Coast Islands, Mountain Rescue (MRT) & Clyde Quick-Switch Bar */}
+            {prestwickSarQuickSites.length > 0 && onSelectFacility && (
+              <div className="p-2 rounded-lg bg-slate-950/90 border border-slate-800 space-y-1.5">
+                <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-orange-300">
+                  <span className="font-bold">
+                    🚁 PRESTWICK (RESCUE 199 · EGPK) MOUNTAIN, ISLAND &amp; CLYDE SAR ZONES:
+                  </span>
+                  <span className="text-slate-400 hidden sm:inline">
+                    Tap any site or click anywhere on the Radar Map
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {prestwickSarQuickSites.map((site) => {
+                    const isCurrent = site.id === facility.id;
+                    const isMrt = site.elevationFt >= 800;
+                    return (
+                      <button
+                        key={site.id}
+                        onClick={() => onSelectFacility(site)}
+                        className={`px-2 py-1 rounded text-[10px] font-mono font-semibold cursor-pointer transition-colors ${
+                          isCurrent
+                            ? 'bg-orange-500 text-slate-950 font-bold'
+                            : isMrt
+                            ? 'bg-amber-950/70 hover:bg-amber-900/70 text-amber-200 border border-amber-500/40'
+                            : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700'
+                        }`}
+                      >
+                        {isMrt ? '🏔️ ' : '🚁 '}
+                        {site.shortName.replace(/\s*\([^)]*\)/, '')}
+                        {isMrt ? ` (${site.elevationFt.toLocaleString()}ft)` : ''}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* SAR Transfer Mode Verdict: Helideck Landing vs Auto-Hover Winch / Hi-Line vs Cloud-Break / Mountain Rescue */}
+            <div
+              className={`p-2.5 rounded-lg border font-mono text-xs space-y-1 ${
+                sarMissionProfile.transferMode === 'DECK_LANDING'
+                  ? 'bg-emerald-950/60 border-emerald-500/45 text-emerald-200'
+                  : sarMissionProfile.transferMode === 'CLOUD_BREAK_AUTO_HOVER'
+                  ? 'bg-amber-950/60 border-amber-500/45 text-amber-200'
+                  : 'bg-rose-950/60 border-rose-500/45 text-rose-200'
+              }`}
+            >
+              <div className="font-bold flex items-center justify-between gap-2 flex-wrap">
+                <span>TRANSFER MODE: {sarMissionProfile.transferHeadline}</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-black/35">
+                  {isNightHour ? 'NIGHT NVG OPS' : 'DAY SAR OPS'}
+                </span>
+              </div>
+              <p className="text-[11px] font-sans opacity-95 leading-snug">
+                {sarMissionProfile.transferDetail}
+              </p>
+            </div>
+
+            {/* Mountain Rescue (MRT) High-Ground Summit Cloud, Icing & Lee-Corrie Rotor Envelope */}
+            <div
+              className={`p-2.5 rounded-lg border font-mono text-[11px] space-y-1.5 ${
+                sarMissionProfile.mountainRescue.isHighGround
+                  ? sarMissionProfile.mountainRescue.isSummitInCloud ||
+                    sarMissionProfile.mountainRescue.leeTurbulenceSeverity === 'SEVERE'
+                    ? 'bg-amber-950/50 border-amber-500/50 text-amber-100'
+                    : 'bg-slate-950/90 border-emerald-500/40 text-slate-200'
+                  : 'bg-slate-950/90 border-slate-800 text-slate-300'
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] font-bold">
+                <span className="text-amber-300">
+                  🏔️ MOUNTAIN RESCUE (MRT) RIDGE WIND, CLOUD-ON-HILL &amp; SUMMIT ICING
+                  {sarMissionProfile.mountainRescue.isHighGround
+                    ? ` · SUMMIT ${sarMissionProfile.mountainRescue.summitElevationFt.toLocaleString()} FT`
+                    : ' · 850 hPa (~5,000 FT) ENVELOPE'}
+                </span>
+                <span
+                  className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                    sarMissionProfile.mountainRescue.leeTurbulenceSeverity === 'SEVERE'
+                      ? 'bg-rose-500 text-white'
+                      : sarMissionProfile.mountainRescue.leeTurbulenceSeverity === 'MODERATE'
+                      ? 'bg-amber-400 text-slate-950'
+                      : 'bg-emerald-500/30 text-emerald-300'
+                  }`}
+                >
+                  {sarMissionProfile.mountainRescue.leeTurbulenceLabel}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px]">
+                <div className="p-1.5 rounded bg-slate-900/90 border border-slate-800">
+                  <div className="text-slate-400">Cloud Base vs Terrain / Summit:</div>
+                  <div
+                    className={`font-bold ${
+                      sarMissionProfile.mountainRescue.isSummitInCloud
+                        ? 'text-amber-300'
+                        : 'text-emerald-300'
+                    }`}
+                  >
+                    {sarMissionProfile.mountainRescue.isHighGround
+                      ? sarMissionProfile.mountainRescue.cloudStatusLabel
+                      : `Cloud Base ${formatCeilingFt(ceilVal)}`}
+                  </div>
+                </div>
+                <div className="p-1.5 rounded bg-slate-900/90 border border-slate-800">
+                  <div className="text-slate-400">0°C Freezing Level vs Ridge Height:</div>
+                  <div
+                    className={`font-bold ${
+                      sarMissionProfile.mountainRescue.isSummitBelowFreezing
+                        ? 'text-rose-300'
+                        : 'text-cyan-300'
+                    }`}
+                  >
+                    {sarMissionProfile.mountainRescue.icingStatusLabel}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Nearest 2 Coastguard SAR Bases: Wind-Corrected ETE & On-Scene Loiter / Winch Endurance */}
+            <div className="space-y-1.5">
+              <div className="text-[10px] font-mono text-orange-300 font-semibold uppercase">
+                1. Nearest Coastguard SAR Scramble Bases (Wind-Corrected 950 hPa Transit &amp; Bingo Loiter):
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 font-mono text-[11px]">
+                {sarMissionProfile.nearestSarBases.map((item) => (
+                  <div
+                    key={item.base.icao}
+                    className="p-2.5 rounded-lg bg-slate-950/90 border border-slate-800 space-y-1"
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="font-bold text-orange-300">
+                        {item.base.callsign} · {item.base.icao}
+                      </span>
+                      <span className="px-1.5 py-0.2 rounded bg-orange-500/20 text-orange-200 text-[10px] font-bold">
+                        {item.base.airframe}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-white font-sans font-semibold">
+                      {item.base.name}
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-slate-300">
+                      <span>
+                        Dist: <strong className="text-white">{item.distanceNm} NM</strong> (
+                        {String(item.outboundTrackDeg).padStart(3, '0')}°T)
+                      </span>
+                      <span>
+                        GS: <strong className="text-cyan-300">{item.outboundGroundspeedKts} kt</strong>
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] pt-1 border-t border-slate-800/80">
+                      <span className="text-emerald-300 font-bold">
+                        ETA On-Scene: ~{item.outboundEteMin} min
+                      </span>
+                      <span
+                        className={
+                          item.requiresRefuelStop
+                            ? 'text-rose-400 font-bold'
+                            : 'text-amber-300 font-bold'
+                        }
+                      >
+                        {item.requiresRefuelStop
+                          ? 'Refuel Rig Req.'
+                          : `On-Scene Loiter: ~${item.estTimeOnSceneMin}m`}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Nearest 2 Major Trauma Centre (MTC) / Receiving Hospital Helipads from Incident / Rig */}
+            <div className="space-y-1.5">
+              <div className="text-[10px] font-mono text-cyan-300 font-semibold uppercase">
+                2. Direct Medevac Routing to Nearest Major Trauma / Receiving Hospital Helipads:
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 font-mono text-[11px]">
+                {sarMissionProfile.nearestHospitals.map((h) => (
+                  <div
+                    key={h.hospital.code}
+                    className="p-2.5 rounded-lg bg-slate-950/90 border border-slate-800 space-y-1"
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="font-bold text-cyan-300">
+                        🏥 {h.hospital.code} · {h.hospital.city}
+                      </span>
+                      <span className="text-emerald-300 font-bold">~{h.eteMin} min ETE</span>
+                    </div>
+                    <div className="text-[11px] text-white font-sans truncate">
+                      {h.hospital.name}
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-slate-400">
+                      <span>
+                        {h.distanceNm} NM · Track {String(h.trackDeg).padStart(3, '0')}°T
+                      </span>
+                      <span>Wind-Corr GS {h.groundspeedKts} kt</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Night NVG Lunar Illumination + Cold-Water Immersion Survival Telemetry */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 font-mono text-[11px]">
+              <div className="p-2.5 rounded-lg bg-slate-950/90 border border-slate-800 space-y-1">
+                <div className="flex items-center justify-between text-[10px] text-indigo-300 font-semibold">
+                  <span>🌙 NVG LUNAR ILLUMINATION &amp; TWILIGHT</span>
+                  <span className="px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-200 font-bold">
+                    {sarMissionProfile.lunar.illuminationPct}% MOON
+                  </span>
+                </div>
+                <div className="text-xs text-white font-bold">
+                  {sarMissionProfile.lunar.phaseName} ({
+                    sarMissionProfile.lunar.nvgRating === 'HIGH_MOON'
+                      ? 'High NVG Ambient Light'
+                      : sarMissionProfile.lunar.nvgRating === 'MODERATE_MOON'
+                      ? 'Moderate NVG Contrast'
+                      : 'Low Moon — Cultural/Starlight NVG'
+                  })
+                </div>
+                <div className="text-[10px] text-slate-400">
+                  Civil Dawn {solarWindow.civilDawnLabel}Z · Civil Dusk {solarWindow.civilDuskLabel}Z
+                </div>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-slate-950/90 border border-slate-800 space-y-1">
+                <div className="flex items-center justify-between text-[10px] text-sky-300 font-semibold">
+                  <span>🌊 SEA TEMP &amp; COLD-WATER SURVIVAL</span>
+                  <span className="px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-200 font-bold">
+                    SST {sarMissionProfile.seaSurfaceTempC}°C
+                  </span>
+                </div>
+                <div className="text-xs text-white font-bold truncate">
+                  {sarMissionProfile.uninsulatedFunctionalTimeLabel}
+                </div>
+                <div className="text-[10px] text-slate-400 truncate">
+                  {sarMissionProfile.immersionSuitSurvivalLabel}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {viewMode === 'simple' ? null : (
           <>
         {/* 2. Airframe Operating Limit Preset Selector */}
         <div className="p-2.5 bg-slate-900/90 border border-slate-800 rounded-lg space-y-2">
