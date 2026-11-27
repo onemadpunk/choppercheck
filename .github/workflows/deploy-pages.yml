@@ -35,6 +35,7 @@ jobs:
       - name: Check aircraft and weather data handling
         run: |
           npm run check
+          npm run lint
           npm test
 
       - name: Build static web app for GitHub Pages
@@ -45,6 +46,11 @@ jobs:
           npm run build
           echo "choppercheck.com" > dist/CNAME
           cp dist/index.html dist/404.html
+
+      - name: Smoke check before going live (load site, open a rig and its weather)
+        run: |
+          npx playwright install --with-deps chromium
+          npm run smoke
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

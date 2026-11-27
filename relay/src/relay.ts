@@ -2,6 +2,7 @@
  * ChopperCheck flight relay. Same API as the old relay so the site needs no other change:
  *   GET /api/flights?regions=<north-sea|uk-ireland|south-uk>
  *   GET /api/weather?lat=<lat>&lon=<lon>&icao=<ICAO>
+ *   GET /api/om/<forecast|marine|elevation>?<Open-Meteo query>  (shared, cached Open-Meteo pass-through)
  * Aircraft sources are tried in order until one gives a fresh snapshot. Each answer is cached for a few
  * seconds so every visitor shares the same upstream request.
  */
@@ -50,7 +51,7 @@ const UPSTREAM_TIMEOUT_MS = 8_000;
 
 /** Per-instance cooldowns after a provider says "slow down" or fails. */
 const cooldownUntil = new Map<string, number>();
-export const resetCooldowns = () => { cooldownUntil.clear(); lastOutcome.clear(); };
+export const resetCooldowns = () => { cooldownUntil.clear(); lastOutcome.clear(); clearMemoryCache(); };
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -138,18 +139,85 @@ export async function fetchRegion(regionId: string, env: Env, deps: Deps) {
     feeds: backups, region: regionId, feedAvailable: true };
 }
 
+/**
+ * In-memory copy of recent answers. Cloudflare's Cache API does nothing on a workers.dev address, so without
+ * this every visitor's request would go upstream. Each Worker instance keeps its own copy; bounded by size.
+ */
+const memory = new Map<string, { body: string; status: number; headers: [string, string][]; expires: number }>();
+const MEMORY_MAX_BYTES = 40_000_000;
+let memoryBytes = 0;
+export const clearMemoryCache = () => { memory.clear(); memoryBytes = 0; };
+
+function remember(key: string, body: string, response: Response, ttlS: number, now: number) {
+  const old = memory.get(key);
+  if (old) { memoryBytes -= old.body.length; memory.delete(key); }
+  if (body.length > MEMORY_MAX_BYTES / 4) return;
+  memory.set(key, { body, status: response.status, headers: [...response.headers], expires: now + ttlS * 1000 });
+  memoryBytes += body.length;
+  for (const [k, v] of memory) {
+    if (memoryBytes <= MEMORY_MAX_BYTES && v.expires > now) continue;
+    memory.delete(k); memoryBytes -= v.body.length;
+    if (memoryBytes <= MEMORY_MAX_BYTES) break;
+  }
+}
+
 async function cached(deps: Deps, key: string, ttlS: number, build: () => Promise<Response>): Promise<Response> {
+  const now = (deps.now ?? Date.now)();
+  const mem = memory.get(key);
+  if (mem && mem.expires > now) return new Response(mem.body, { status: mem.status, headers: mem.headers });
   if (deps.cache) {
     const hit = await deps.cache.match(key);
     if (hit) return hit;
   }
   const response = await build();
-  if (deps.cache && response.ok) {
-    const copy = new Response(response.clone().body, response);
-    copy.headers.set('Cache-Control', `public, max-age=${ttlS}`);
-    await deps.cache.put(key, copy);
+  if (response.ok) {
+    const body = await response.text();
+    remember(key, body, response, ttlS, now);
+    const headers = new Headers(response.headers);
+    headers.set('Cache-Control', `public, max-age=${ttlS}`);
+    if (deps.cache) await deps.cache.put(key, new Response(body, { status: response.status, headers }));
+    return new Response(body, { status: response.status, headers });
   }
   return response;
+}
+
+/**
+ * Open-Meteo limits each IP address (600 weighted calls a minute, 10,000 a day). A whole rig often shares one
+ * internet address, and the map grid alone weighs about 300 calls, so crews ran out and weather went blank.
+ * The relay fetches each forecast once and serves it to everyone from Cloudflare's cache for 10 minutes.
+ */
+export const OPEN_METEO_ROUTES: Record<string, string> = {
+  '/api/om/forecast': 'https://api.open-meteo.com/v1/forecast',
+  '/api/om/marine': 'https://marine-api.open-meteo.com/v1/marine',
+  '/api/om/elevation': 'https://api.open-meteo.com/v1/elevation',
+};
+const OPEN_METEO_CACHE_S = 600;
+const OPEN_METEO_MAX_QUERY = 6000;
+
+export async function handleOpenMeteo(url: URL, deps: Deps): Promise<Response> {
+  const upstreamBase = OPEN_METEO_ROUTES[url.pathname];
+  if (!upstreamBase) return json({ error: 'Not found' }, 404);
+  if (!url.search || url.search.length > OPEN_METEO_MAX_QUERY) return json({ error: 'Bad query' }, 400);
+  const host = new URL(upstreamBase).hostname;
+  const now = (deps.now ?? Date.now)();
+  // While Open-Meteo has told the relay to slow down, the browser asks Open-Meteo itself instead
+  if ((cooldownUntil.get(host) ?? 0) > now) return json({ error: 'busy' }, 503, { 'Retry-After': '60' });
+  return cached(deps, `https://relay.cache/om${url.pathname}${url.search}`, OPEN_METEO_CACHE_S, async () => {
+    try {
+      const response = await deps.fetch(upstreamBase + url.search, {
+        headers: { Accept: 'application/json', 'User-Agent': 'ChopperCheck relay (choppercheck.com)' },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (response.status === 429) {
+        cooldownUntil.set(host, now + retryAfterMs(response));
+        return json({ error: 'busy' }, 503, { 'Retry-After': '60' });
+      }
+      const body = await response.text();
+      return new Response(body, { status: response.status, headers: { 'Content-Type': 'application/json', ...CORS } });
+    } catch {
+      return json({ error: 'upstream unavailable' }, 502);
+    }
+  });
 }
 
 async function getJson(deps: Deps, url: string): Promise<any> {
@@ -191,5 +259,6 @@ export async function handle(request: Request, env: Env, deps: Deps): Promise<Re
     const key = `https://relay.cache/weather/${Number(p.get('lat')).toFixed(2)}/${Number(p.get('lon')).toFixed(2)}/${(p.get('icao') || '').toUpperCase()}`;
     return cached(deps, key, WEATHER_CACHE_S, () => handleWeather(p, deps));
   }
+  if (url.pathname.startsWith('/api/om/')) return handleOpenMeteo(url, deps);
   return json({ error: 'Not found' }, 404);
 }
