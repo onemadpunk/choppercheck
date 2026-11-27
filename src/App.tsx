@@ -567,10 +567,11 @@ export default function App() {
     () =>
       facilities.filter(
         (f) =>
-          f.assetType === 'UK Airport' ||
+          !f.id.startsWith('sar-') &&
+          (f.assetType === 'UK Airport' ||
           f.assetType === 'Shore Heliport' ||
           f.assetType === 'SAR Base' ||
-          f.assetType === 'Norwegian Hub'
+          f.assetType === 'Norwegian Hub')
       ),
     [facilities]
   );
@@ -983,7 +984,7 @@ export default function App() {
       setAirframePresetId('S92');
     }
     try {
-      localStorage.setItem('choppercheck_home_rig_id', fac.id);
+      if (fac.id !== 'custom-sar-pin') localStorage.setItem('choppercheck_home_rig_id', fac.id);
     } catch {
       // ignore storage errors
     }
@@ -1085,7 +1086,7 @@ export default function App() {
       const pinFac: InstallationOrAirport = {
         id: 'custom-sar-pin',
         code: 'PIN',
-        name: `SAR / Weather Pin (${latNum.toFixed(3)}°N, ${lonNum.toFixed(3)}°E)`,
+        name: `Map pin (${label.slice(9, -1)})`,
         shortName: label,
         fieldOperator: 'HM Coastguard / SAR',
         assetType: 'Custom location',
@@ -1093,9 +1094,19 @@ export default function App() {
         lat: latNum,
         lon: lonNum,
         elevationFt: 0,
-        primaryShoreBase: lonNum < -3.0 ? 'EGPK' : 'EGPD',
-        helicopterOperators: ['Bristow', 'HM Coastguard'],
-        regionLabel: 'Custom SAR / Weather Spot Pin',
+        // Nearest offshore heliport, not just "Prestwick if west, Aberdeen if east"
+        primaryShoreBase: ['EGPD', 'EGPB', 'EGPK', 'EGPE', 'EGPO', 'EGNJ', 'EGSH', 'EGNH']
+          .map((code) => INSTALLATIONS_AND_AIRPORTS.find((f) => f.code === code))
+          .filter((f): f is InstallationOrAirport => Boolean(f))
+          .reduce(
+            (best, f) => {
+              const d = (f.lat - latNum) ** 2 + ((f.lon - lonNum) * Math.cos((latNum * Math.PI) / 180)) ** 2;
+              return d < best.d ? { code: f.code, d } : best;
+            },
+            { code: 'EGPD', d: Infinity }
+          ).code,
+        helicopterOperators: [],
+        regionLabel: 'Map pin',
       };
       setFacilities((prev) => [pinFac, ...prev.filter((f) => f.id !== 'custom-sar-pin')]);
       handleSelectFacility(pinFac);
@@ -1288,7 +1299,7 @@ export default function App() {
                 .filter((f) => f.sector === 'apache_north_sea')
                 .map((f) => (
                   <option key={f.id} value={f.id}>
-                    {f.shortName} ({f.code})
+                    {f.shortName.includes(`(${f.code})`) ? f.shortName : `${f.shortName} (${f.code})`}
                   </option>
                 ))}
             </optgroup>
@@ -1297,11 +1308,11 @@ export default function App() {
                 .filter((f) => f.sector === 'west_of_shetland')
                 .map((f) => (
                   <option key={f.id} value={f.id}>
-                    {f.shortName} ({f.code})
+                    {f.shortName.includes(`(${f.code})`) ? f.shortName : `${f.shortName} (${f.code})`}
                   </option>
                 ))}
             </optgroup>
-            <optgroup label="Scotland Heliports & Prestwick/Alloway">
+            <optgroup label="Scotland heliports, airports & SAR spots">
               {facilities
                 .filter((f) => f.sector === 'scotland_airports')
                 .map((f) => (
@@ -1315,7 +1326,7 @@ export default function App() {
                 .filter((f) => f.sector === 'uk_north_sea')
                 .map((f) => (
                   <option key={f.id} value={f.id}>
-                    {f.shortName} ({f.code})
+                    {f.shortName.includes(`(${f.code})`) ? f.shortName : `${f.shortName} (${f.code})`}
                   </option>
                 ))}
             </optgroup>
@@ -1324,7 +1335,7 @@ export default function App() {
                 .filter((f) => f.sector === 'irish_sea')
                 .map((f) => (
                   <option key={f.id} value={f.id}>
-                    {f.shortName} ({f.code})
+                    {f.shortName.includes(`(${f.code})`) ? f.shortName : `${f.shortName} (${f.code})`}
                   </option>
                 ))}
             </optgroup>
@@ -1333,7 +1344,7 @@ export default function App() {
                 .filter((f) => f.sector === 'southern_north_sea')
                 .map((f) => (
                   <option key={f.id} value={f.id}>
-                    {f.shortName} ({f.code})
+                    {f.shortName.includes(`(${f.code})`) ? f.shortName : `${f.shortName} (${f.code})`}
                   </option>
                 ))}
             </optgroup>
@@ -1351,7 +1362,7 @@ export default function App() {
                 .filter((f) => f.sector === 'norway_ncs')
                 .map((f) => (
                   <option key={f.id} value={f.id}>
-                    {f.shortName} ({f.code})
+                    {f.shortName.includes(`(${f.code})`) ? f.shortName : `${f.shortName} (${f.code})`}
                   </option>
                 ))}
             </optgroup>

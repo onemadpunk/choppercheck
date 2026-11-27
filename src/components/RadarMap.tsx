@@ -336,6 +336,11 @@ export const RadarMap: React.FC<RadarMapProps> = ({
     lat: activeFacility.lat,
     lon: activeFacility.lon,
   });
+  // The spot the user last clicked. The pin button uses this, not the hover position, because moving the
+  // mouse to the button would otherwise drag the "spot" to the map edge next to it.
+  const [clickedSpot, setClickedSpot] = useState<{ lat: number; lon: number } | null>(null);
+  const fmtLatLon = (lat: number, lon: number) =>
+    `${Math.abs(lat).toFixed(2)}°${lat < 0 ? 'S' : 'N'}, ${Math.abs(lon).toFixed(2)}°${lon < 0 ? 'W' : 'E'}`;
 
   const isFpso = activeFacility.assetType === 'FPSO' || activeFacility.assetType === 'Semi-Sub';
   const isSemiSub = activeFacility.assetType === 'Semi-Sub';
@@ -435,10 +440,12 @@ export const RadarMap: React.FC<RadarMapProps> = ({
     });
 
     map.on('click', (e: L.LeafletMouseEvent) => {
-      setCursorCoords({
+      const spot = {
         lat: Number(e.latlng.lat.toFixed(4)),
         lon: Number(e.latlng.lng.toFixed(4)),
-      });
+      };
+      setCursorCoords(spot);
+      setClickedSpot(spot);
     });
 
     map.on('zoomend', () => {
@@ -1408,9 +1415,9 @@ export const RadarMap: React.FC<RadarMapProps> = ({
       </div>
 
       {/* Bottom-Left Live Ventusky-Style Spot-Check Cursor / Tap Weather Readout */}
-      <div className="map-floating hidden xl:flex absolute bottom-3 left-3 z-[400] items-center gap-2.5 bg-slate-950/92 backdrop-blur-md border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] font-mono text-slate-300 pointer-events-auto">
+      <div className="map-floating hidden xl:flex flex-wrap max-w-[calc(100%-610px)] absolute bottom-3 left-3 z-[400] items-center gap-x-2.5 gap-y-1 bg-slate-950/92 backdrop-blur-md border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] font-mono text-slate-300 pointer-events-auto">
         <span className="text-slate-400 tabular-nums">
-          SPOT ({cursorCoords.lat.toFixed(2)}°N, {cursorCoords.lon.toFixed(2)}°E):
+          SPOT ({fmtLatLon(cursorCoords.lat, cursorCoords.lon)}):
         </span>
         {spotWeather ? (
           <>
@@ -1454,11 +1461,18 @@ export const RadarMap: React.FC<RadarMapProps> = ({
         )}
         {onLockMapSpot && (
           <button
-            onClick={() => onLockMapSpot(cursorCoords.lat, cursorCoords.lon)}
-            title="Lock this map spot to plan SAR scramble ETE, Mountain Rescue & 7-Day Weather"
-            className="ml-1 px-2 py-0.5 rounded bg-orange-500/20 hover:bg-orange-500/35 border border-orange-500/50 text-orange-300 font-bold text-[10px] cursor-pointer transition-colors"
+            onClick={() => clickedSpot && onLockMapSpot(clickedSpot.lat, clickedSpot.lon)}
+            disabled={!clickedSpot}
+            title={
+              clickedSpot
+                ? `Show the 7-day weather and SAR planner for ${fmtLatLon(clickedSpot.lat, clickedSpot.lon)}`
+                : 'Click a spot on the map first'
+            }
+            className="px-2 py-0.5 rounded bg-orange-500/20 hover:bg-orange-500/35 border border-orange-500/50 text-orange-300 font-bold text-[10px] cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            🚁 Plan SAR / 7-Day Here
+            {clickedSpot
+              ? `📍 Weather for clicked spot (${fmtLatLon(clickedSpot.lat, clickedSpot.lon)})`
+              : '📍 Click the map to pick a spot'}
           </button>
         )}
       </div>

@@ -1480,7 +1480,6 @@ export interface SarBaseMeta {
   lat: number;
   lon: number;
   dashSpeedKts: number;
-  maxEnduranceMin: number;
 }
 
 export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
@@ -1492,7 +1491,6 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     lat: 59.8789,
     lon: -1.2956,
     dashSpeedKts: 145,
-    maxEnduranceMin: 250,
   },
   {
     icao: 'EGPO',
@@ -1502,7 +1500,6 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     lat: 58.2156,
     lon: -6.3311,
     dashSpeedKts: 145,
-    maxEnduranceMin: 250,
   },
   {
     icao: 'EGPE',
@@ -1512,7 +1509,6 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     lat: 57.5425,
     lon: -4.0475,
     dashSpeedKts: 150,
-    maxEnduranceMin: 225,
   },
   {
     icao: 'EGPK',
@@ -1522,7 +1518,6 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     lat: 55.5094,
     lon: -4.5944,
     dashSpeedKts: 150,
-    maxEnduranceMin: 225,
   },
   {
     icao: 'EGNJ',
@@ -1532,7 +1527,6 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     lat: 53.5744,
     lon: -0.3508,
     dashSpeedKts: 145,
-    maxEnduranceMin: 250,
   },
   {
     icao: 'EGCK',
@@ -1542,7 +1536,6 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     lat: 53.1018,
     lon: -4.3376,
     dashSpeedKts: 145,
-    maxEnduranceMin: 250,
   },
   {
     icao: 'EGDX',
@@ -1552,7 +1545,6 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     lat: 51.4056,
     lon: -3.4375,
     dashSpeedKts: 150,
-    maxEnduranceMin: 225,
   },
   {
     icao: 'EGHQ',
@@ -1562,7 +1554,6 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     lat: 50.4406,
     lon: -4.9954,
     dashSpeedKts: 145,
-    maxEnduranceMin: 250,
   },
   {
     icao: 'EGHF',
@@ -1572,7 +1563,6 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     lat: 50.8156,
     lon: -1.2067,
     dashSpeedKts: 150,
-    maxEnduranceMin: 225,
   },
   {
     icao: 'EGMD',
@@ -1582,7 +1572,6 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     lat: 50.9562,
     lon: 0.9391,
     dashSpeedKts: 150,
-    maxEnduranceMin: 225,
   },
   {
     icao: 'EIDW',
@@ -1592,7 +1581,6 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     lat: 53.4213,
     lon: -6.2701,
     dashSpeedKts: 145,
-    maxEnduranceMin: 250,
   },
   {
     icao: 'EISG',
@@ -1602,7 +1590,6 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     lat: 54.2802,
     lon: -8.5992,
     dashSpeedKts: 145,
-    maxEnduranceMin: 250,
   },
   {
     icao: 'EINN',
@@ -1612,7 +1599,6 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     lat: 52.7019,
     lon: -8.9248,
     dashSpeedKts: 145,
-    maxEnduranceMin: 250,
   },
   {
     icao: 'EIWF',
@@ -1622,7 +1608,6 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     lat: 52.1872,
     lon: -7.0869,
     dashSpeedKts: 145,
-    maxEnduranceMin: 250,
   },
 ];
 
@@ -1779,15 +1764,16 @@ function initialBearingDeg(lat1: number, lon1: number, lat2: number, lon2: numbe
 export interface MountainRescueProfile {
   isHighGround: boolean;
   summitElevationFt: number;
-  cloudClearanceFt: number;
+  /** null when the forecast has no cloud base for this hour. */
+  cloudClearanceFt: number | null;
   isSummitInCloud: boolean;
   cloudStatusLabel: string;
-  freezingLevelFt: number;
+  freezingLevelFt: number | null;
   isSummitBelowFreezing: boolean;
   icingStatusLabel: string;
-  ridgeWind850Kts: number;
-  ridgeWind850DirDeg: number;
-  leeTurbulenceSeverity: 'LOW' | 'MODERATE' | 'SEVERE';
+  ridgeWind850Kts: number | null;
+  ridgeWind850DirDeg: number | null;
+  leeTurbulenceSeverity: 'LOW' | 'MODERATE' | 'SEVERE' | 'UNKNOWN';
   leeTurbulenceLabel: string;
 }
 
@@ -1800,8 +1786,8 @@ export interface SarMissionProfile {
     outboundGroundspeedKts: number;
     outboundEteMin: number;
     returnEteMin: number;
-    estTimeOnSceneMin: number;
-    requiresRefuelStop: boolean;
+    /** false when no 950 hPa wind was available, so times are still-air estimates. */
+    windCorrected: boolean;
   }>;
   nearestHospitals: Array<{
     hospital: TraumaHospitalHelipad;
@@ -1809,14 +1795,13 @@ export interface SarMissionProfile {
     trackDeg: number;
     groundspeedKts: number;
     eteMin: number;
+    windCorrected: boolean;
   }>;
-  transferMode: 'DECK_LANDING' | 'WINCH_HI_LINE_ONLY' | 'CLOUD_BREAK_AUTO_HOVER';
+  transferMode: 'DECK_LANDING' | 'WINCH_HI_LINE_ONLY' | 'CLOUD_BREAK_AUTO_HOVER' | 'UNKNOWN';
   transferHeadline: string;
   transferDetail: string;
-  seaSurfaceTempC: number;
-  coldShockLabel: string;
-  uninsulatedFunctionalTimeLabel: string;
-  immersionSuitSurvivalLabel: string;
+  /** Forecast sea-surface temperature, or null when the marine model has none (never the air temperature). */
+  seaSurfaceTempC: number | null;
   mountainRescue: MountainRescueProfile;
   lunar: {
     illuminationPct: number;
@@ -1825,25 +1810,28 @@ export interface SarMissionProfile {
   };
 }
 
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
 /**
- * Computes a complete Coastguard SAR, Mountain Rescue (MRT) & Offshore Medevac Mission Profile for any
- * offshore installation, mountain summit, island airfield, or coordinate using live 950 hPa (~1,800 ft)
- * & 850 hPa (~5,000 ft) winds, deck gusts, cloud ceiling, freezing level, wave/FPSO motion, SST, and lunar NVG illumination.
+ * Distance, bearing and rough transit times from the nearest Coastguard SAR bases and receiving hospitals,
+ * plus a transfer / high-ground read-out, for any location. Only forecast values that exist are used:
+ * a missing value is reported as missing, never replaced with a typical number.
+ * Transit times use each base's assumed cruise speed (dashSpeedKts) and, when available, the 950 hPa wind.
  */
 export function computeSarMissionProfile(params: {
   targetLat: number;
   targetLon: number;
   targetElevationFt?: number;
-  windSpeed950hPaKts: number;
-  windDir950hPaDeg: number;
-  windSpeed850hPaKts?: number;
-  windDir850hPaDeg?: number;
-  freezingLevelFt?: number;
-  deckGustKts: number;
-  cloudCeilingFt: number;
-  visibilityKm: number;
-  waveHeightM: number;
-  seaSurfaceTempC: number;
+  windSpeed950hPaKts?: number | null;
+  windDir950hPaDeg?: number | null;
+  windSpeed850hPaKts?: number | null;
+  windDir850hPaDeg?: number | null;
+  freezingLevelFt?: number | null;
+  deckGustKts?: number | null;
+  cloudCeilingFt?: number | null;
+  visibilityKm?: number | null;
+  waveHeightM?: number | null;
+  seaSurfaceTempC?: number | null;
   isFpso: boolean;
   fpsoMotion?: EstimatedFpsoDeckMotion | null;
   dateInput?: Date | string;
@@ -1854,9 +1842,7 @@ export function computeSarMissionProfile(params: {
     targetElevationFt = 0,
     windSpeed950hPaKts,
     windDir950hPaDeg,
-    windSpeed850hPaKts = windSpeed950hPaKts,
-    windDir850hPaDeg = windDir950hPaDeg,
-    freezingLevelFt = 4500,
+    freezingLevelFt,
     deckGustKts,
     cloudCeilingFt,
     visibilityKm,
@@ -1866,39 +1852,29 @@ export function computeSarMissionProfile(params: {
     fpsoMotion,
     dateInput = new Date(),
   } = params;
+  // The 850 hPa wind may fall back to the 950 hPa wind (a real, lower-level value), never to a constant.
+  const windSpeed850hPaKts = isNum(params.windSpeed850hPaKts) ? params.windSpeed850hPaKts : windSpeed950hPaKts;
+  const windDir850hPaDeg = isNum(params.windDir850hPaDeg) ? params.windDir850hPaDeg : windDir950hPaDeg;
+
+  const hasWind = isNum(windSpeed950hPaKts) && isNum(windDir950hPaDeg);
+  const headwindOn = (trackDeg: number) =>
+    hasWind ? windSpeed950hPaKts * Math.cos(((windDir950hPaDeg - trackDeg) * Math.PI) / 180) : 0;
 
   const nearestSarBases = COASTGUARD_SAR_BASES.map((base) => {
     const distNm = Math.round(haversineNm(base.lat, base.lon, targetLat, targetLon));
     const outTrack = Math.round(initialBearingDeg(base.lat, base.lon, targetLat, targetLon));
     const inTrack = (outTrack + 180) % 360;
-
-    // Wind is FROM windDir950hPaDeg: headwind component = ws * cos(windDir - track)
-    const outHeadwind =
-      windSpeed950hPaKts * Math.cos(((windDir950hPaDeg - outTrack) * Math.PI) / 180);
-    const inHeadwind =
-      windSpeed950hPaKts * Math.cos(((windDir950hPaDeg - inTrack) * Math.PI) / 180);
-
-    const outGs = Math.max(75, Math.round(base.dashSpeedKts - outHeadwind));
-    const inGs = Math.max(75, Math.round(base.dashSpeedKts - inHeadwind));
-
-    const outboundEteMin = Math.max(1, Math.round((distNm / outGs) * 60));
-    const returnEteMin = Math.max(1, Math.round((distNm / inGs) * 60));
-
-    // Usable mission time = maxEnduranceMin - 30 min reserve - outbound - return
-    const usableMin = base.maxEnduranceMin - 30 - outboundEteMin - returnEteMin;
-    const estTimeOnSceneMin = Math.max(0, usableMin);
-    const requiresRefuelStop = usableMin < 15;
-
+    const outGs = Math.max(75, Math.round(base.dashSpeedKts - headwindOn(outTrack)));
+    const inGs = Math.max(75, Math.round(base.dashSpeedKts - headwindOn(inTrack)));
     return {
       base,
       distanceNm: distNm,
       outboundTrackDeg: outTrack,
       inboundTrackDeg: inTrack,
       outboundGroundspeedKts: outGs,
-      outboundEteMin,
-      returnEteMin,
-      estTimeOnSceneMin,
-      requiresRefuelStop,
+      outboundEteMin: Math.max(1, Math.round((distNm / outGs) * 60)),
+      returnEteMin: Math.max(1, Math.round((distNm / inGs) * 60)),
+      windCorrected: hasWind,
     };
   })
     .sort((a, b) => a.outboundEteMin - b.outboundEteMin)
@@ -1906,118 +1882,117 @@ export function computeSarMissionProfile(params: {
 
   const nearestHospitals = MAJOR_TRAUMA_HOSPITAL_HELIPADS.map((hospital) => {
     const distNm = Math.round(haversineNm(targetLat, targetLon, hospital.lat, hospital.lon));
-    const trackDeg = Math.round(
-      initialBearingDeg(targetLat, targetLon, hospital.lat, hospital.lon)
-    );
-    const headwind =
-      windSpeed950hPaKts * Math.cos(((windDir950hPaDeg - trackDeg) * Math.PI) / 180);
-    const gs = Math.max(75, Math.round(145 - headwind));
-    const eteMin = Math.max(1, Math.round((distNm / gs) * 60));
+    const trackDeg = Math.round(initialBearingDeg(targetLat, targetLon, hospital.lat, hospital.lon));
+    const gs = Math.max(75, Math.round(145 - headwindOn(trackDeg)));
     return {
       hospital,
       distanceNm: distNm,
       trackDeg,
       groundspeedKts: gs,
-      eteMin,
+      eteMin: Math.max(1, Math.round((distNm / gs) * 60)),
+      windCorrected: hasWind,
     };
   })
     .sort((a, b) => a.eteMin - b.eteMin)
     .slice(0, 2);
 
-  // Mountain Rescue (MRT) High-Ground & Ridge-Wind Assessment (for Prestwick Rescue 199 / Inverness Rescue 151 / Caernarfon Rescue 936)
+  // High ground: cloud on the hill, icing and lee turbulence, each only from values the forecast has
   const isHighGround = targetElevationFt >= 800;
-  const cloudClearanceFt = Math.round(cloudCeilingFt - targetElevationFt);
-  const isSummitInCloud = isHighGround && cloudCeilingFt < targetElevationFt + 300;
-  const isSummitBelowFreezing = isHighGround && freezingLevelFt <= targetElevationFt + 200;
-  const leeTurbulenceSeverity: MountainRescueProfile['leeTurbulenceSeverity'] =
-    windSpeed850hPaKts >= 38
-      ? 'SEVERE'
-      : windSpeed850hPaKts >= 25
-      ? 'MODERATE'
-      : 'LOW';
+  const hasCeiling = isNum(cloudCeilingFt);
+  const hasFreeze = isNum(freezingLevelFt);
+  const hasRidgeWind = isNum(windSpeed850hPaKts);
+  const cloudClearanceFt = hasCeiling ? Math.round(cloudCeilingFt - targetElevationFt) : null;
+  const isSummitInCloud = isHighGround && hasCeiling && cloudCeilingFt < targetElevationFt + 300;
+  const isSummitBelowFreezing = isHighGround && hasFreeze && freezingLevelFt <= targetElevationFt + 200;
+  const leeTurbulenceSeverity: MountainRescueProfile['leeTurbulenceSeverity'] = !hasRidgeWind
+    ? 'UNKNOWN'
+    : windSpeed850hPaKts >= 38
+    ? 'SEVERE'
+    : windSpeed850hPaKts >= 25
+    ? 'MODERATE'
+    : 'LOW';
+  const windTag = hasRidgeWind
+    ? `850 hPa ${windSpeed850hPaKts} kt${isNum(windDir850hPaDeg) ? ` @ ${windDir850hPaDeg}°` : ''}`
+    : '';
   const leeTurbulenceLabel =
-    leeTurbulenceSeverity === 'SEVERE'
-      ? `SEVERE Lee-Corrie Downdrafts & Rotor Risk (850 hPa ${windSpeed850hPaKts} kt @ ${windDir850hPaDeg}°)`
+    leeTurbulenceSeverity === 'UNKNOWN'
+      ? 'Hill wind not in forecast'
+      : leeTurbulenceSeverity === 'SEVERE'
+      ? `Severe turbulence likely downwind of hills (${windTag})`
       : leeTurbulenceSeverity === 'MODERATE'
-      ? `MODERATE Lee-Slope Turbulence (850 hPa ${windSpeed850hPaKts} kt @ ${windDir850hPaDeg}°)`
-      : `Clean Ridge Air (${windSpeed850hPaKts} kt @ ${windDir850hPaDeg}°)`;
+      ? `Some turbulence downwind of hills (${windTag})`
+      : `Light hill wind (${windTag})`;
 
   const mountainRescue: MountainRescueProfile = {
     isHighGround,
     summitElevationFt: targetElevationFt,
     cloudClearanceFt,
     isSummitInCloud,
-    cloudStatusLabel: isSummitInCloud
-      ? `SUMMIT IN CLOUD (Cloud base ${cloudCeilingFt.toLocaleString()} ft vs Summit ${targetElevationFt.toLocaleString()} ft)`
-      : `Visual above Summit (+${Math.max(0, cloudClearanceFt).toLocaleString()} ft cloud clearance)`,
-    freezingLevelFt,
+    cloudStatusLabel: !hasCeiling
+      ? 'Cloud base not in forecast'
+      : cloudCeilingFt >= NO_CEILING_FT
+      ? 'No low cloud'
+      : isSummitInCloud
+      ? `Summit in cloud (cloud base ${cloudCeilingFt.toLocaleString()} ft, summit ${targetElevationFt.toLocaleString()} ft)`
+      : `Summit clear of cloud (cloud base ${cloudCeilingFt.toLocaleString()} ft)`,
+    freezingLevelFt: hasFreeze ? freezingLevelFt : null,
     isSummitBelowFreezing,
-    icingStatusLabel: isSummitBelowFreezing
-      ? `SUMMIT ABOVE 0°C FREEZING LEVEL (${freezingLevelFt.toLocaleString()} ft · Sub-zero on ridge & airframe icing in cloud)`
-      : `0°C Freezing Level (${freezingLevelFt.toLocaleString()} ft) above summit`,
-    ridgeWind850Kts: windSpeed850hPaKts,
-    ridgeWind850DirDeg: windDir850hPaDeg,
+    icingStatusLabel: !hasFreeze
+      ? 'Freezing level not in forecast'
+      : isSummitBelowFreezing
+      ? `Below freezing on the summit (0°C at ${freezingLevelFt.toLocaleString()} ft): icing risk in cloud`
+      : `0°C level ${freezingLevelFt.toLocaleString()} ft, above the summit`,
+    ridgeWind850Kts: hasRidgeWind ? windSpeed850hPaKts : null,
+    ridgeWind850DirDeg: isNum(windDir850hPaDeg) ? windDir850hPaDeg : null,
     leeTurbulenceSeverity,
     leeTurbulenceLabel,
   };
 
-  // SAR Transfer Mode Logic (Deck Landing vs Winch/Hi-Line Transfer vs Offshore/Valley Cloud-Break)
-  let transferMode: SarMissionProfile['transferMode'] = 'DECK_LANDING';
-  let transferHeadline = isHighGround
-    ? 'VISUAL RIDGE / SUMMIT WINCH OR HOVER-STEP FEASIBLE'
-    : 'HELIDECK LANDING FEASIBLE (WITHIN SAR DECK LIMITS)';
-  let transferDetail = isHighGround
-    ? `Cloud base ${cloudCeilingFt.toLocaleString()} ft is above ${targetElevationFt.toLocaleString()} ft summit with 850 hPa ridge winds ${windSpeed850hPaKts} kt.`
-    : `Deck gusts ${deckGustKts} kt and sea state ${waveHeightM}m allow standard SAR helideck landing.`;
+  // Transfer read-out: only judged when the values it depends on are in the forecast
+  let transferMode: SarMissionProfile['transferMode'] = 'UNKNOWN';
+  let transferHeadline = 'NOT ENOUGH FORECAST DATA TO JUDGE';
+  let transferDetail = 'Wind, cloud, visibility or sea values are missing for this hour.';
 
   if (isHighGround) {
-    if (isSummitInCloud) {
+    if (hasCeiling && isSummitInCloud) {
       transferMode = 'CLOUD_BREAK_AUTO_HOVER';
-      transferHeadline = 'SUMMIT IN CLOUD (IMC) — VALLEY CLOUD-BREAK / MRT DROP BELOW CLOUD BASE';
-      transferDetail = `Cloud base (${cloudCeilingFt.toLocaleString()} ft) shrouds summit (${targetElevationFt.toLocaleString()} ft). Plan valley hover-up to cloud base or deploy MRT below ${cloudCeilingFt.toLocaleString()} ft.${
-        isSummitBelowFreezing ? ` Warning: 0°C level at ${freezingLevelFt.toLocaleString()} ft (icing in cloud).` : ''
+      transferHeadline = 'SUMMIT IN CLOUD — APPROACH FROM BELOW CLOUD BASE';
+      transferDetail = `Cloud base (${cloudCeilingFt.toLocaleString()} ft) covers the summit (${targetElevationFt.toLocaleString()} ft).${
+        isSummitBelowFreezing && hasFreeze ? ` 0°C level at ${freezingLevelFt.toLocaleString()} ft (icing in cloud).` : ''
       }`;
-    } else if (leeTurbulenceSeverity === 'SEVERE' || deckGustKts > 50) {
+    } else if (leeTurbulenceSeverity === 'SEVERE' || (isNum(deckGustKts) && deckGustKts > 50)) {
       transferMode = 'WINCH_HI_LINE_ONLY';
-      transferHeadline = 'SEVERE OROGRAPHIC LEE TURBULENCE — HIGH-POWER HOVER & ESCAPE ROUTE REQUIRED';
-      transferDetail = `850 hPa ridge wind ${windSpeed850hPaKts} kt (${windDir850hPaDeg}°) / surface gusts ${deckGustKts} kt create severe lee-corrie downdrafts. Approach from windward shoulder with immediate valley escape route.`;
+      transferHeadline = 'SEVERE TURBULENCE LIKELY NEAR THE HILL';
+      transferDetail = `${windTag || 'Strong wind'}${isNum(deckGustKts) ? ` · surface gusts ${deckGustKts} kt` : ''}.`;
+    } else if (hasCeiling && hasRidgeWind) {
+      transferMode = 'DECK_LANDING';
+      transferHeadline = 'SUMMIT CLEAR OF CLOUD';
+      transferDetail = `Cloud base ${cloudCeilingFt >= NO_CEILING_FT ? 'high (no low cloud)' : `${cloudCeilingFt.toLocaleString()} ft`} · ${windTag}.`;
     }
   } else if (
     (isFpso && fpsoMotion?.deckLightStatus === 'RED') ||
-    deckGustKts > 60 ||
-    (isFpso && waveHeightM > 6.0)
+    (isNum(deckGustKts) && deckGustKts > 60) ||
+    (isFpso && isNum(waveHeightM) && waveHeightM > 6.0)
   ) {
     transferMode = 'WINCH_HI_LINE_ONLY';
-    transferHeadline = 'WINCH / HI-LINE TRANSFER RECOMMENDED (DECK MOTION / WIND EXCEEDS LANDING)';
-    transferDetail = isFpso && fpsoMotion
-      ? `Deck motion Est. ±${fpsoMotion.estPitchRollDeg}° P/R · ${fpsoMotion.estShrMs} m/s SHR (${waveHeightM}m waves) exceeds helideck landing limit — plan auto-hover winch / hi-line transfer.`
-      : `Deck gusts ${deckGustKts} kt exceed 60 kt landing limit — plan into-wind auto-hover winch transfer.`;
-  } else if (cloudCeilingFt < 250 || visibilityKm < 0.8) {
+    transferHeadline = 'WINCH TRANSFER MORE LIKELY THAN A DECK LANDING';
+    transferDetail =
+      isFpso && fpsoMotion
+        ? `Estimated deck motion ±${fpsoMotion.estPitchRollDeg}° pitch/roll · ${fpsoMotion.estShrMs} m/s heave${
+            isNum(waveHeightM) ? ` (${waveHeightM} m waves)` : ''
+          } is above helideck limits.`
+        : `Gusts ${deckGustKts} kt are above the 60 kt helideck limit.`;
+  } else if ((isNum(cloudCeilingFt) && cloudCeilingFt < 250) || (isNum(visibilityKm) && visibilityKm < 0.8)) {
     transferMode = 'CLOUD_BREAK_AUTO_HOVER';
-    transferHeadline = 'SAR OFFSHORE CLOUD-BREAK / RADALT LET-DOWN REQUIRED';
-    transferDetail = `Ceiling ${cloudCeilingFt} ft / Vis ${visibilityKm} km is below commercial ARA (250 ft), requiring SAR FMS/RadAlt offshore cloud-break & auto-hover approach (SAR min ~100–150 ft).`;
+    transferHeadline = 'BELOW NORMAL OFFSHORE APPROACH MINIMA';
+    transferDetail = `${isNum(cloudCeilingFt) ? `Cloud base ${cloudCeilingFt} ft` : 'Cloud base unknown'} / ${
+      isNum(visibilityKm) ? `visibility ${visibilityKm} km` : 'visibility unknown'
+    }: below the 250 ft offshore approach minimum.`;
+  } else if (isNum(deckGustKts) && isNum(cloudCeilingFt) && isNum(visibilityKm) && (isNum(waveHeightM) || !isFpso)) {
+    transferMode = 'DECK_LANDING';
+    transferHeadline = 'DECK LANDING WEATHER WITHIN LIMITS';
+    transferDetail = `Gusts ${deckGustKts} kt${isNum(waveHeightM) ? ` · waves ${waveHeightM} m` : ''}.`;
   }
-
-  // Maritime Cold-Water Immersion & Survival Windows based on live Sea Surface Temperature (SST °C)
-  const sst = Number((seaSurfaceTempC || 9.5).toFixed(1));
-  const coldShockLabel =
-    sst <= 12
-      ? 'Severe Cold Shock (0–3 min gasp reflex)'
-      : 'Moderate Cold Shock (0–2 min)';
-  const uninsulatedFunctionalTimeLabel =
-    sst <= 6
-      ? '10–20 min useful swim/grip'
-      : sst <= 10
-      ? '20–40 min useful swim/grip (Hypothermia ~1–2 hr)'
-      : sst <= 14
-      ? '45–90 min useful swim/grip (Hypothermia ~2–4 hr)'
-      : '2–4 hr functional window';
-  const immersionSuitSurvivalLabel =
-    sst <= 6
-      ? '~4–8 hr in CAA Helicopter Immersion Suit'
-      : '~8–18+ hr in CAA Helicopter Immersion Suit / Lifejacket';
-
-  const lunar = computeLunarIllumination(dateInput);
 
   return {
     nearestSarBases,
@@ -2025,12 +2000,8 @@ export function computeSarMissionProfile(params: {
     transferMode,
     transferHeadline,
     transferDetail,
-    seaSurfaceTempC: sst,
-    coldShockLabel,
-    uninsulatedFunctionalTimeLabel,
-    immersionSuitSurvivalLabel,
+    seaSurfaceTempC: isNum(seaSurfaceTempC) ? Number(seaSurfaceTempC.toFixed(1)) : null,
     mountainRescue,
-    lunar,
+    lunar: computeLunarIllumination(dateInput),
   };
 }
-

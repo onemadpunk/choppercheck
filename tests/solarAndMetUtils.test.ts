@@ -557,10 +557,10 @@ test('Coastguard SAR & Offshore Medevac Mission Planner computes Rescue base scr
       glenLyonDeckLanding.nearestSarBases[0].distanceNm < 100
   );
   assert.ok(glenLyonDeckLanding.nearestSarBases[0].outboundEteMin > 30);
-  assert.ok(glenLyonDeckLanding.nearestSarBases[0].estTimeOnSceneMin >= 45);
+  assert.equal(glenLyonDeckLanding.nearestSarBases[0].windCorrected, true);
   assert.equal(glenLyonDeckLanding.nearestHospitals[0].hospital.code, 'GBH');
   assert.equal(glenLyonDeckLanding.transferMode, 'DECK_LANDING');
-  assert.ok(glenLyonDeckLanding.coldShockLabel.includes('Severe Cold Shock'));
+  assert.equal(glenLyonDeckLanding.seaSurfaceTempC, 8.5);
 
   // When FPSO deck motion is RED, SAR helicopter switches to Auto-Hover Winch / Hi-Line Transfer
   const glenLyonWinchOnly = computeSarMissionProfile({
@@ -651,3 +651,25 @@ test('Coastguard SAR & Offshore Medevac Mission Planner computes Rescue base scr
   );
 });
 
+
+test('SAR planner never fills forecast gaps with typical values', () => {
+  const p = computeSarMissionProfile({
+    targetLat: 60.3589,
+    targetLon: -4.0652,
+    dateInput: new Date('2026-11-24T12:00:00Z'),
+    windSpeed950hPaKts: null,
+    windDir950hPaDeg: null,
+    deckGustKts: null,
+    cloudCeilingFt: null,
+    visibilityKm: null,
+    waveHeightM: null,
+    seaSurfaceTempC: null,
+    isFpso: true,
+  });
+  assert.equal(p.transferMode, 'UNKNOWN');
+  assert.equal(p.seaSurfaceTempC, null);
+  assert.equal(p.nearestSarBases[0].windCorrected, false);
+  assert.equal(p.mountainRescue.freezingLevelFt, null);
+  assert.equal(p.mountainRescue.ridgeWind850Kts, null);
+  assert.equal(p.mountainRescue.leeTurbulenceSeverity, 'UNKNOWN');
+});
