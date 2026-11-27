@@ -153,33 +153,51 @@ let directCooldownUntil = 0, lastDirectAt = 0;
 export const resetDirectCooldown = () => { directCooldownUntil = 0; lastDirectAt = 0; };
 const DIRECT_SPACING_MS = 1100;
 
-export async function fetchRegionSnapshot(regionId: string, signal: AbortSignal, fetcher: typeof fetch = fetch, now = Date.now()): Promise<any> {
+async function fetchDirect(regionId: string, signal: AbortSignal, fetcher: typeof fetch, now: number): Promise<any | null> {
   const region = TRACKING_REGIONS.find(r => r.id === regionId);
-  if (region && now >= directCooldownUntil) {
-    try {
-      const wait = lastDirectAt + DIRECT_SPACING_MS - Date.now();
-      if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
-      lastDirectAt = Date.now();
-      const response = await fetcher(DIRECT_URL(region.lat, region.lon, region.radiusNm),
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) });
-      if (response.ok) {
-        const data: any = await response.json();
-        if (Array.isArray(data?.ac) && finite(data?.now)) return { ...data, source: 'airplanes.live' };
-      } else {
-        const seconds = Number(response.headers.get('Retry-After'));
-        directCooldownUntil = now + (Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 60_000);
-      }
-    } catch (error) {
-      if (signal.aborted) throw error;
-      directCooldownUntil = now + 60_000;
+  if (!region || now < directCooldownUntil) return null;
+  try {
+    const wait = lastDirectAt + DIRECT_SPACING_MS - Date.now();
+    if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+    lastDirectAt = Date.now();
+    const response = await fetcher(DIRECT_URL(region.lat, region.lon, region.radiusNm),
+      { signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) });
+    if (response.ok) {
+      const data: any = await response.json();
+      if (Array.isArray(data?.ac) && finite(data?.now)) return { ...data, source: 'airplanes.live' };
+      return null;
     }
+    const seconds = Number(response.headers.get('Retry-After'));
+    directCooldownUntil = now + (Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 60_000);
+  } catch (error) {
+    if (signal.aborted) throw error;
+    directCooldownUntil = now + 60_000;
   }
+  return null;
+}
+
+async function fetchRelay(regionId: string, signal: AbortSignal, fetcher: typeof fetch): Promise<any> {
   const response = await fetcher(FLIGHT_API_ORIGIN + '/api/flights?regions=' + regionId, { signal });
   if (!response.ok) {
     const seconds = Number(response.headers.get('Retry-After'));
     throw Object.assign(new Error('Region unavailable'), { retryAfterMs: Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 10000 });
   }
   return response.json();
+}
+
+/**
+ * Pools airplanes.live (asked directly by this browser) with whatever the relay pooled (FlyItalyADSB, adsb.lol, ...).
+ * Each source stays a separate feed with its own timestamp; the map keeps the freshest position per aircraft.
+ */
+export async function fetchRegionSnapshot(regionId: string, signal: AbortSignal, fetcher: typeof fetch = fetch, now = Date.now()): Promise<any> {
+  const [direct, relay] = await Promise.allSettled([fetchDirect(regionId, signal, fetcher, now), fetchRelay(regionId, signal, fetcher)]);
+  const directData = direct.status === 'fulfilled' ? direct.value : null;
+  const relayData = relay.status === 'fulfilled' ? relay.value : null;
+  if (!directData && !relayData) throw relay.status === 'rejected' ? relay.reason : new Error('Region unavailable');
+  if (!relayData) return directData;
+  if (!directData) return relayData;
+  const relayFeeds = Array.isArray(relayData.feeds) ? relayData.feeds : [relayData];
+  return { ...relayData, source: ['airplanes.live', relayData.source].filter(Boolean).join(' + '), feeds: [directData, ...relayFeeds] };
 }
 
 export async function fetchHybridRadarTraffic(lat: number, lon: number, facility: InstallationOrAirport,

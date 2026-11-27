@@ -4,12 +4,16 @@ A free Cloudflare Worker that fetches live aircraft and airport weather for chop
 don't allow requests straight from a browser, so the site asks this relay instead. It replaces the old relay at
 `choppercheck-flight-api.ornatehinny4.chatgpt.site` with code that lives here.
 
-**Aircraft sources.** The site first asks airplanes.live directly from each visitor's browser, because it allows
-that and blocks Cloudflare. Only if that fails does it ask this relay, which tries:
+**Aircraft sources, pooled.** Every source that answers is used, not just the first: each visitor's browser asks
+airplanes.live directly (it allows that and blocks Cloudflare), and this relay asks the rest at the same time:
 
-1. adsb.fi, then airplanes.live (both block Cloudflare's addresses with HTTP 403 as of 27 Nov 2026; kept in
-   case that changes, and skipped for a minute after each refusal)
-2. FlyItalyADSB (`FLYITALY_API_KEY`) and adsb.lol (`ADSB_LOL_API_KEY`, optional) together, returned as separate feeds
+- adsb.fi and airplanes.live (both refuse Cloudflare's addresses with HTTP 403 as of 27 Nov 2026; kept in case
+  that changes, and skipped for a minute after each refusal)
+- FlyItalyADSB (`FLYITALY_API_KEY`), every request
+- adsb.lol (`ADSB_LOL_API_KEY`, optional), at most every 40 s per region to stay inside the key's 7,200/day
+
+Each answer stays a separate feed with its own timestamp and credit; the site merges them by aircraft and keeps
+the freshest position, so an aircraft heard by any one network is shown.
 
 `/health` shows each source's last result.
 

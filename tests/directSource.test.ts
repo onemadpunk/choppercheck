@@ -4,15 +4,21 @@ import { fetchRegionSnapshot, resetDirectCooldown, FLIGHT_API_ORIGIN } from '../
 
 const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
 
-test('asks airplanes.live directly first and labels the source', async () => {
+test('pools airplanes.live (asked directly) with the relay feeds', async () => {
   resetDirectCooldown();
   const urls: string[] = [];
-  const data = await fetchRegionSnapshot('north-sea', new AbortController().signal, (async (u: any) => { urls.push(String(u)); return ok({ now: 1, ac: [] }); }) as typeof fetch);
-  assert.equal(data.source, 'airplanes.live');
-  assert.deepEqual(urls, ['https://api.airplanes.live/v2/point/58.7/-0.5/250']);
+  const data = await fetchRegionSnapshot('north-sea', new AbortController().signal, (async (u: any) => {
+    urls.push(String(u));
+    return String(u).includes('airplanes.live') ? ok({ now: 1, ac: [{ hex: 'a1' }] })
+      : ok({ now: 2, source: 'flyitalyadsb + adsb.lol', feeds: [{ now: 2, source: 'flyitalyadsb', ac: [] }, { now: 2, source: 'adsb.lol', ac: [] }] });
+  }) as typeof fetch);
+  assert.equal(data.source, 'airplanes.live + flyitalyadsb + adsb.lol');
+  assert.deepEqual(data.feeds.map((f: any) => f.source), ['airplanes.live', 'flyitalyadsb', 'adsb.lol']);
+  assert.ok(urls.includes('https://api.airplanes.live/v2/point/58.7/-0.5/250'));
+  assert.ok(urls.includes(FLIGHT_API_ORIGIN + '/api/flights?regions=north-sea'));
 });
 
-test('falls back to the relay when airplanes.live refuses, and skips it during the cooldown', async () => {
+test('uses the relay alone when airplanes.live refuses, and skips it during the cooldown', async () => {
   resetDirectCooldown();
   const urls: string[] = [];
   const fetcher = (async (u: any) => {
