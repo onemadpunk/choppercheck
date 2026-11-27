@@ -48,7 +48,7 @@ const UPSTREAM_TIMEOUT_MS = 8_000;
 
 /** Per-instance cooldowns after a provider says "slow down" or fails. */
 const cooldownUntil = new Map<string, number>();
-export const resetCooldowns = () => cooldownUntil.clear();
+export const resetCooldowns = () => { cooldownUntil.clear(); lastOutcome.clear(); };
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -77,35 +77,63 @@ function retryAfterMs(response: Response): number {
   return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 3600) * 1000 : DEFAULT_COOLDOWN_MS;
 }
 
-/** Tries each configured source in order; returns the first fresh snapshot, or null. */
-export async function fetchRegion(regionId: string, env: Env, deps: Deps) {
+/** Last result from each source, shown on /health so a blocked or failing source is visible. */
+const lastOutcome = new Map<string, { result: string; at: string }>();
+export const sourceStatus = () => Object.fromEntries(lastOutcome);
+
+/** adsb.fi and airplanes.live each cover the whole UK/North Sea well; FlyItalyADSB and adsb.lol are thinner. */
+const FULL_COVERAGE = new Set(['adsb.fi', 'airplanes.live']);
+
+type Snapshot = { ac: any[]; now: number; total: number; source: string; attribution: string };
+
+async function trySource(source: Source, regionId: string, env: Env, deps: Deps, now: number): Promise<Snapshot | null> {
   const region = REGIONS[regionId];
-  const now = (deps.now ?? Date.now)();
-  const tried: string[] = [];
-  for (const source of SOURCES) {
-    if ((cooldownUntil.get(source.id) ?? 0) > now) continue;
-    const headers = source.headers ? source.headers(env) : {};
-    if (headers === null) continue;
-    tried.push(source.id);
-    try {
-      const response = await fetchWithTimeout(deps, source.url(region.lat, region.lon, region.radiusNm), headers);
-      if (response.status === 429 || response.status >= 500 || response.status === 401 || response.status === 403) {
-        cooldownUntil.set(source.id, now + retryAfterMs(response));
-        continue;
-      }
-      if (!response.ok) continue;
-      const data: any = await response.json();
-      const list = Array.isArray(data?.ac) ? data.ac : Array.isArray(data?.aircraft) ? data.aircraft : null;
-      const providerTime = finite(data?.now) ? (data.now < 1e12 ? data.now * 1000 : data.now) : null;
-      if (!list || providerTime === null || now - providerTime > MAX_SNAPSHOT_AGE_MS || providerTime > now + 30_000) continue;
-      const ac = filterAircraft(list);
-      return { ac, now: providerTime, total: ac.length, source: source.id, attribution: source.attribution,
-        region: regionId, feedAvailable: true, tried };
-    } catch {
-      cooldownUntil.set(source.id, now + 15_000);
+  const note = (result: string) => lastOutcome.set(source.id, { result, at: new Date(now).toISOString() });
+  if ((cooldownUntil.get(source.id) ?? 0) > now) return null;
+  const headers = source.headers ? source.headers(env) : {};
+  if (headers === null) { note('not configured'); return null; }
+  try {
+    const response = await fetchWithTimeout(deps, source.url(region.lat, region.lon, region.radiusNm), headers);
+    if (response.status === 429 || response.status >= 500 || response.status === 401 || response.status === 403) {
+      cooldownUntil.set(source.id, now + retryAfterMs(response));
+      note('HTTP ' + response.status); return null;
     }
+    if (!response.ok) { note('HTTP ' + response.status); return null; }
+    const data: any = await response.json();
+    const list = Array.isArray(data?.ac) ? data.ac : Array.isArray(data?.aircraft) ? data.aircraft : null;
+    const providerTime = finite(data?.now) ? (data.now < 1e12 ? data.now * 1000 : data.now) : null;
+    if (!list || providerTime === null || now - providerTime > MAX_SNAPSHOT_AGE_MS || providerTime > now + 30_000) {
+      note('stale or invalid snapshot'); return null;
+    }
+    const ac = filterAircraft(list);
+    note('ok, ' + ac.length + ' aircraft');
+    return { ac, now: providerTime, total: ac.length, source: source.id, attribution: source.attribution };
+  } catch (error) {
+    cooldownUntil.set(source.id, now + 15_000);
+    note('network error: ' + String((error as Error)?.name || error));
+    return null;
   }
-  return null;
+}
+
+/**
+ * Uses the first full-coverage source that answers. If neither does, asks every remaining source and returns
+ * all their snapshots together (each keeps its own timestamp and credit), since each alone sees fewer aircraft.
+ */
+export async function fetchRegion(regionId: string, env: Env, deps: Deps) {
+  const now = (deps.now ?? Date.now)();
+  for (const source of SOURCES.filter(s => FULL_COVERAGE.has(s.id))) {
+    const snap = await trySource(source, regionId, env, deps, now);
+    if (snap) return { ...snap, region: regionId, feedAvailable: true };
+  }
+  const backups = (await Promise.all(SOURCES.filter(s => !FULL_COVERAGE.has(s.id))
+    .map(s => trySource(s, regionId, env, deps, now)))).filter((x): x is Snapshot => x !== null);
+  if (!backups.length) return null;
+  if (backups.length === 1) return { ...backups[0], region: regionId, feedAvailable: true };
+  // Top-level fields describe the combined answer; the site reads each entry of feeds separately.
+  const freshest = Math.max(...backups.map(b => b.now));
+  return { ac: [], now: freshest, total: backups.reduce((n, b) => n + b.total, 0),
+    source: backups.map(b => b.source).join(' + '), attribution: backups.map(b => b.attribution).join(' · '),
+    feeds: backups, region: regionId, feedAvailable: true };
 }
 
 async function cached(deps: Deps, key: string, ttlS: number, build: () => Promise<Response>): Promise<Response> {
@@ -147,7 +175,7 @@ export async function handle(request: Request, env: Env, deps: Deps): Promise<Re
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
   if (request.method !== 'GET') return json({ error: 'GET only' }, 405);
   const url = new URL(request.url);
-  if (url.pathname === '/' || url.pathname === '/health') return json({ ok: true, sources: SOURCES.map(s => s.id) });
+  if (url.pathname === '/' || url.pathname === '/health') return json({ ok: true, sources: SOURCES.map(s => s.id), lastResult: sourceStatus() });
   if (url.pathname === '/api/flights') {
     const regionId = url.searchParams.get('regions') || '';
     if (!REGIONS[regionId]) return json({ error: 'Ask for one region: ' + Object.keys(REGIONS).join(', ') }, 400);
