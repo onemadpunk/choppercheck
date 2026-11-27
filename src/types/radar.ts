@@ -145,6 +145,26 @@ export interface AircraftTarget {
   source: 'live_adsb' | 'dead_reckoning';
   trail: TrailPoint[];
   turnback?: TurnbackInfo; // air-turnback / return-to-base seen in the live track
+  // Extended real Mode-S / ADS-B EHS telemetry (only populated when reported by the aircraft)
+  isMilitary?: boolean;
+  altGeomFt?: number;
+  iasKts?: number;
+  tasKts?: number;
+  mach?: number;
+  windDirDeg?: number;
+  windSpeedKts?: number;
+  oatC?: number;
+  tatC?: number;
+  rollDeg?: number;
+  magHeadingDeg?: number;
+  trueHeadingDeg?: number;
+  navQnhHpa?: number;
+  navAltitudeMcpFt?: number;
+  navModes?: string[];
+  rssiDbfs?: number;
+  messagesCount?: number;
+  adsbSourceType?: string;
+  emergency?: string;
 }
 
 export interface HelideckWeatherState {

@@ -27,8 +27,12 @@ const finite = (value: unknown): value is number => typeof value === 'number' &&
 export interface RawAdsbAircraft {
   hex?: string; type?: string; flight?: string; r?: string; t?: string; desc?: string;
   ownOp?: string; lat?: number; lon?: number; alt_baro?: number | 'ground'; alt_geom?: number;
-  gs?: number; baro_rate?: number; geom_rate?: number; track?: number; true_heading?: number;
-  squawk?: string; category?: string; seen_pos?: number;
+  gs?: number; ias?: number; tas?: number; mach?: number; wd?: number; ws?: number;
+  oat?: number; tat?: number; roll?: number; mag_heading?: number; true_heading?: number;
+  baro_rate?: number; geom_rate?: number; track?: number;
+  nav_qnh?: number; nav_altitude_mcp?: number; nav_modes?: string[];
+  squawk?: string; emergency?: string; category?: string; seen_pos?: number;
+  rssi?: number; messages?: number; dbFlags?: number;
 }
 
 export function classifyLiveAircraft(raw: RawAdsbAircraft, facility: InstallationOrAirport,
@@ -52,6 +56,7 @@ export function classifyLiveAircraft(raw: RawAdsbAircraft, facility: Installatio
   const isUkCoastguard = /^(SRD|SRG)\d/.test(identification) || upperOwner.includes('HM COASTGUARD') || upperOwner.includes('MARITIME AND COASTGUARD AGENCY');
   const isIrishCoastguard = /^CGI\d/.test(identification) || upperOwner.includes('IRISH COAST GUARD') || upperOwner.includes('IRISH COASTGUARD');
   const isCoastguard = isUkCoastguard || isIrishCoastguard || /^RESCUE\d/.test(identification) || upperOwner.includes('COASTGUARD') || upperOwner.includes('COAST GUARD') || upperOwner.includes('BRISTOW SAR');
+  const isMilitary = Boolean((raw.dbFlags && (raw.dbFlags & 1)) || hex.startsWith('43C') || /^(RRR|ASCOT|KRF|SHF|AAC|VYT|LOS|CWL|SYS|RAF|NAVY|NATO)\d/i.test(identification) || /ROYAL AIR FORCE|ROYAL NAVY|MINISTRY OF DEFENCE|US AIR FORCE|NATO/i.test(upperOwner));
   const rotary = decoded.isRotary || raw.category === 'A7';
   let helicopterOperator: HelicopterOperator = 'Unknown';
   if (isIrishCoastguard) helicopterOperator = 'Irish Coast Guard';
@@ -80,7 +85,7 @@ export function classifyLiveAircraft(raw: RawAdsbAircraft, facility: Installatio
   return {
     hex, callsign, flightNumber: callsign, registration, typeCode: decoded.code,
     typeFullName: decoded.fullName, category: isCoastguard ? 'coastguard_sar' : rotary ? 'offshore_heli' : 'commercial_fixed_wing',
-    operator, helicopterOperator, isRotary: rotary, lat: raw.lat, lon: raw.lon, reportedLat: raw.lat, reportedLon: raw.lon,
+    operator, helicopterOperator, isRotary: rotary, isMilitary, lat: raw.lat, lon: raw.lon, reportedLat: raw.lat, reportedLon: raw.lon,
     altitudeFt: Math.round(altitude), groundSpeedKts: Math.round(speed), groundSpeedMph: Math.round(speed * 1.15078),
     verticalRateFpm: Math.round(rate), trackDeg: Math.round(track), squawk: raw.squawk || 'Unknown',
     altitudeReported: finite(raw.alt_baro) || finite(raw.alt_geom), speedReported: finite(raw.gs) && raw.gs >= 0,
@@ -90,6 +95,24 @@ export function classifyLiveAircraft(raw: RawAdsbAircraft, facility: Installatio
     status: 'position_reported', distanceFromRefNm: distance, distanceFromRefMiles: Math.round(distance * 1.15078 * 10) / 10,
     bearingFromRefDeg: calculateBearingDeg(facility.lat, facility.lon, raw.lat, raw.lon),
     source: 'live_adsb', provider, observedAt, trail: [...trail],
+    altGeomFt: finite(raw.alt_geom) ? Math.round(raw.alt_geom) : undefined,
+    iasKts: finite(raw.ias) && raw.ias > 0 ? Math.round(raw.ias) : undefined,
+    tasKts: finite(raw.tas) && raw.tas > 0 ? Math.round(raw.tas) : undefined,
+    mach: finite(raw.mach) && raw.mach > 0 ? Number(raw.mach.toFixed(2)) : undefined,
+    windDirDeg: finite(raw.wd) ? Math.round(((raw.wd % 360) + 360) % 360) : undefined,
+    windSpeedKts: finite(raw.ws) && raw.ws >= 0 ? Math.round(raw.ws) : undefined,
+    oatC: finite(raw.oat) ? Math.round(raw.oat * 10) / 10 : undefined,
+    tatC: finite(raw.tat) ? Math.round(raw.tat * 10) / 10 : undefined,
+    rollDeg: finite(raw.roll) ? Math.round(raw.roll * 10) / 10 : undefined,
+    magHeadingDeg: finite(raw.mag_heading) ? Math.round(((raw.mag_heading % 360) + 360) % 360) : undefined,
+    trueHeadingDeg: finite(raw.true_heading) ? Math.round(((raw.true_heading % 360) + 360) % 360) : undefined,
+    navQnhHpa: finite(raw.nav_qnh) ? Number(raw.nav_qnh.toFixed(1)) : undefined,
+    navAltitudeMcpFt: finite(raw.nav_altitude_mcp) ? Math.round(raw.nav_altitude_mcp) : undefined,
+    navModes: Array.isArray(raw.nav_modes) && raw.nav_modes.length > 0 ? raw.nav_modes : undefined,
+    rssiDbfs: finite(raw.rssi) ? Number(raw.rssi.toFixed(1)) : undefined,
+    messagesCount: finite(raw.messages) ? raw.messages : undefined,
+    adsbSourceType: typeof raw.type === 'string' ? raw.type : undefined,
+    emergency: typeof raw.emergency === 'string' && raw.emergency !== 'none' ? raw.emergency : undefined,
   };
 }
 
