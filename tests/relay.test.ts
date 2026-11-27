@@ -90,3 +90,19 @@ test('weather returns forecast, marine and METAR in the shape the site reads', a
   assert.ok(calls.some(c => c.url.includes('ids=EGPD')));
   assert.equal((await handle(req('/api/weather?lat=x&lon=1'), {}, { fetch: fakeFetch({}) })).status, 400);
 });
+
+test('when both full-coverage sources fail, FlyItalyADSB and adsb.lol are combined as separate feeds', async () => {
+  resetCooldowns();
+  const blocked = () => new Response('blocked', { status: 403 });
+  const res = await handle(req('/api/flights?regions=north-sea'), { FLYITALY_API_KEY: 'k' }, { fetch: fakeFetch({
+    'opendata.adsb.fi': blocked, 'api.airplanes.live': blocked,
+    'api.flyitalyadsb.com': ok(snapshot()), 'api.adsb.lol': ok({ now: NOW - 3000, ac: [{ hex: 'def456', lat: 58, lon: 1, seen_pos: 2 }] }),
+  }), now: () => NOW });
+  const body: any = await res.json();
+  assert.equal(body.source, 'flyitalyadsb + adsb.lol');
+  assert.deepEqual(body.feeds.map((f: any) => [f.source, f.now, f.ac.length]), [['flyitalyadsb', NOW - 1000, 1], ['adsb.lol', NOW - 3000, 1]]);
+  const health: any = await (await handle(req('/health'), {}, { fetch: fakeFetch({}) })).json();
+  assert.equal(health.lastResult['adsb.fi'].result, 'HTTP 403');
+  assert.equal(health.lastResult['adsb.lol'].result, 'ok, 1 aircraft');
+  assert.ok(!JSON.stringify(health).includes('"k"'));
+});
