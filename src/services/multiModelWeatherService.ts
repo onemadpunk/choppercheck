@@ -1,3 +1,4 @@
+import { fetchWeatherJson } from './weatherFetch';
 import {
   AirframeLimitPreset,
   AirframePresetId,
@@ -916,18 +917,7 @@ const SHORT_MONTHS = [
  * before giving up. Returns null only when every attempt fails.
  */
 export async function fetchJsonWithRetry(url: string, tries = 3): Promise<any | null> {
-  for (let attempt = 0; attempt < tries; attempt++) {
-    try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
-      if (res.ok) return await res.json();
-      // 4xx other than rate limiting will not get better on retry
-      if (res.status >= 400 && res.status < 500 && res.status !== 429) return null;
-    } catch {
-      // network error or timeout: retry
-    }
-    if (attempt < tries - 1) await new Promise((r) => setTimeout(r, 700 * (attempt + 1) ** 2));
-  }
-  return null;
+  return fetchWeatherJson(url, tries);
 }
 
 /**
@@ -2161,9 +2151,8 @@ export async function fetchTerrainAroundBase(lat: number, lon: number): Promise<
     .map((p) => p.lat.toFixed(4))
     .join(',')}&longitude=${points.map((p) => p.lon.toFixed(4)).join(',')}`;
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-    if (!res.ok) return null;
-    const json = await res.json();
+    const json: any = await fetchWeatherJson(url, 2);
+    if (!json) return null;
     const elevations: Array<number | null> = Array.isArray(json?.elevation)
       ? json.elevation.map((v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null))
       : [];

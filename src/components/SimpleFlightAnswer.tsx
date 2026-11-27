@@ -1,6 +1,7 @@
 import React from 'react';
 import type { DayFlightWindowSummary, HelicopterOperator } from '../types/radar';
 import { plainDayAnswer } from '../utils/solarAndMetUtils';
+import { WeatherStaleNote } from './WeatherStaleNote';
 
 /** "2026-11-19" for a date, in the same UTC calendar the forecast days use. */
 function dayKeyOf(d: Date): string {
@@ -45,6 +46,7 @@ export function SimpleFlightAnswer({
 
   return (
     <div className="mt-1.5">
+      <WeatherStaleNote className="mb-1.5" />
       {!hasForecast || days.length === 0 ? (
         <div className="rounded-md bg-slate-900/95 border border-slate-700 px-2.5 py-2 text-[12px] text-slate-300">
           Getting the forecast… If this stays, check your signal and try again.

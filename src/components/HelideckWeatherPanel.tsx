@@ -1,3 +1,4 @@
+import { WeatherStaleNote } from './WeatherStaleNote';
 import React, { useEffect, useMemo, useState } from 'react';
 import { ukLocalTime, windWords, seaWords, cloudWords } from '../utils/plainWords';
 import {
@@ -740,6 +741,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
   return (
     <div className="flex flex-col h-full min-w-0 w-full bg-slate-950 text-slate-100 overflow-y-auto overflow-x-hidden p-3 sm:p-5 space-y-4">
       <div className={isFullScreen ? 'max-w-6xl mx-auto w-full min-w-0 space-y-4' : 'w-full min-w-0 space-y-4'}>
+        <WeatherStaleNote />
         {/* Header, Copy Outlook, Full-Screen Expand Toggle & Refresh */}
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
