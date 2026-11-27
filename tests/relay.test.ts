@@ -106,3 +106,43 @@ test('when both full-coverage sources fail, FlyItalyADSB and adsb.lol are combin
   assert.equal(health.lastResult['adsb.lol'].result, 'ok, 1 aircraft');
   assert.ok(!JSON.stringify(health).includes('"k"'));
 });
+
+test('passes Open-Meteo requests through once and serves repeats from memory', async () => {
+  resetCooldowns();
+  const calls: any[] = [];
+  const deps = { fetch: fakeFetch({ 'api.open-meteo.com': ok({ hourly: { time: ['t'] } }) }, calls), now: () => NOW };
+  const path = '/api/om/forecast?latitude=57.1,58.2&longitude=1.2,1.5&hourly=wind_speed_10m';
+  const first = await handle(req(path), {}, deps);
+  const second = await handle(req(path), {}, deps);
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.deepEqual(await second.json(), { hourly: { time: ['t'] } });
+  assert.equal(second.headers.get('Access-Control-Allow-Origin'), '*');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://api.open-meteo.com/v1/forecast?latitude=57.1,58.2&longitude=1.2,1.5&hourly=wind_speed_10m');
+});
+
+test('routes marine requests to the marine API and refuses other paths', async () => {
+  resetCooldowns();
+  const calls: any[] = [];
+  const deps = { fetch: fakeFetch({ 'marine-api.open-meteo.com': ok({ hourly: {} }) }, calls), now: () => NOW };
+  assert.equal((await handle(req('/api/om/marine?latitude=57&longitude=1&hourly=wave_height'), {}, deps)).status, 200);
+  assert.equal(calls[0].url.startsWith('https://marine-api.open-meteo.com/v1/marine?'), true);
+  assert.equal((await handle(req('/api/om/archive?latitude=57'), {}, deps)).status, 404);
+  assert.equal((await handle(req('/api/om/forecast'), {}, deps)).status, 400);
+});
+
+test('when Open-Meteo says slow down, answers busy without asking again for a minute', async () => {
+  resetCooldowns();
+  const calls: any[] = [];
+  let now = NOW;
+  const deps = { fetch: fakeFetch({ 'api.open-meteo.com': () => new Response('limit', { status: 429 }) }, calls), now: () => now };
+  const a = await handle(req('/api/om/forecast?latitude=1&longitude=1'), {}, deps);
+  const b = await handle(req('/api/om/forecast?latitude=2&longitude=2'), {}, deps);
+  assert.equal(a.status, 503);
+  assert.equal(b.status, 503);
+  assert.equal(calls.length, 1);
+  now += 61_000;
+  await handle(req('/api/om/forecast?latitude=3&longitude=3'), {}, deps);
+  assert.equal(calls.length, 2);
+});

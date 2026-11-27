@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AIRFRAME_PRESETS, fetchMultiModelRigForecast, fetchJsonWithRetry } from '../src/services/multiModelWeatherService.ts';
+import { resetWeatherFetch } from '../src/services/weatherFetch.ts';
 import type { InstallationOrAirport } from '../src/types/radar.ts';
 
 const MODELS = ['ukmo_seamless', 'icon_seamless', 'gfs_seamless', 'ecmwf_ifs025', 'gem_seamless'];
@@ -31,6 +32,7 @@ const marine = (waves: number | null) => ({
 });
 
 function mockFetch(handler: (url: string) => unknown) {
+  resetWeatherFetch();
   const orig = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input);

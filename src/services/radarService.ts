@@ -4,10 +4,8 @@ import { regionsForView, ViewBounds } from '../utils/trackingRegions';
 import { INSTALLATIONS_AND_AIRPORTS } from '../data/installationsAndAirports';
 import { RecentTurnback, TurnbackTracker } from '../utils/turnbackDetection';
 
-// Production relay. Set the GitHub repository variable FLIGHT_API_ORIGIN (e.g. the relay/ Worker's URL) to switch
-// without a code change; until then the original relay is used.
-export const FLIGHT_API_ORIGIN = import.meta.env?.DEV ? '/live-api'
-  : (import.meta.env?.VITE_FLIGHT_API_ORIGIN || 'https://choppercheck-relay.one-mad-punk.workers.dev').replace(/\/+$/, '');
+import { FLIGHT_API_ORIGIN } from './apiOrigin';
+export { FLIGHT_API_ORIGIN };
 export const MAX_POSITION_AGE_MS = 45_000;
 export const MAX_PREDICTION_MS = 10_000;
 const history = new Map<string, TrailPoint[]>();
