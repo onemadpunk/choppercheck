@@ -6,7 +6,7 @@
  * seconds so every visitor shares the same upstream request.
  */
 
-export interface Env { FLYITALY_API_KEY?: string }
+export interface Env { FLYITALY_API_KEY?: string; ADSB_LOL_API_KEY?: string }
 
 export interface CacheLike {
   match(key: string): Promise<Response | undefined>;
@@ -37,7 +37,9 @@ export const SOURCES: Source[] = [
     url: (lat, lon, nm) => `https://api.flyitalyadsb.com/api/aircraft/v2/lat/${lat}/lon/${lon}/dist/${nm}/`,
     headers: env => env.FLYITALY_API_KEY ? { 'X-Api-Key': env.FLYITALY_API_KEY } : null },
   { id: 'adsb.lol', attribution: 'adsb.lol (https://www.adsb.lol/), ODbL 1.0',
-    url: (lat, lon, nm) => `https://api.adsb.lol/v2/point/${lat}/${lon}/${nm}` },
+    url: (lat, lon, nm) => `https://api.adsb.lol/v2/point/${lat}/${lon}/${nm}`,
+    // Without a key adsb.lol allows 500 requests/day per IP, shared by everything on Cloudflare's IPs; a feeder key allows 7,200/day.
+    headers: (env): Record<string, string> => env.ADSB_LOL_API_KEY ? { 'x-api-key': env.ADSB_LOL_API_KEY } : {} },
 ];
 
 export const MAX_SNAPSHOT_AGE_MS = 45_000;

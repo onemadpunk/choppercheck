@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fetchHybridRadarTraffic } from '../src/services/radarService';
+import { fetchHybridRadarTraffic, resetDirectCooldown } from '../src/services/radarService';
 import { INSTALLATIONS_AND_AIRPORTS } from '../src/data/installationsAndAirports';
 const facility = INSTALLATIONS_AND_AIRPORTS[0];
+test.beforeEach(() => resetDirectCooldown());
 
 test('regional snapshots preserve individual observation times, deduplicate and report partial coverage', async () => {
   const saved = globalThis.fetch; const now = Date.now();
   try {
     const requested: string[] = [];
     globalThis.fetch = async url => {
+      if (String(url).includes('airplanes.live')) return new Response('', { status: 503 }); // relay path under test
       requested.push(new URL(String(url)).searchParams.get('regions')!);
       assert.ok(!String(url).includes('lat='));
       if (!String(url).includes('regions=uk-ireland')) return Response.json({ now, source: 'adsb.lol', ac: [] });
@@ -29,6 +31,7 @@ test('one failing region does not blank the map', async () => {
   const saved = globalThis.fetch; const now = Date.now();
   try {
     globalThis.fetch = async url => {
+      if (String(url).includes('airplanes.live')) return new Response('', { status: 503 }); // relay path under test
       if (String(url).includes('regions=south-uk')) return new Response('upstream timeout', { status: 502 });
       if (String(url).includes('regions=north-sea')) throw new TypeError('Failed to fetch');
       return Response.json({ now, source: 'adsb.lol', ac: [{ hex: 'shown', flight: 'BHL12', t: 'S92', lat: 55, lon: -4, seen_pos: 1 }] });
@@ -52,6 +55,7 @@ test('regions are requested one at a time, nearest first', async () => {
   try {
     const order: string[] = []; let inFlight = 0, maxInFlight = 0;
     globalThis.fetch = async url => {
+      if (String(url).includes('airplanes.live')) return new Response('', { status: 503 }); // relay path under test
       inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
       order.push(new URL(String(url)).searchParams.get('regions')!);
       await new Promise(resolve => setTimeout(resolve, 5));
