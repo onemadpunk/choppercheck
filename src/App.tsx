@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { feedCredits } from './data/feedCredits';
 import {
   AircraftTarget,
   AirframePresetId,
@@ -1683,7 +1684,7 @@ export default function App() {
           <div className="px-3 py-1.5 bg-slate-950 border-t border-slate-800/90 flex items-center justify-between text-[11px] font-mono text-slate-400 shrink-0">
             <a
               href={
-                feedProvider === 'adsb.fi' ? 'https://adsb.fi/' : 'https://www.adsb.lol/'
+                feedCredits(feedProvider)[0]?.url ?? 'https://www.adsb.lol/'
               }
               target="_blank"
               rel="noopener noreferrer"
