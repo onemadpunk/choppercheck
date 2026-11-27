@@ -54,13 +54,21 @@ async function fetchAircraftDossier(
   hex: string,
   callsign: string,
   registration: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  onProgress?: (partial: EnrichedAircraftDossier) => void
 ): Promise<EnrichedAircraftDossier> {
-  const cacheKey = `${hex}:${callsign}`;
+  const cacheKey = `${hex}:${callsign}:${registration}`;
   const cached = dossierCache.get(cacheKey);
   if (cached) return cached;
 
   const result: EnrichedAircraftDossier = {};
+  // Only remember the answer if every lookup actually completed. A lookup cut short (card closed,
+  // aircraft changed, phone signal dropped) used to be cached as "no photo, no route" for the rest
+  // of the visit, so that aircraft never showed its details again.
+  let incomplete = false;
+  const report = () => {
+    if (!signal.aborted) onProgress?.({ ...result });
+  };
   const cleanHex = hex.trim().toLowerCase();
   const cleanCallsign = callsign.trim().toUpperCase();
   const cleanReg = registration && registration !== 'Unknown' ? registration.trim().toUpperCase() : '';
@@ -74,6 +82,7 @@ async function fetchAircraftDossier(
         const res = await fetch(`https://api.planespotters.net/pub/photos/hex/${encodeURIComponent(cleanHex)}`, {
           signal,
         });
+        if (!res.ok && res.status !== 404) incomplete = true;
         let data = res.ok ? await res.json() : null;
         if ((!data?.photos || data.photos.length === 0) && cleanReg) {
           const regRes = await fetch(
@@ -87,9 +96,10 @@ async function fetchAircraftDossier(
           result.photoUrl = photo.thumbnail_large?.src || photo.thumbnail?.src;
           result.photoLink = photo.link;
           result.photographer = photo.photographer;
+          report();
         }
       } catch {
-        /* ignore photo lookup failure */
+        incomplete = true;
       }
     })()
   );
@@ -101,7 +111,10 @@ async function fetchAircraftDossier(
         const res = await fetch(`https://api.adsbdb.com/v0/aircraft/${encodeURIComponent(cleanHex)}`, {
           signal,
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (res.status !== 404) incomplete = true;
+          return;
+        }
         const data = await res.json();
         const ac = data?.response?.aircraft;
         if (ac && typeof ac === 'object') {
@@ -112,9 +125,10 @@ async function fetchAircraftDossier(
           if (!result.photoUrl && (ac.url_photo || ac.url_photo_thumbnail)) {
             result.photoUrl = String(ac.url_photo || ac.url_photo_thumbnail);
           }
+          report();
         }
       } catch {
-        /* ignore airframe metadata lookup failure */
+        incomplete = true;
       }
     })()
   );
@@ -128,7 +142,10 @@ async function fetchAircraftDossier(
             `https://api.adsbdb.com/v0/callsign/${encodeURIComponent(cleanCallsign)}`,
             { signal }
           );
-          if (!res.ok) return;
+          if (!res.ok) {
+            if (res.status !== 404) incomplete = true;
+            return;
+          }
           const data = await res.json();
           const route = data?.response?.flightroute;
           if (route && typeof route === 'object') {
@@ -155,16 +172,17 @@ async function fetchAircraftDossier(
                 lon: typeof route.destination.longitude === 'number' ? route.destination.longitude : undefined,
               };
             }
+            report();
           }
         } catch {
-          /* ignore callsign route lookup failure */
+          incomplete = true;
         }
       })()
     );
   }
 
   await Promise.allSettled(tasks);
-  dossierCache.set(cacheKey, result);
+  if (!incomplete && !signal.aborted) dossierCache.set(cacheKey, result);
   return result;
 }
 
@@ -184,8 +202,12 @@ export const FlightDossierPanel: React.FC<Props> = ({
 
   useEffect(() => {
     const controller = new AbortController();
+    // Clear the previous aircraft's photo/route straight away, then show each piece as it arrives
+    setDossier(null);
     setLoadingDossier(true);
-    fetchAircraftDossier(flight.hex, flight.callsign, flight.registration, controller.signal)
+    fetchAircraftDossier(flight.hex, flight.callsign, flight.registration, controller.signal, (partial) =>
+      setDossier(partial)
+    )
       .then((res) => {
         if (!controller.signal.aborted) {
           setDossier(res);

@@ -32,16 +32,10 @@ interface Particle {
 
 const PARTICLE_COUNT = 650;
 
-/**
- * Inverse-distance weighted interpolation across the live UK/North Sea weather grid.
- */
-function interpolateGrid(
-  lat: number,
-  lon: number,
-  gridPoints: SpatialWeatherGridPoint[],
-  overlayMode: WeatherOverlayMode,
-  preset: AirframeLimitPreset
-): {
+/** One grid node's contribution to the overlay, worked out once per redraw set-up. */
+interface GridSample {
+  lat: number;
+  lon: number;
   u: number;
   v: number;
   scalar: number;
@@ -49,37 +43,45 @@ function interpolateGrid(
   g: number;
   b: number;
   a: number;
-} {
-  if (gridPoints.length === 0) {
-    return { u: 0, v: 0, scalar: 0, r: 0, g: 0, b: 0, a: 0 };
-  }
+}
 
-  let weightSum = 0;
-  let uSum = 0;
-  let vSum = 0;
-  let scalarSum = 0;
-  let rSum = 0;
-  let gSum = 0;
-  let bSum = 0;
-  let aSum = 0;
+interface PreparedGrid {
+  samples: GridSample[];
+  maxDistSq: number;
+  eps: number;
+  cubic: boolean;
+}
 
+interface GridInterpolation {
+  u: number;
+  v: number;
+  scalar: number;
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+}
+
+const EMPTY_INTERPOLATION: GridInterpolation = { u: 0, v: 0, scalar: 0, r: 0, g: 0, b: 0, a: 0 };
+
+/**
+ * Works out each grid node's wind/wave vector, colour and strength once. The overlay samples the
+ * grid for every heatmap cell and every streamline particle on every frame, so doing this per
+ * sample (including the full flight-limit check for the Flight Status Map) made each redraw take
+ * hundreds of milliseconds and the overlay fell behind the map while panning and zooming.
+ */
+function prepareGrid(
+  gridPoints: SpatialWeatherGridPoint[],
+  overlayMode: WeatherOverlayMode,
+  preset: AirframeLimitPreset
+): PreparedGrid {
+  const samples: GridSample[] = [];
   for (let i = 0; i < gridPoints.length; i++) {
     const pt = gridPoints[i];
     // Skip points missing this layer's own inputs (never blend in placeholder values), and land
     // points on the wave layer
     if (!gridPointUsableForLayer(pt, overlayMode)) continue;
     if (overlayMode === 'wave_swell' && pt.waveHeightM === null) continue;
-    const dLat = lat - pt.lat;
-    const dLon = (lon - pt.lon) * 0.56; // cos(57 deg) aspect correction
-    const rawDistSq = dLat * dLat + dLon * dLon;
-    const maxDistSq = overlayMode === 'triggered_lightning' ? 2.8 : 16;
-    if (rawDistSq > maxDistSq) continue;
-    const eps = overlayMode === 'triggered_lightning' ? 0.008 : 0.04;
-    const distSq = rawDistSq + eps;
-    const w =
-      overlayMode === 'triggered_lightning'
-        ? 1 / (distSq * distSq * distSq)
-        : 1 / (distSq * distSq);
 
     // Determine U/V wind or wave vector for this grid node
     let windSpd = pt.windSpeed10mKts;
@@ -207,19 +209,52 @@ function interpolateGrid(
       }
     }
 
+    samples.push({ lat: pt.lat, lon: pt.lon, u, v, scalar, r, g, b, a: ptAlpha });
+  }
+  return {
+    samples,
+    maxDistSq: overlayMode === 'triggered_lightning' ? 2.8 : 16,
+    eps: overlayMode === 'triggered_lightning' ? 0.008 : 0.04,
+    cubic: overlayMode === 'triggered_lightning',
+  };
+}
+
+/**
+ * Inverse-distance weighted interpolation across the live UK/North Sea weather grid.
+ */
+function interpolateGrid(lat: number, lon: number, grid: PreparedGrid): GridInterpolation {
+  const { samples, maxDistSq, eps, cubic } = grid;
+  if (samples.length === 0) return EMPTY_INTERPOLATION;
+
+  let weightSum = 0;
+  let uSum = 0;
+  let vSum = 0;
+  let scalarSum = 0;
+  let rSum = 0;
+  let gSum = 0;
+  let bSum = 0;
+  let aSum = 0;
+
+  for (let i = 0; i < samples.length; i++) {
+    const s = samples[i];
+    const dLat = lat - s.lat;
+    const dLon = (lon - s.lon) * 0.56; // cos(57 deg) aspect correction
+    const rawDistSq = dLat * dLat + dLon * dLon;
+    if (rawDistSq > maxDistSq) continue;
+    const distSq = rawDistSq + eps;
+    const w = cubic ? 1 / (distSq * distSq * distSq) : 1 / (distSq * distSq);
+
     weightSum += w;
-    uSum += u * w;
-    vSum += v * w;
-    scalarSum += scalar * w;
-    rSum += r * w;
-    gSum += g * w;
-    bSum += b * w;
-    aSum += ptAlpha * w;
+    uSum += s.u * w;
+    vSum += s.v * w;
+    scalarSum += s.scalar * w;
+    rSum += s.r * w;
+    gSum += s.g * w;
+    bSum += s.b * w;
+    aSum += s.a * w;
   }
 
-  if (weightSum === 0) {
-    return { u: 0, v: 0, scalar: 0, r: 0, g: 0, b: 0, a: 0 };
-  }
+  if (weightSum === 0) return EMPTY_INTERPOLATION;
 
   return {
     u: uSum / weightSum,
@@ -294,6 +329,8 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
     const heatCtx = heatCanvas.getContext('2d');
     const partCtx = partCanvas.getContext('2d');
     if (!heatCtx || !partCtx) return;
+
+    const preparedGrid = prepareGrid(gridPoints, overlayMode, preset);
 
     const drawTriggeredLightningAnnotations = () => {
       if (overlayMode !== 'triggered_lightning') return;
@@ -495,13 +532,7 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
             continue;
           }
 
-          const interp = interpolateGrid(
-            latLng.lat,
-            latLng.lng,
-            gridPoints,
-            overlayMode,
-            preset
-          );
+          const interp = interpolateGrid(latLng.lat, latLng.lng, preparedGrid);
           data[idx] = interp.r;
           data[idx + 1] = interp.g;
           data[idx + 2] = interp.b;
@@ -610,13 +641,7 @@ export const WeatherStreamlineCanvas: React.FC<WeatherStreamlineCanvasProps> = (
           continue;
         }
 
-        const interp = interpolateGrid(
-          p.lat,
-          p.lon,
-          gridPoints,
-          overlayMode,
-          preset
-        );
+        const interp = interpolateGrid(p.lat, p.lon, preparedGrid);
         if (interp.a === 0) {
           p.age = p.maxAge;
           continue;
