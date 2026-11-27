@@ -38,6 +38,9 @@ jobs:
           npm test
 
       - name: Build static web app for GitHub Pages
+        env:
+          # Optional: point the site at the relay/ Worker by setting this repository variable.
+          VITE_FLIGHT_API_ORIGIN: ${{ vars.FLIGHT_API_ORIGIN }}
         run: |
           npm run build
           echo "choppercheck.com" > dist/CNAME
