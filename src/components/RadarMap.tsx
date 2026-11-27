@@ -1,4 +1,5 @@
 import type { ViewBounds } from '../utils/trackingRegions';
+import { feedCredits } from '../data/feedCredits';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import { reported, positionLabel } from '../utils/dataQuality';
@@ -472,11 +473,10 @@ export const RadarMap: React.FC<RadarMapProps> = ({
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const sources = new Set(flights.map((f) => f.provider));
-    const notice = sources.has('adsb.lol')
-      ? 'Aircraft: <a href="https://www.adsb.lol/" target="_blank" rel="noopener">adsb.lol</a> · <a href="https://opendatacommons.org/licenses/odbl/1-0/" target="_blank" rel="noopener">ODbL</a>'
-      : sources.has('adsb.fi')
-      ? 'Aircraft: <a href="https://adsb.fi/" target="_blank" rel="noopener">adsb.fi</a>'
+    const credits = feedCredits([...new Set(flights.map((f) => f.provider).filter(Boolean))].join(' + '));
+    const notice = credits.length
+      ? 'Aircraft: ' + credits.map((c) => `<a href="${c.url}" target="_blank" rel="noopener">${c.name}</a>` +
+          (c.licence ? ` · <a href="${c.licence.url}" target="_blank" rel="noopener">${c.licence.name}</a>` : '')).join(' + ')
       : '';
     if (notice === aircraftAttributionRef.current) return;
     if (aircraftAttributionRef.current)

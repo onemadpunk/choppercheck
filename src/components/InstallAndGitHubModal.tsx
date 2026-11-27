@@ -28,24 +28,7 @@ const GITHUB_PAGES_IPS = [
   '185.199.111.153',
 ];
 
-const CLOUDFLARE_WORKER_SNIPPET = `export default {
-  async fetch(request) {
-    const url = new URL(request.url);
-    const lat = url.searchParams.get("lat") || "57.20";
-    const lon = url.searchParams.get("lon") || "-2.20";
-    const radius = url.searchParams.get("radius") || "250";
-    const target = \`https://opendata.adsb.fi/api/v2/lat/\${lat}/lon/\${lon}/dist/\${radius}\`;
-    const res = await fetch(target, { headers: { "User-Agent": "ChopperCheck-Radar/1.0" } });
-    const body = await res.text();
-    return new Response(body, {
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-        "Cache-Control": "public, max-age=5"
-      }
-    });
-  }
-};`;
+const RELAY_SOURCE_URL = 'https://github.com/onemadpunk/choppercheck/tree/main/relay';
 
 export const InstallAndGitHubModal: React.FC<InstallAndGitHubModalProps> = ({
   isOpen,
@@ -65,15 +48,6 @@ export const InstallAndGitHubModal: React.FC<InstallAndGitHubModalProps> = ({
       return false;
     }
   });
-  const [workerUrl, setWorkerUrl] = useState<string>(() => {
-    try {
-      return localStorage.getItem('choppercheck_worker_url') || '';
-    } catch {
-      return '';
-    }
-  });
-  const [savedWorkerBanner, setSavedWorkerBanner] = useState<boolean>(false);
-
   if (!isOpen) return null;
 
   const currentLiveUrl =
@@ -89,20 +63,6 @@ export const InstallAndGitHubModal: React.FC<InstallAndGitHubModalProps> = ({
     }
   };
 
-  const handleSaveWorkerUrl = () => {
-    try {
-      const trimmed = workerUrl.trim();
-      if (trimmed) {
-        localStorage.setItem('choppercheck_worker_url', trimmed);
-      } else {
-        localStorage.removeItem('choppercheck_worker_url');
-      }
-      setSavedWorkerBanner(true);
-      setTimeout(() => setSavedWorkerBanner(false), 2500);
-    } catch {
-      // ignore
-    }
-  };
 
   return (
     <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 sm:p-4">
@@ -232,14 +192,14 @@ export const InstallAndGitHubModal: React.FC<InstallAndGitHubModalProps> = ({
                       <Server className="w-3.5 h-3.5" />
                       Live ADS-B Relay for Static GitHub Pages (choppercheck.com)
                     </span>
-                    <button
-                      onClick={() => copyText('cf-worker', CLOUDFLARE_WORKER_SNIPPET)}
-                      className="px-2 py-0.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-[10px] font-mono cursor-pointer"
+                    <a
+                      href={RELAY_SOURCE_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2 py-0.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-[10px] font-mono"
                     >
-                      {copiedKey === 'cf-worker'
-                        ? 'Copied Worker Code!'
-                        : 'Copy Free Cloudflare Worker'}
-                    </button>
+                      Relay code (relay/)
+                    </a>
                   </div>
                   <p className="text-slate-300 leading-relaxed">
                     <strong>Why live flights need a relay on GitHub Pages:</strong> Open-Meteo's 5
@@ -247,24 +207,11 @@ export const InstallAndGitHubModal: React.FC<InstallAndGitHubModalProps> = ({
                     access (`Access-Control-Allow-Origin: *`), so the new Weather Streamlines &
                     Go/No-Go Matrix work 100% on GitHub Pages with zero backend. However, live ADS-B
                     providers (`adsb.fi` / `adsb.lol`) block browser CORS and use Cloudflare Bot
-                    Fight Mode against shared proxies. Paste your free Cloudflare Worker or Render
-                    backend URL below for instant 24/7 ADS-B feeds:
+                    Fight Mode against shared proxies. The relay that fetches them lives in this
+                    repository's <code>relay/</code> folder as a free Cloudflare Worker. It deploys
+                    automatically, and setting the repository variable <code>FLIGHT_API_ORIGIN</code>
+                    to its URL switches the site over.
                   </p>
-                  <div className="flex gap-1.5 pt-1">
-                    <input
-                      type="url"
-                      value={workerUrl}
-                      onChange={(e) => setWorkerUrl(e.target.value)}
-                      placeholder="https://choppercheck-adsb.<your-subdomain>.workers.dev"
-                      className="flex-1 bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs font-mono text-white"
-                    />
-                    <button
-                      onClick={handleSaveWorkerUrl}
-                      className="px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs cursor-pointer shrink-0"
-                    >
-                      {savedWorkerBanner ? 'Saved!' : 'Save Relay'}
-                    </button>
-                  </div>
                 </div>
 
                 <div className="p-3 rounded bg-slate-900 border border-slate-800 space-y-1.5">

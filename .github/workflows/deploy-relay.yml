@@ -1,0 +1,41 @@
+name: Deploy flight relay to Cloudflare Workers
+
+on:
+  push:
+    branches: ['main']
+    paths: ['relay/**', '.github/workflows/deploy-relay.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Skip until Cloudflare is set up
+        id: ready
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "CLOUDFLARE_API_TOKEN secret not set yet; see relay/README.md. Skipping deploy."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy Worker
+        if: steps.ready.outputs.go == 'true'
+        uses: cloudflare/wrangler-action@v3
+        env:
+          FLYITALY_API_KEY: ${{ secrets.FLYITALY_API_KEY }}
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: relay
+          secrets: |
+            FLYITALY_API_KEY

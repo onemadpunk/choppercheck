@@ -1,0 +1,7 @@
+# ChopperCheck flight relay: a free Cloudflare Worker that fetches aircraft and airport weather
+# server-side (the providers don't allow direct browser requests) and adds CORS headers.
+# Deployed by .github/workflows/deploy-relay.yml. Secrets (FLYITALY_API_KEY) live in Cloudflare, never here.
+name = "choppercheck-relay"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+workers_dev = true
