@@ -695,57 +695,84 @@ export const RadarMap: React.FC<RadarMapProps> = ({
     }
   }, [selectedFlight]);
 
-  // Render Live Helicopters and Aircraft
+  // Render Live Helicopters and Aircraft.
+  // Markers are kept and updated in place (keyed by hex) rather than cleared and rebuilt on every
+  // 2-second position update: rebuilding swapped the icon under a finger mid-tap, so taps on an
+  // aircraft were often lost and its details card never opened.
+  const aircraftMarkersRef = useRef<
+    Map<string, { marker: L.Marker; html: string; tooltip: string; flight: AircraftTarget }>
+  >(new Map());
+  const onSelectFlightRef = useRef(onSelectFlight);
+  onSelectFlightRef.current = onSelectFlight;
+
   useEffect(() => {
     const group = aircraftLayerRef.current;
     if (!group) return;
-    group.clearLayers();
+    const markers = aircraftMarkersRef.current;
+    const seen = new Set<string>();
 
     flights.forEach((flight) => {
       const isSelected = selectedFlight?.hex === flight.hex;
       const isPinned = pinnedFlightHex === flight.hex;
+      const html = createAircraftIconHtml(flight, isSelected, isPinned, currentZoom, showFacilityLabels);
+      const tooltip = escapeHtml(
+        flight.callsign +
+          ' · ' +
+          flight.typeFullName +
+          ' · ' +
+          reported(flight.altitudeReported, flight.altitudeFt, ' ft') +
+          ' · ' +
+          positionLabel(flight) +
+          (flight.turnback ? ' · ' + describeTurnback(flight.turnback) : '')
+      );
+      const zIndexOffset = isSelected ? 1000 : isPinned ? 900 : flight.turnback ? 800 : 400;
+      seen.add(flight.hex);
+
+      const existing = markers.get(flight.hex);
+      if (existing) {
+        existing.flight = flight;
+        existing.marker.setLatLng([flight.lat, flight.lon]);
+        existing.marker.setZIndexOffset(zIndexOffset);
+        if (existing.html !== html) {
+          existing.html = html;
+          // Swap the contents only, so the element being tapped stays in the page
+          existing.marker.options.icon = L.divIcon({ className: '', html, iconSize: [0, 0] });
+          const el = existing.marker.getElement();
+          if (el) el.innerHTML = html;
+          else existing.marker.setIcon(existing.marker.options.icon);
+        }
+        if (existing.tooltip !== tooltip) {
+          existing.tooltip = tooltip;
+          existing.marker.setTooltipContent(tooltip);
+        }
+        return;
+      }
 
       const marker = L.marker([flight.lat, flight.lon], {
         title: flight.callsign + ' · ' + flight.typeFullName,
-        icon: L.divIcon({
-          className: '',
-          html: createAircraftIconHtml(
-            flight,
-            isSelected,
-            isPinned,
-            currentZoom,
-            showFacilityLabels
-          ),
-          iconSize: [0, 0],
-        }),
-        zIndexOffset: isSelected ? 1000 : isPinned ? 900 : flight.turnback ? 800 : 400,
+        icon: L.divIcon({ className: '', html, iconSize: [0, 0] }),
+        zIndexOffset,
       });
-
-      marker.bindTooltip(
-        escapeHtml(
-          flight.callsign +
-            ' · ' +
-            flight.typeFullName +
-            ' · ' +
-            reported(flight.altitudeReported, flight.altitudeFt, ' ft') +
-            ' · ' +
-            positionLabel(flight) +
-            (flight.turnback ? ' · ' + describeTurnback(flight.turnback) : '')
-        ),
-        {
-          direction: 'top',
-          offset: [0, -10],
-          className: 'radar-hover-tooltip',
-        }
-      );
-
+      marker.bindTooltip(tooltip, {
+        direction: 'top',
+        offset: [0, -10],
+        className: 'radar-hover-tooltip',
+      });
+      const entry = { marker, html, tooltip, flight };
       marker.on('click', () => {
-        onSelectFlight(flight);
+        onSelectFlightRef.current(entry.flight);
       });
-
+      markers.set(flight.hex, entry);
       marker.addTo(group);
     });
-  }, [flights, selectedFlight, pinnedFlightHex, currentZoom, showFacilityLabels, onSelectFlight]);
+
+    for (const [hex, entry] of markers) {
+      if (!seen.has(hex)) {
+        group.removeLayer(entry.marker);
+        markers.delete(hex);
+      }
+    }
+  }, [flights, selectedFlight, pinnedFlightHex, currentZoom, showFacilityLabels]);
 
   const cycleMapStyle = () => {
     const order: MapStyleMode[] = ['dark_radar', 'nautical_ocean', 'satellite', 'daylight_osm'];
