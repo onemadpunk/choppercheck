@@ -7,7 +7,7 @@
  * seconds so every visitor shares the same upstream request.
  */
 
-export interface Env { FLYITALY_API_KEY?: string }
+export interface Env { FLYITALY_API_KEY?: string; ADSB_LOL_API_KEY?: string }
 
 export interface CacheLike {
   match(key: string): Promise<Response | undefined>;
@@ -38,7 +38,9 @@ export const SOURCES: Source[] = [
     url: (lat, lon, nm) => `https://api.flyitalyadsb.com/api/aircraft/v2/lat/${lat}/lon/${lon}/dist/${nm}/`,
     headers: env => env.FLYITALY_API_KEY ? { 'X-Api-Key': env.FLYITALY_API_KEY } : null },
   { id: 'adsb.lol', attribution: 'adsb.lol (https://www.adsb.lol/), ODbL 1.0',
-    url: (lat, lon, nm) => `https://api.adsb.lol/v2/point/${lat}/${lon}/${nm}` },
+    url: (lat, lon, nm) => `https://api.adsb.lol/v2/point/${lat}/${lon}/${nm}`,
+    // Without a key adsb.lol allows 500 requests/day per IP, shared by everything on Cloudflare's IPs; a feeder key allows 7,200/day.
+    headers: (env): Record<string, string> => env.ADSB_LOL_API_KEY ? { 'x-api-key': env.ADSB_LOL_API_KEY } : {} },
 ];
 
 export const MAX_SNAPSHOT_AGE_MS = 45_000;
@@ -49,7 +51,7 @@ const UPSTREAM_TIMEOUT_MS = 8_000;
 
 /** Per-instance cooldowns after a provider says "slow down" or fails. */
 const cooldownUntil = new Map<string, number>();
-export const resetCooldowns = () => { cooldownUntil.clear(); lastOutcome.clear(); clearMemoryCache(); };
+export const resetCooldowns = () => { cooldownUntil.clear(); lastOutcome.clear(); slowCache.clear(); clearMemoryCache(); };
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -82,8 +84,9 @@ function retryAfterMs(response: Response): number {
 const lastOutcome = new Map<string, { result: string; at: string }>();
 export const sourceStatus = () => Object.fromEntries(lastOutcome);
 
-/** adsb.fi and airplanes.live each cover the whole UK/North Sea well; FlyItalyADSB and adsb.lol are thinner. */
-const FULL_COVERAGE = new Set(['adsb.fi', 'airplanes.live']);
+/** adsb.lol's feeder key allows 7,200 requests/day, so each region asks it at most every 40 s and reuses that answer. */
+const SLOW_SOURCES: Record<string, number> = { 'adsb.lol': 40_000 };
+const slowCache = new Map<string, { at: number; snap: Snapshot }>();
 
 type Snapshot = { ac: any[]; now: number; total: number; source: string; attribution: string };
 
@@ -117,24 +120,29 @@ async function trySource(source: Source, regionId: string, env: Env, deps: Deps,
 }
 
 /**
- * Uses the first full-coverage source that answers. If neither does, asks every remaining source and returns
- * all their snapshots together (each keeps its own timestamp and credit), since each alone sees fewer aircraft.
+ * Asks every source at once and returns all fresh answers together as separate feeds (each keeps its own
+ * timestamp and credit). The site merges them by aircraft, keeping the freshest position, so an aircraft heard
+ * by any one network is shown. Sources in cooldown, unconfigured or rate-limited are simply left out.
  */
 export async function fetchRegion(regionId: string, env: Env, deps: Deps) {
   const now = (deps.now ?? Date.now)();
-  for (const source of SOURCES.filter(s => FULL_COVERAGE.has(s.id))) {
-    const snap = await trySource(source, regionId, env, deps, now);
-    if (snap) return { ...snap, region: regionId, feedAvailable: true };
-  }
-  const backups = (await Promise.all(SOURCES.filter(s => !FULL_COVERAGE.has(s.id))
-    .map(s => trySource(s, regionId, env, deps, now)))).filter((x): x is Snapshot => x !== null);
-  if (!backups.length) return null;
-  if (backups.length === 1) return { ...backups[0], region: regionId, feedAvailable: true };
-  // Top-level fields describe the combined answer; the site reads each entry of feeds separately.
-  const freshest = Math.max(...backups.map(b => b.now));
-  return { ac: [], now: freshest, total: backups.reduce((n, b) => n + b.total, 0),
-    source: backups.map(b => b.source).join(' + '), attribution: backups.map(b => b.attribution).join(' · '),
-    feeds: backups, region: regionId, feedAvailable: true };
+  const snaps = (await Promise.all(SOURCES.map(async source => {
+    const minGap = SLOW_SOURCES[source.id];
+    if (minGap) {
+      const key = source.id + '|' + regionId;
+      const prior = slowCache.get(key);
+      if (prior && now - prior.at < minGap) return now - prior.snap.now <= MAX_SNAPSHOT_AGE_MS ? prior.snap : null;
+      const snap = await trySource(source, regionId, env, deps, now);
+      slowCache.set(key, { at: now, snap: snap ?? { ac: [], now: 0, total: 0, source: source.id, attribution: '' } });
+      return snap;
+    }
+    return trySource(source, regionId, env, deps, now);
+  }))).filter((x): x is Snapshot => x !== null && x.now > 0);
+  if (!snaps.length) return null;
+  const freshest = Math.max(...snaps.map(s => s.now));
+  return { ac: [], now: freshest, total: snaps.reduce((n, s) => n + s.total, 0),
+    source: snaps.map(s => s.source).join(' + '), attribution: snaps.map(s => s.attribution).join(' · '),
+    feeds: snaps, region: regionId, feedAvailable: true };
 }
 
 /**

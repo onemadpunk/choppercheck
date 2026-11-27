@@ -21,15 +21,15 @@ function fakeFetch(routes: Record<string, () => Response>, calls: { url: string;
 const ok = (body: unknown) => () => new Response(JSON.stringify(body), { status: 200 });
 const req = (path: string) => new Request('https://relay.example' + path);
 
-test('uses adsb.fi first and filters towers and stale positions', async () => {
+test('uses adsb.fi and filters towers and stale positions', async () => {
   resetCooldowns();
   const res = await handle(req('/api/flights?regions=north-sea'), {}, { fetch: fakeFetch({ 'opendata.adsb.fi': ok(snapshot()) }), now: () => NOW });
   const body: any = await res.json();
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('Access-Control-Allow-Origin'), '*');
   assert.equal(body.source, 'adsb.fi');
-  assert.deepEqual(body.ac.map((a: any) => a.hex), ['abc123']);
-  assert.equal(body.now, NOW - 1000);
+  assert.deepEqual(body.feeds[0].ac.map((a: any) => a.hex), ['abc123']);
+  assert.equal(body.feeds[0].now, NOW - 1000);
 });
 
 test('falls back to airplanes.live, then FlyItalyADSB with the key, when earlier sources rate-limit', async () => {
@@ -145,4 +145,24 @@ test('when Open-Meteo says slow down, answers busy without asking again for a mi
   now += 61_000;
   await handle(req('/api/om/forecast?latitude=3&longitude=3'), {}, deps);
   assert.equal(calls.length, 2);
+});
+
+test('pools every source that answers, and asks adsb.lol at most every 40 s per region', async () => {
+  resetCooldowns();
+  const calls: any[] = [];
+  const routes = {
+    'opendata.adsb.fi': ok(snapshot()), 'api.airplanes.live': () => new Response('', { status: 403 }),
+    'api.flyitalyadsb.com': ok({ now: NOW - 500, ac: [{ hex: 'fia111', lat: 59, lon: 1, seen_pos: 1 }] }),
+    'api.adsb.lol': ok({ now: NOW - 2000, ac: [{ hex: 'lol222', lat: 59, lon: 1, seen_pos: 1 }] }),
+  };
+  const body: any = await (await handle(req('/api/flights?regions=north-sea'), { FLYITALY_API_KEY: 'k' }, { fetch: fakeFetch(routes, calls), now: () => NOW })).json();
+  assert.equal(body.source, 'adsb.fi + flyitalyadsb + adsb.lol');
+  assert.deepEqual(body.feeds.map((f: any) => f.source), ['adsb.fi', 'flyitalyadsb', 'adsb.lol']);
+  calls.length = 0;
+  const again: any = await (await handle(req('/api/flights?regions=north-sea'), { FLYITALY_API_KEY: 'k' }, { fetch: fakeFetch(routes, calls), now: () => NOW + 20_000 })).json();
+  assert.ok(!calls.some(c => c.url.includes('adsb.lol')));
+  assert.ok(again.feeds.some((f: any) => f.source === 'adsb.lol')); // reused, still under 45 s old
+  calls.length = 0;
+  await handle(req('/api/flights?regions=north-sea'), { FLYITALY_API_KEY: 'k' }, { fetch: fakeFetch(routes, calls), now: () => NOW + 41_000 });
+  assert.ok(calls.some(c => c.url.includes('adsb.lol')));
 });

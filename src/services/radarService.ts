@@ -1,6 +1,6 @@
 import { AircraftTarget, HelideckWeatherState, HelicopterOperator, InstallationOrAirport, TrailPoint } from '../types/radar';
 import { calculateBearingDeg, calculateDistanceNm, decodeAircraftType } from '../data/aircraftDecoder';
-import { regionsForView, ViewBounds } from '../utils/trackingRegions';
+import { regionsForView, TRACKING_REGIONS, ViewBounds } from '../utils/trackingRegions';
 import { INSTALLATIONS_AND_AIRPORTS } from '../data/installationsAndAirports';
 import { RecentTurnback, TurnbackTracker } from '../utils/turnbackDetection';
 
@@ -145,6 +145,61 @@ export function normalizeTraffic(data: any, facility: InstallationOrAirport, now
   return [...unique.values()];
 }
 
+// airplanes.live answers browsers directly (CORS allowed, 1 request/second per visitor's own connection), but
+// blocks requests from the Cloudflare relay. So each visitor asks it directly first and uses the relay only if
+// that fails. Its terms: non-commercial use, credit airplanes.live.
+const DIRECT_URL = (lat: number, lon: number, nm: number) => `https://api.airplanes.live/v2/point/${lat}/${lon}/${nm}`;
+let directCooldownUntil = 0, lastDirectAt = 0;
+export const resetDirectCooldown = () => { directCooldownUntil = 0; lastDirectAt = 0; };
+const DIRECT_SPACING_MS = 1100;
+
+async function fetchDirect(regionId: string, signal: AbortSignal, fetcher: typeof fetch, now: number): Promise<any | null> {
+  const region = TRACKING_REGIONS.find(r => r.id === regionId);
+  if (!region || now < directCooldownUntil) return null;
+  try {
+    const wait = lastDirectAt + DIRECT_SPACING_MS - Date.now();
+    if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+    lastDirectAt = Date.now();
+    const response = await fetcher(DIRECT_URL(region.lat, region.lon, region.radiusNm),
+      { signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) });
+    if (response.ok) {
+      const data: any = await response.json();
+      if (Array.isArray(data?.ac) && finite(data?.now)) return { ...data, source: 'airplanes.live' };
+      return null;
+    }
+    const seconds = Number(response.headers.get('Retry-After'));
+    directCooldownUntil = now + (Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 60_000);
+  } catch (error) {
+    if (signal.aborted) throw error;
+    directCooldownUntil = now + 60_000;
+  }
+  return null;
+}
+
+async function fetchRelay(regionId: string, signal: AbortSignal, fetcher: typeof fetch): Promise<any> {
+  const response = await fetcher(FLIGHT_API_ORIGIN + '/api/flights?regions=' + regionId, { signal });
+  if (!response.ok) {
+    const seconds = Number(response.headers.get('Retry-After'));
+    throw Object.assign(new Error('Region unavailable'), { retryAfterMs: Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 10000 });
+  }
+  return response.json();
+}
+
+/**
+ * Pools airplanes.live (asked directly by this browser) with whatever the relay pooled (FlyItalyADSB, adsb.lol, ...).
+ * Each source stays a separate feed with its own timestamp; the map keeps the freshest position per aircraft.
+ */
+export async function fetchRegionSnapshot(regionId: string, signal: AbortSignal, fetcher: typeof fetch = fetch, now = Date.now()): Promise<any> {
+  const [direct, relay] = await Promise.allSettled([fetchDirect(regionId, signal, fetcher, now), fetchRelay(regionId, signal, fetcher)]);
+  const directData = direct.status === 'fulfilled' ? direct.value : null;
+  const relayData = relay.status === 'fulfilled' ? relay.value : null;
+  if (!directData && !relayData) throw relay.status === 'rejected' ? relay.reason : new Error('Region unavailable');
+  if (!relayData) return directData;
+  if (!directData) return relayData;
+  const relayFeeds = Array.isArray(relayData.feeds) ? relayData.feeds : [relayData];
+  return { ...relayData, source: ['airplanes.live', relayData.source].filter(Boolean).join(' + '), feeds: [directData, ...relayFeeds] };
+}
+
 export async function fetchHybridRadarTraffic(lat: number, lon: number, facility: InstallationOrAirport,
   _tick: number, _includeSchedule: boolean, signal?: AbortSignal, bounds?: ViewBounds): Promise<{ flights: AircraftTarget[]; liveCount: number; feedAvailable: boolean; provider?: string; retryAfterMs?: number; partial?: boolean; coverageLabel?: string }> {
   try {
@@ -161,12 +216,7 @@ export async function fetchHybridRadarTraffic(lat: number, lon: number, facility
       if (pauseMs) await new Promise(resolve => setTimeout(resolve, pauseMs));
       try {
         const timeout = signal ? AbortSignal.any([signal, AbortSignal.timeout(12_000)]) : AbortSignal.timeout(12_000);
-        const response = await fetch(FLIGHT_API_ORIGIN + '/api/flights?regions=' + region, { signal: timeout });
-        if (!response.ok) {
-          const seconds = Number(response.headers.get('Retry-After'));
-          throw Object.assign(new Error('Region unavailable'), { retryAfterMs: Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 10000 });
-        }
-        const data = await response.json();
+        const data = await fetchRegionSnapshot(region, timeout);
         results.push({ status: 'fulfilled', value: data });
         pauseMs = finite(data?.retryAfterMs) ? Math.min(2000, Math.max(0, data.retryAfterMs)) : 0;
       } catch (reason) {
