@@ -699,77 +699,42 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
       : `Flights are unlikely at this time because of ${cause}.`;
   })();
 
-  const [showSarPlanner, setShowSarPlanner] = useState<boolean>(false);
+  // Plain values, not hooks: this code runs after the panel's early return, so a hook here changes the
+  // hook count when the forecast loads and crashes the app (React error #300).
+  const sarMissionProfile = computeSarMissionProfile({
+    targetLat: facility.lat,
+    targetLon: facility.lon,
+    targetElevationFt: facility.elevationFt || 0,
+    // Only real forecast values; a gap stays a gap (no typical-weather fill-ins)
+    windSpeed950hPaKts: activeModelSnapshot?.windSpeed950hPaKts ?? null,
+    windDir950hPaDeg: activeModelSnapshot?.windDir950hPaDeg ?? null,
+    windSpeed850hPaKts: activeModelSnapshot?.windSpeed850hPaKts ?? null,
+    windDir850hPaDeg: activeModelSnapshot?.windDir850hPaDeg ?? null,
+    freezingLevelFt: freezeVal ?? null,
+    deckGustKts: gustVal ?? null,
+    cloudCeilingFt: ceilVal ?? null,
+    visibilityKm: visVal ?? null,
+    waveHeightM: waveVal ?? null,
+    seaSurfaceTempC: activeHour?.seaSurfaceTempC ?? null,
+    isFpso,
+    fpsoMotion: fpsoMotionEstimate,
+    dateInput: activeHour?.hourIso ? new Date(activeHour.hourIso + 'Z') : new Date(),
+  });
 
-  const sarMissionProfile = useMemo(
-    () =>
-      computeSarMissionProfile({
-        targetLat: facility.lat,
-        targetLon: facility.lon,
-        targetElevationFt: facility.elevationFt || 0,
-        windSpeed950hPaKts: activeModelSnapshot?.windSpeed950hPaKts ?? deckWindVal ?? 20,
-        windDir950hPaDeg: activeModelSnapshot?.windDir950hPaDeg ?? windDirNow ?? 240,
-        windSpeed850hPaKts:
-          activeModelSnapshot?.windSpeed850hPaKts ??
-          activeModelSnapshot?.windSpeed950hPaKts ??
-          deckWindVal ??
-          25,
-        windDir850hPaDeg:
-          activeModelSnapshot?.windDir850hPaDeg ??
-          activeModelSnapshot?.windDir950hPaDeg ??
-          windDirNow ??
-          240,
-        freezingLevelFt: freezeVal ?? 4500,
-        deckGustKts: gustVal ?? 25,
-        cloudCeilingFt: ceilVal ?? 2500,
-        visibilityKm: visVal ?? 10,
-        waveHeightM: waveVal ?? 1.5,
-        seaSurfaceTempC: activeHour?.seaSurfaceTempC ?? weather?.temperatureC ?? 9.5,
-        isFpso,
-        fpsoMotion: fpsoMotionEstimate,
-        dateInput: activeHour?.hourIso ? new Date(activeHour.hourIso + 'Z') : new Date(),
-      }),
+  const prestwickSarQuickSites = allFacilities.filter((f) =>
     [
-      facility.lat,
-      facility.lon,
-      facility.elevationFt,
-      activeModelSnapshot?.windSpeed950hPaKts,
-      activeModelSnapshot?.windDir950hPaDeg,
-      activeModelSnapshot?.windSpeed850hPaKts,
-      activeModelSnapshot?.windDir850hPaDeg,
-      freezeVal,
-      deckWindVal,
-      windDirNow,
-      gustVal,
-      ceilVal,
-      visVal,
-      waveVal,
-      activeHour?.seaSurfaceTempC,
-      activeHour?.hourIso,
-      weather?.temperatureC,
-      isFpso,
-      fpsoMotionEstimate,
-    ]
-  );
-
-  const prestwickSarQuickSites = useMemo(
-    () =>
-      allFacilities.filter((f) =>
-        [
-          'apt-egpk',
-          'sar-goatfell-arran',
-          'sar-galloway-merrick',
-          'sar-ben-lomond-mrt',
-          'sar-glencoe-mrt',
-          'sar-ben-nevis-mrt',
-          'sar-ailsa-craig-clyde',
-          'apt-egpi',
-          'apt-egec',
-          'apt-egeo',
-          'apt-egpu',
-        ].includes(f.id)
-      ),
-    [allFacilities]
+      'apt-egpk',
+      'sar-goatfell-arran',
+      'sar-galloway-merrick',
+      'sar-ben-lomond-mrt',
+      'sar-glencoe-mrt',
+      'sar-ben-nevis-mrt',
+      'sar-ailsa-craig-clyde',
+      'apt-egpi',
+      'apt-egec',
+      'apt-egeo',
+      'apt-egpu',
+    ].includes(f.id)
   );
 
   return (
@@ -1149,7 +1114,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                     {cloudWords(ceilVal, Boolean(facilityHasReportedCeiling && reportedCloud?.noCeiling))}
                   </div>
                   <div className="text-[10px] text-slate-500">
-                    {ceilVal !== null && !(facilityHasReportedCeiling && reportedCloud?.noCeiling)
+                    {ceilVal !== null && ceilVal < NO_CEILING_FT && !(facilityHasReportedCeiling && reportedCloud?.noCeiling)
                       ? `cloud base ${formatCeilingFt(ceilVal)} · `
                       : ''}
                     {facilityHasReportedCeiling ? 'from the airport weather report' : 'forecast estimate'}
@@ -1774,36 +1739,17 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
         )}
 
         {viewMode === 'simple' && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <button
-              onClick={() => setShowSarPlanner((p) => !p)}
-              className={`w-full py-2.5 px-3 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition-colors ${
-                showSarPlanner
-                  ? 'bg-orange-500 text-slate-950 border-orange-400 font-bold'
-                  : 'bg-orange-950/50 hover:bg-orange-900/50 border-orange-500/45 text-orange-200'
-              }`}
-            >
-              <Radio className="w-4 h-4 shrink-0" />
-              <span>
-                {showSarPlanner
-                  ? 'Hide Coastguard SAR & Medevac Planner'
-                  : '🚁 Coastguard SAR & Medevac Planner (Scramble ETE, Winch, Trauma Hospitals & NVG)'}
-              </span>
-            </button>
-            <button
-              onClick={() => handleSetViewMode('detailed')}
-              className="w-full py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-cyan-300 flex items-center justify-center gap-2 cursor-pointer transition-colors"
-            >
-              <SlidersHorizontal className="w-4 h-4 shrink-0" />
-              <span>
-                Open Heli-Admin &amp; Pro View (Pitch/Roll/SHR, 5 Weather Models &amp; Custom HLL)
-              </span>
-            </button>
-          </div>
+          <button
+            onClick={() => handleSetViewMode('detailed')}
+            className="w-full py-3 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-cyan-300 flex items-center justify-center gap-2 cursor-pointer transition-colors"
+          >
+            <SlidersHorizontal className="w-4 h-4 shrink-0" />
+            <span>More detail for pilots and heli-admin (Pro view, incl. SAR planner)</span>
+          </button>
         )}
 
         {/* COASTGUARD SAR, MOUNTAIN RESCUE (MRT) & OFFSHORE MEDEVAC MISSION PLANNER */}
-        {(viewMode === 'detailed' || showSarPlanner) && (
+        {viewMode === 'detailed' && (
           <div className="p-3.5 bg-slate-900/95 border border-orange-500/45 rounded-xl space-y-3 min-w-0">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
@@ -1815,9 +1761,11 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 </span>
               </div>
               <span className="text-[10px] font-mono text-orange-300">
-                950hPa {dash(activeModelSnapshot?.windSpeed950hPaKts ?? deckWindVal)}kt · 850hPa (Ridge){' '}
-                {sarMissionProfile.mountainRescue.ridgeWind850Kts}kt @{' '}
-                {String(sarMissionProfile.mountainRescue.ridgeWind850DirDeg).padStart(3, '0')}°
+                950hPa {dash(activeModelSnapshot?.windSpeed950hPaKts)}kt · 850hPa (Ridge){' '}
+                {dash(sarMissionProfile.mountainRescue.ridgeWind850Kts)}kt
+                {sarMissionProfile.mountainRescue.ridgeWind850DirDeg !== null
+                  ? ` @ ${String(sarMissionProfile.mountainRescue.ridgeWind850DirDeg).padStart(3, '0')}°`
+                  : ''}
               </span>
             </div>
 
@@ -1880,6 +1828,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
             </div>
 
             {/* Mountain Rescue (MRT) High-Ground Summit Cloud, Icing & Lee-Corrie Rotor Envelope */}
+            {sarMissionProfile.mountainRescue.isHighGround && (
             <div
               className={`p-2.5 rounded-lg border font-mono text-[11px] space-y-1.5 ${
                 sarMissionProfile.mountainRescue.isHighGround
@@ -1921,7 +1870,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                   >
                     {sarMissionProfile.mountainRescue.isHighGround
                       ? sarMissionProfile.mountainRescue.cloudStatusLabel
-                      : `Cloud Base ${formatCeilingFt(ceilVal)}`}
+                      : `Cloud base: ${formatCeilingFt(ceilVal)}`}
                   </div>
                 </div>
                 <div className="p-1.5 rounded bg-slate-900/90 border border-slate-800">
@@ -1938,11 +1887,12 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                 </div>
               </div>
             </div>
+            )}
 
             {/* Nearest 2 Coastguard SAR Bases: Wind-Corrected ETE & On-Scene Loiter / Winch Endurance */}
             <div className="space-y-1.5">
               <div className="text-[10px] font-mono text-orange-300 font-semibold uppercase">
-                1. Nearest Coastguard SAR Scramble Bases (Wind-Corrected 950 hPa Transit &amp; Bingo Loiter):
+                1. Nearest Coastguard SAR bases (distance and rough flight time at cruise speed):
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 font-mono text-[11px]">
                 {sarMissionProfile.nearestSarBases.map((item) => (
@@ -1972,18 +1922,10 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                     </div>
                     <div className="flex items-center justify-between text-[10px] pt-1 border-t border-slate-800/80">
                       <span className="text-emerald-300 font-bold">
-                        ETA On-Scene: ~{item.outboundEteMin} min
+                        Flight time: about {item.outboundEteMin} min
                       </span>
-                      <span
-                        className={
-                          item.requiresRefuelStop
-                            ? 'text-rose-400 font-bold'
-                            : 'text-amber-300 font-bold'
-                        }
-                      >
-                        {item.requiresRefuelStop
-                          ? 'Refuel Rig Req.'
-                          : `On-Scene Loiter: ~${item.estTimeOnSceneMin}m`}
+                      <span className="text-slate-400">
+                        {item.windCorrected ? 'with forecast wind' : 'no wind data (still air)'}
                       </span>
                     </div>
                   </div>
@@ -2015,7 +1957,9 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                       <span>
                         {h.distanceNm} NM · Track {String(h.trackDeg).padStart(3, '0')}°T
                       </span>
-                      <span>Wind-Corr GS {h.groundspeedKts} kt</span>
+                      <span>
+                        {h.windCorrected ? `GS ${h.groundspeedKts} kt with wind` : 'still air (no wind data)'}
+                      </span>
                     </div>
                   </div>
                 ))}
@@ -2047,16 +1991,15 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
 
               <div className="p-2.5 rounded-lg bg-slate-950/90 border border-slate-800 space-y-1">
                 <div className="flex items-center justify-between text-[10px] text-sky-300 font-semibold">
-                  <span>🌊 SEA TEMP &amp; COLD-WATER SURVIVAL</span>
+                  <span>🌊 SEA TEMPERATURE</span>
                   <span className="px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-200 font-bold">
-                    SST {sarMissionProfile.seaSurfaceTempC}°C
+                    {sarMissionProfile.seaSurfaceTempC === null
+                      ? 'Not in forecast'
+                      : `${sarMissionProfile.seaSurfaceTempC}°C`}
                   </span>
                 </div>
-                <div className="text-xs text-white font-bold truncate">
-                  {sarMissionProfile.uninsulatedFunctionalTimeLabel}
-                </div>
-                <div className="text-[10px] text-slate-400 truncate">
-                  {sarMissionProfile.immersionSuitSurvivalLabel}
+                <div className="text-[10px] text-slate-400">
+                  Forecast sea-surface temperature (Open-Meteo marine model).
                 </div>
               </div>
             </div>
