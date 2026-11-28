@@ -59,6 +59,17 @@ async function check(browser, label, contextOptions) {
     await page.waitForTimeout(SETTLE_MS / 2);
   }
 
+  // 4. The new look (preview): Today screen for a rig, then its map
+  await page.goto(BASE + '/?new=1&rig=apache-forties-alpha', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(SETTLE_MS / 2);
+  const mapTab = page.getByRole('button', { name: 'Map', exact: true }).first();
+  if (await mapTab.count()) {
+    await mapTab.click({ timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(2000);
+  }
+  await page.goto(BASE + '/?new=0', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(1000);
+
   const rootChildren = await page.evaluate(() => document.getElementById('root')?.childElementCount ?? 0);
   await context.close();
 
@@ -68,7 +79,7 @@ async function check(browser, label, contextOptions) {
     console.error(`✗ ${label}:\n  - ${problems.join('\n  - ')}`);
     return false;
   }
-  console.log(`✓ ${label}: loaded, opened a rig and its weather with no errors`);
+  console.log(`✓ ${label}: loaded, opened a rig, its weather and the new look with no errors`);
   return true;
 }
 
