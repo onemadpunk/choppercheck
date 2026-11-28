@@ -38,6 +38,8 @@ import { RigsAndAirportsDirectory } from './components/RigsAndAirportsDirectory'
 import { HelideckWeatherPanel } from './components/HelideckWeatherPanel';
 import { InstallAndGitHubModal } from './components/InstallAndGitHubModal';
 import { OverheadSkyCompassModal } from './components/OverheadSkyCompassModal';
+import { SimpleHome } from './components/SimpleHome';
+import { buildContextAwareSevenDaySummaries } from './utils/solarAndMetUtils';
 import { isRotaryAircraft, matchesAircraftCategory } from './utils/dataQuality';
 import { regionsForView, ViewBounds } from './utils/trackingRegions';
 import { startVisiblePolling } from './utils/visiblePolling';
@@ -60,6 +62,7 @@ import {
   Radar,
   Share2,
   Star,
+  Sun,
   X,
 } from 'lucide-react';
 
@@ -321,8 +324,38 @@ export default function App() {
     }
   });
 
+  // New look preview (?new=1 turns it on, ?new=0 off; remembered on this phone)
+  const [newLook, setNewLook] = useState<boolean>(() => {
+    try {
+      const flag = new URLSearchParams(window.location.search).get('new');
+      if (flag === '1' || flag === '0') localStorage.setItem('choppercheck_new_look', flag);
+      return localStorage.getItem('choppercheck_new_look') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const handleUseOldLook = useCallback(() => {
+    setNewLook(false);
+    try {
+      localStorage.setItem('choppercheck_new_look', '0');
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+  // New look: the Today screen, or the map and panels behind it
+  const [homeTab, setHomeTab] = useState<'today' | 'map'>('today');
+  // A first-time visitor picks their rig instead of being shown someone else's
+  const [hasChosenRig, setHasChosenRig] = useState<boolean>(() => {
+    try {
+      return !!localStorage.getItem('choppercheck_home_rig_id') || new URLSearchParams(window.location.search).has('rig');
+    } catch {
+      return true;
+    }
+  });
+
   const handleSetViewMode = useCallback((mode: 'simple' | 'detailed') => {
     setViewMode(mode);
+    if (mode === 'simple') setHomeTab('today');
     try {
       localStorage.setItem('choppercheck_wx_view_mode', mode);
     } catch {
@@ -587,6 +620,22 @@ export default function App() {
   }, [facilities, activeFacility.id, activeFacility.primaryShoreBase, shoreBaseOverrides]);
 
   const activeRigOverride = customRigOverrides[activeFacility.id] || null;
+  // Same day summaries as the map card and weather panel use
+  const simpleDaySummaries = useMemo(
+    () =>
+      newLook
+        ? buildContextAwareSevenDaySummaries(
+            hourlyForecast,
+            weatherModelId,
+            AIRFRAME_PRESETS[airframePresetId],
+            activeFacility.assetType === 'FPSO' || activeFacility.assetType === 'Semi-Sub',
+            flightOpsMode,
+            activeRigOverride,
+            activeFacility.assetType === 'Semi-Sub'
+          )
+        : [],
+    [newLook, hourlyForecast, weatherModelId, airframePresetId, activeFacility.assetType, flightOpsMode, activeRigOverride]
+  );
 
   const handleChangeFlightOpsMode = useCallback((mode: FlightOpsMode) => {
     setFlightOpsMode(mode);
@@ -1139,6 +1188,38 @@ export default function App() {
     []
   );
 
+
+  if (newLook && viewMode === 'simple' && homeTab === 'today') {
+    return (
+      <SimpleHome
+        facility={activeFacility}
+        facilities={facilities}
+        favoriteIds={favoriteFacilityIds}
+        hasChosenRig={hasChosenRig}
+        daySummaries={simpleDaySummaries}
+        hasForecast={hourlyForecast.length > 0}
+        flights={flights}
+        feedState={feedState}
+        onSelectFacility={(f) => {
+          handleSelectFacility(f);
+          setHasChosenRig(true);
+          if (!favoriteFacilityIds.includes(f.id)) handleToggleFavoriteFacility(f.id);
+        }}
+        onOpenMap={() => {
+          setHomeTab('map');
+          setActiveTab('radar');
+        }}
+        onSelectFlight={(f) => {
+          handleSelectFlight(f);
+          setHomeTab('map');
+          setActiveTab('radar');
+        }}
+        onOpenPro={() => handleSetViewMode('detailed')}
+        onUseOldLook={handleUseOldLook}
+      />
+    );
+  }
+
   return (
     <div className="app-shell h-[100dvh] w-screen overflow-hidden bg-[#07090e] text-slate-100 flex flex-col select-none">
       {/* =====================================================================
@@ -1240,6 +1321,14 @@ export default function App() {
             </button>
           )}
 
+          {newLook && viewMode === 'simple' && (
+            <button
+              onClick={() => setHomeTab('today')}
+              className="hidden lg:inline-flex items-center min-h-[40px] sm:min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-bold bg-cyan-500 hover:bg-cyan-400 text-slate-950 cursor-pointer"
+            >
+              ← Today
+            </button>
+          )}
           {/* Global Simple Crew View vs Pro Heli-Admin View Toggle Button */}
           <button
             onClick={() => handleSetViewMode(viewMode === 'simple' ? 'detailed' : 'simple')}
@@ -1743,7 +1832,16 @@ export default function App() {
       {/* =====================================================================
           MOBILE FIXED BOTTOM TAB BAR (44x44px Thumb Targets, <= 15% Sticky Cap)
          ===================================================================== */}
-      <nav className={`lg:hidden fixed bottom-0 left-0 right-0 z-[600] h-14 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 grid ${viewMode === 'simple' ? 'grid-cols-4' : 'grid-cols-5'} items-center`}>
+      <nav className={`lg:hidden fixed bottom-0 left-0 right-0 z-[600] h-14 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 grid ${viewMode === 'simple' && !newLook ? 'grid-cols-4' : 'grid-cols-5'} items-center`}>
+        {newLook && viewMode === 'simple' && (
+          <button
+            onClick={() => setHomeTab('today')}
+            className="min-h-[44px] flex flex-col items-center justify-center cursor-pointer text-slate-400"
+          >
+            <Sun className="w-4 h-4" />
+            <span className="text-[10px] font-medium mt-0.5 whitespace-nowrap">Today</span>
+          </button>
+        )}
         <button
           onClick={() => setActiveTab('radar')}
           className={`min-h-[44px] flex flex-col items-center justify-center cursor-pointer relative ${

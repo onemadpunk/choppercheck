@@ -1620,7 +1620,7 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                           ? 'Likely'
                           : day.overallStatus === 'CAUTION'
                           ? 'Delays?'
-                          : 'Unlikely'
+                          : 'Not likely'
                         : day.overallStatus}
                     </span>
                     {!isSimple && (
