@@ -22,6 +22,47 @@ export function annotateTurnbacks(flights: AircraftTarget[]): AircraftTarget[] {
   });
 }
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
+/**
+ * Who an aircraft is (registration, callsign, type, operator) as last reported by any source. Sources are pooled
+ * and the freshest position wins, but not every source sends every field: without this, a tapped aircraft's
+ * details flipped between sources every few seconds ("Operator not reported", no registration), which also
+ * restarted the photo lookup before it could finish.
+ */
+type Identity = Pick<AircraftTarget, 'callsign' | 'flightNumber' | 'registration' | 'typeCode' | 'typeFullName' | 'operator' | 'helicopterOperator'>;
+const identities = new Map<string, Identity & { seenAt: number }>();
+const IDENTITY_TTL_MS = 20 * 60 * 1000;
+const knownCallsign = (f: AircraftTarget) => f.callsign !== f.hex && f.callsign !== f.registration;
+const knownType = (f: Pick<AircraftTarget, 'typeCode'>) => f.typeCode !== 'ACFT';
+const knownOperator = (op: string) => op !== 'Operator not reported';
+
+/** Fills fields one source left out from another source (this poll) or from what was reported earlier. */
+export function keepIdentity(flight: AircraftTarget, other?: AircraftTarget, now = Date.now()): AircraftTarget {
+  const remembered = identities.get(flight.hex);
+  const prior = remembered && now - remembered.seenAt < IDENTITY_TTL_MS ? remembered : undefined;
+  const pick = <T,>(mine: T, known: (v: T) => boolean, ...rest: Array<T | undefined>): T =>
+    known(mine) ? mine : (rest.find((v): v is T => v !== undefined && known(v)) ?? mine);
+  const out: AircraftTarget = { ...flight };
+  out.registration = pick(flight.registration, (v) => v !== 'Unknown', other?.registration, prior?.registration);
+  if (!knownCallsign(flight)) {
+    const from = [other, prior].find((x) => x && x.callsign !== flight.hex && x.callsign !== x.registration);
+    if (from) { out.callsign = from.callsign; out.flightNumber = from.flightNumber; }
+  }
+  if (!knownType(flight)) {
+    const from = [other, prior].find((x) => x && knownType(x));
+    if (from) { out.typeCode = from.typeCode; out.typeFullName = from.typeFullName; }
+  }
+  out.operator = pick(flight.operator, knownOperator, other?.operator, prior?.operator);
+  out.helicopterOperator = pick(flight.helicopterOperator, (v) => !!v && v !== 'Unknown', other?.helicopterOperator, prior?.helicopterOperator);
+  identities.set(flight.hex, {
+    callsign: out.callsign, flightNumber: out.flightNumber, registration: out.registration, typeCode: out.typeCode,
+    typeFullName: out.typeFullName, operator: out.operator, helicopterOperator: out.helicopterOperator, seenAt: now,
+  });
+  if (identities.size > 3000) identities.delete(identities.keys().next().value as string);
+  return out;
+}
+export const resetIdentities = () => identities.clear();
+
 export interface RawAdsbAircraft {
   hex?: string; type?: string; flight?: string; r?: string; t?: string; desc?: string;
   ownOp?: string; lat?: number; lon?: number; alt_baro?: number | 'ground'; alt_geom?: number;
@@ -237,12 +278,14 @@ export async function fetchHybridRadarTraffic(lat: number, lon: number, facility
         const normalized = normalizeTraffic(feed, facility); validFeeds++;
         for (const flight of normalized) {
           const prior = unique.get(flight.hex);
-          if (!prior || (flight.observedAt || 0) > (prior.observedAt || 0)) unique.set(flight.hex, flight);
+          if (!prior) unique.set(flight.hex, flight);
+          else if ((flight.observedAt || 0) > (prior.observedAt || 0)) unique.set(flight.hex, keepIdentity(flight, prior));
+          else unique.set(flight.hex, keepIdentity(prior, flight));
         }
       } catch { invalidFeed = true; }
     }
     if (!validFeeds) throw new Error('No fresh regional positions');
-    const flights = annotateTurnbacks([...unique.values()]);
+    const flights = annotateTurnbacks([...unique.values()].map((f) => keepIdentity(f)));
     const retries = responses.map((data: any) => data.retryAfterMs).filter(finite);
     return { flights, liveCount: flights.length, feedAvailable: responses.some((data: any) => data.feedAvailable !== false),
       provider: [...new Set(responses.map((data: any) => data.source).filter(Boolean))].join(' + ') || undefined,

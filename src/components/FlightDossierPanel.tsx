@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AircraftTarget, InstallationOrAirport } from '../types/radar';
 import { buildFlightShareText, getWhatsAppShareUrl, playCockpitAlertChime } from '../utils/alertsAndShare';
 import { coordinate, positionLabel, reported } from '../utils/dataQuality';
@@ -200,12 +200,24 @@ export const FlightDossierPanel: React.FC<Props> = ({
   const [dossier, setDossier] = useState<EnrichedAircraftDossier | null>(null);
   const [loadingDossier, setLoadingDossier] = useState(false);
 
+  // Look up by the aircraft, not by every small change in what the feeds report: the panel re-renders every
+  // couple of seconds, and restarting on a flickering callsign or registration cancelled the photo lookup each
+  // time, so on a slow phone connection it never finished. A registration or callsign that turns up later
+  // (it was missing before) starts one more lookup.
+  const lookupReg = flight.registration && flight.registration !== 'Unknown' ? flight.registration : '';
+  const lookupCallsign = flight.callsign !== flight.hex ? flight.callsign : '';
+  const stickyRef = useRef<{ hex: string; reg: string; callsign: string }>({ hex: '', reg: '', callsign: '' });
+  if (stickyRef.current.hex !== flight.hex) stickyRef.current = { hex: flight.hex, reg: lookupReg, callsign: lookupCallsign };
+  if (!stickyRef.current.reg && lookupReg) stickyRef.current = { ...stickyRef.current, reg: lookupReg };
+  if (!stickyRef.current.callsign && lookupCallsign) stickyRef.current = { ...stickyRef.current, callsign: lookupCallsign };
+  const { reg: stickyReg, callsign: stickyCallsign } = stickyRef.current;
+
   useEffect(() => {
     const controller = new AbortController();
     // Clear the previous aircraft's photo/route straight away, then show each piece as it arrives
     setDossier(null);
     setLoadingDossier(true);
-    fetchAircraftDossier(flight.hex, flight.callsign, flight.registration, controller.signal, (partial) =>
+    fetchAircraftDossier(flight.hex, stickyCallsign || flight.hex, stickyReg || 'Unknown', controller.signal, (partial) =>
       setDossier(partial)
     )
       .then((res) => {
@@ -218,7 +230,7 @@ export const FlightDossierPanel: React.FC<Props> = ({
         if (!controller.signal.aborted) setLoadingDossier(false);
       });
     return () => controller.abort();
-  }, [flight.hex, flight.callsign, flight.registration]);
+  }, [flight.hex, stickyCallsign, stickyReg]);
 
   // Geometric offshore session origin & heading-aligned facility for helicopters / flights without an airline route
   const geometricTrackContext = useMemo(() => {
