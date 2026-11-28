@@ -612,10 +612,7 @@ test('Coastguard SAR & Offshore Medevac Mission Planner computes Rescue base scr
   });
   assert.equal(glenLyonCloudBreak.transferMode, 'CLOUD_BREAK_AUTO_HOVER');
 
-  // Test Prestwick Rescue 199 (EGPK) Mountain Rescue tasking to Goatfell, Isle of Arran (2,867 ft) in winter cloud & ridge wind
-  const arranMrt = resolveHeliAdminStopCode('ARRAN');
-  assert.equal(arranMrt?.primaryShoreBase, 'EGPK');
-  assert.equal(arranMrt?.elevationFt, 2867);
+  // High-ground tasking (Goatfell, Isle of Arran, 2,867 ft) in winter cloud & ridge wind: nearest base is Prestwick
 
   const islayRwy = computeBestRunwayWind('EGPI', 300, 22, 32);
   assert.equal(islayRwy?.runwayLabel, 'RWY 31');

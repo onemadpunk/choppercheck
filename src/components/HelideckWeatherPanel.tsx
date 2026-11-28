@@ -722,22 +722,6 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     dateInput: activeHour?.hourIso ? new Date(activeHour.hourIso + 'Z') : new Date(),
   });
 
-  const prestwickSarQuickSites = allFacilities.filter((f) =>
-    [
-      'apt-egpk',
-      'sar-goatfell-arran',
-      'sar-galloway-merrick',
-      'sar-ben-lomond-mrt',
-      'sar-glencoe-mrt',
-      'sar-ben-nevis-mrt',
-      'sar-ailsa-craig-clyde',
-      'apt-egpi',
-      'apt-egec',
-      'apt-egeo',
-      'apt-egpu',
-    ].includes(f.id)
-  );
-
   return (
     <div className="flex flex-col h-full min-w-0 w-full bg-slate-950 text-slate-100 overflow-y-auto overflow-x-hidden p-3 sm:p-5 space-y-4">
       <div className={isFullScreen ? 'max-w-6xl mx-auto w-full min-w-0 space-y-4' : 'w-full min-w-0 space-y-4'}>
@@ -1770,43 +1754,6 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
                   : ''}
               </span>
             </div>
-
-            {/* Prestwick (Rescue 199) West Coast Islands, Mountain Rescue (MRT) & Clyde Quick-Switch Bar */}
-            {prestwickSarQuickSites.length > 0 && onSelectFacility && (
-              <div className="p-2 rounded-lg bg-slate-950/90 border border-slate-800 space-y-1.5">
-                <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-orange-300">
-                  <span className="font-bold">
-                    🚁 PRESTWICK (RESCUE 199 · EGPK) MOUNTAIN, ISLAND &amp; CLYDE SAR ZONES:
-                  </span>
-                  <span className="text-slate-400 hidden sm:inline">
-                    Tap any site or click anywhere on the Radar Map
-                  </span>
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {prestwickSarQuickSites.map((site) => {
-                    const isCurrent = site.id === facility.id;
-                    const isMrt = site.elevationFt >= 800;
-                    return (
-                      <button
-                        key={site.id}
-                        onClick={() => onSelectFacility(site)}
-                        className={`px-2 py-1 rounded text-[10px] font-mono font-semibold cursor-pointer transition-colors ${
-                          isCurrent
-                            ? 'bg-orange-500 text-slate-950 font-bold'
-                            : isMrt
-                            ? 'bg-amber-950/70 hover:bg-amber-900/70 text-amber-200 border border-amber-500/40'
-                            : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700'
-                        }`}
-                      >
-                        {isMrt ? '🏔️ ' : '🚁 '}
-                        {site.shortName.replace(/\s*\([^)]*\)/, '')}
-                        {isMrt ? ` (${site.elevationFt.toLocaleString()}ft)` : ''}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
 
             {/* SAR Transfer Mode Verdict: Helideck Landing vs Auto-Hover Winch / Hi-Line vs Cloud-Break / Mountain Rescue */}
             <div

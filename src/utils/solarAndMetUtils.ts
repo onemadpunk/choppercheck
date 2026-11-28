@@ -1476,12 +1476,18 @@ export interface SarBaseMeta {
   icao: string;
   callsign: string;
   name: string;
-  airframe: 'S-92A' | 'AW189';
+  airframe: 'S-92A' | 'AW189' | 'AW139';
   lat: number;
   lon: number;
   dashSpeedKts: number;
 }
 
+/**
+ * Coastguard SAR helicopter bases. Types from the UK SAR2G December 2025 newsletter (gov.uk: Lydd, St Athan and
+ * Lee-on-Solent now AW139; Inverness AW189) and the Irish Department of Transport (AW189 at all four Irish
+ * bases, Dublin at Weston). Speeds are the makers' published maximum cruise speeds: S-92A 151 kt, AW189 159 kt,
+ * AW139 165 kt (5,000 ft, ISA, max weight).
+ */
 export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
   {
     icao: 'EGPB',
@@ -1490,7 +1496,7 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     airframe: 'S-92A',
     lat: 59.8789,
     lon: -1.2956,
-    dashSpeedKts: 145,
+    dashSpeedKts: 151,
   },
   {
     icao: 'EGPO',
@@ -1499,7 +1505,7 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     airframe: 'S-92A',
     lat: 58.2156,
     lon: -6.3311,
-    dashSpeedKts: 145,
+    dashSpeedKts: 151,
   },
   {
     icao: 'EGPE',
@@ -1508,7 +1514,7 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     airframe: 'AW189',
     lat: 57.5425,
     lon: -4.0475,
-    dashSpeedKts: 150,
+    dashSpeedKts: 159,
   },
   {
     icao: 'EGPK',
@@ -1517,7 +1523,7 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     airframe: 'AW189',
     lat: 55.5094,
     lon: -4.5944,
-    dashSpeedKts: 150,
+    dashSpeedKts: 159,
   },
   {
     icao: 'EGNJ',
@@ -1526,7 +1532,7 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     airframe: 'S-92A',
     lat: 53.5744,
     lon: -0.3508,
-    dashSpeedKts: 145,
+    dashSpeedKts: 151,
   },
   {
     icao: 'EGCK',
@@ -1535,16 +1541,16 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     airframe: 'S-92A',
     lat: 53.1018,
     lon: -4.3376,
-    dashSpeedKts: 145,
+    dashSpeedKts: 151,
   },
   {
     icao: 'EGDX',
     callsign: 'Rescue 187',
     name: 'St Athan SAR (South Wales)',
-    airframe: 'AW189',
+    airframe: 'AW139',
     lat: 51.4056,
     lon: -3.4375,
-    dashSpeedKts: 150,
+    dashSpeedKts: 165,
   },
   {
     icao: 'EGHQ',
@@ -1553,61 +1559,61 @@ export const COASTGUARD_SAR_BASES: SarBaseMeta[] = [
     airframe: 'S-92A',
     lat: 50.4406,
     lon: -4.9954,
-    dashSpeedKts: 145,
+    dashSpeedKts: 151,
   },
   {
     icao: 'EGHF',
     callsign: 'Rescue 175',
     name: 'Lee-on-Solent SAR (Channel)',
-    airframe: 'AW189',
+    airframe: 'AW139',
     lat: 50.8156,
     lon: -1.2067,
-    dashSpeedKts: 150,
+    dashSpeedKts: 165,
   },
   {
     icao: 'EGMD',
     callsign: 'Rescue 163',
     name: 'Lydd SAR (Dover Strait)',
-    airframe: 'AW189',
+    airframe: 'AW139',
     lat: 50.9562,
     lon: 0.9391,
-    dashSpeedKts: 150,
+    dashSpeedKts: 165,
   },
   {
-    icao: 'EIDW',
+    icao: 'EIWT',
     callsign: 'Rescue 116',
-    name: 'Dublin SAR (Irish Coast Guard)',
-    airframe: 'S-92A',
-    lat: 53.4213,
-    lon: -6.2701,
-    dashSpeedKts: 145,
+    name: 'Dublin SAR (Weston Airport, Irish Coast Guard)',
+    airframe: 'AW189',
+    lat: 53.3522,
+    lon: -6.4875,
+    dashSpeedKts: 159,
   },
   {
     icao: 'EISG',
     callsign: 'Rescue 118',
     name: 'Sligo SAR (NW Ireland)',
-    airframe: 'S-92A',
+    airframe: 'AW189',
     lat: 54.2802,
     lon: -8.5992,
-    dashSpeedKts: 145,
+    dashSpeedKts: 159,
   },
   {
     icao: 'EINN',
     callsign: 'Rescue 115',
     name: 'Shannon SAR (W Ireland)',
-    airframe: 'S-92A',
+    airframe: 'AW189',
     lat: 52.7019,
     lon: -8.9248,
-    dashSpeedKts: 145,
+    dashSpeedKts: 159,
   },
   {
     icao: 'EIWF',
     callsign: 'Rescue 117',
     name: 'Waterford SAR (SE Ireland)',
-    airframe: 'S-92A',
+    airframe: 'AW189',
     lat: 52.1872,
     lon: -7.0869,
-    dashSpeedKts: 145,
+    dashSpeedKts: 159,
   },
 ];
 
