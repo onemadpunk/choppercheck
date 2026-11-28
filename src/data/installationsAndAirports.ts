@@ -1091,7 +1091,7 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
     primaryShoreBase: 'EGPK',
     helicopterOperators: ['HM Coastguard', 'Commercial Airline', 'Cargo / Military'],
     regionLabel: 'Ayrshire, Scotland',
-    notes: '3 miles north of Alloway/Ayr. Home to HM Coastguard Rescue 199 (AW189), transatlantic military/cargo heavies, and Ryanair.'
+    notes: 'Home to HM Coastguard Rescue 199 (AW189), plus cargo, military and Ryanair flights.'
   },
   {
     id: 'apt-egpe',
@@ -1567,7 +1567,7 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
   },
   {
     id: 'hosp-qeuh',
-    code: 'EGEH',
+    code: 'QEUH',
     name: 'Queen Elizabeth University Hospital Roof Helipad (Glasgow)',
     shortName: 'QEUH Glasgow Helipad',
     fieldOperator: 'NHS / Hospital Helipad',
@@ -1578,12 +1578,11 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
     elevationFt: 195,
     primaryShoreBase: 'EGPK',
     helicopterOperators: ['HM Coastguard'],
-    regionLabel: 'Glasgow · Major West of Scotland Rooftop Helipad (Rescue 199 / Helimed)',
-    notes: 'Primary rooftop helipad for Prestwick Rescue 199 and Scottish Air Ambulance.'
+    regionLabel: 'Glasgow · rooftop hospital helipad'
   },
 
   // =========================================================================
-  // 7B. PRESTWICK (RESCUE 199) MOUNTAIN RESCUE, WEST COAST ISLANDS & CLYDE SAR
+  // 7B. MOUNTAIN, ISLAND & SEA RESCUE SPOTS (summit heights from Ordnance Survey)
   // =========================================================================
   {
     id: 'sar-goatfell-arran',
@@ -1600,8 +1599,7 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
     maxHeliType: 'AW189 / Sikorsky S-92A',
     primaryShoreBase: 'EGPK',
     helicopterOperators: ['HM Coastguard'],
-    regionLabel: 'Firth of Clyde · 22 NM WNW of Prestwick (Arran MRT & Island Medevac)',
-    notes: 'High-frequency Prestwick Rescue 199 tasking zone covering Goatfell ridge (2,867 ft), Glen Rosa, and Brodick hospital medevacs.'
+    regionLabel: 'Firth of Clyde (Arran MRT & Island Medevac)'
   },
   {
     id: 'sar-galloway-merrick',
@@ -1618,8 +1616,7 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
     maxHeliType: 'AW189 / Sikorsky S-92A',
     primaryShoreBase: 'EGPK',
     helicopterOperators: ['HM Coastguard'],
-    regionLabel: 'Galloway Forest Park · 23 NM S of Prestwick (Southern Uplands High Peak)',
-    notes: 'Highest peak in Southern Scotland (2,766 ft); primary inland mountain rescue zone for Prestwick Rescue 199.'
+    regionLabel: 'Galloway Forest Park (Southern Uplands High Peak)'
   },
   {
     id: 'sar-ben-lomond-mrt',
@@ -1636,8 +1633,7 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
     maxHeliType: 'AW189 / Sikorsky S-92A',
     primaryShoreBase: 'EGPK',
     helicopterOperators: ['HM Coastguard'],
-    regionLabel: 'Loch Lomond & Trossachs · 41 NM N of Prestwick',
-    notes: 'Busiest Munro in Southern Highlands (3,196 ft); served by Prestwick Rescue 199 and Lomond MRT.'
+    regionLabel: 'Loch Lomond & Trossachs'
   },
   {
     id: 'sar-glencoe-mrt',
@@ -1648,14 +1644,13 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
     fieldOperator: 'HM Coastguard / SAR',
     assetType: 'SAR Base',
     sector: 'scotland_airports',
-    lat: 56.6528,
-    lon: -4.9600,
-    elevationFt: 3681,
+    lat: 56.6458,
+    lon: -4.9006,
+    elevationFt: 3353,
     maxHeliType: 'AW189 / Sikorsky S-92A',
     primaryShoreBase: 'EGPK',
     helicopterOperators: ['HM Coastguard'],
-    regionLabel: 'West Highlands · 70 NM N of Prestwick (Glencoe Mountain Rescue)',
-    notes: 'Major Scottish climbing & winter mountaineering rescue zone (3,681 ft) worked jointly by Prestwick Rescue 199 & Inverness Rescue 151.'
+    regionLabel: 'West Highlands (Glencoe Mountain Rescue)'
   },
   {
     id: 'sar-ben-nevis-mrt',
@@ -1672,8 +1667,7 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
     maxHeliType: 'AW189 / Sikorsky S-92A',
     primaryShoreBase: 'EGPK',
     helicopterOperators: ['HM Coastguard'],
-    regionLabel: 'Fort William / Lochaber · 78 NM N of Prestwick (UK Highest Summit 4,413 ft)',
-    notes: 'UK highest mountain (4,413 ft); critical high-altitude winching, winter icing, and lee-corrie rotor environment.'
+    regionLabel: 'Fort William / Lochaber (UK Highest Summit 4,413 ft)'
   },
   {
     id: 'sar-ailsa-craig-clyde',
@@ -1690,8 +1684,151 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
     maxHeliType: 'AW189 / Sikorsky S-92A',
     primaryShoreBase: 'EGPK',
     helicopterOperators: ['HM Coastguard'],
-    regionLabel: 'Outer Firth of Clyde & North Channel · 24 NM SW of Prestwick',
-    notes: 'Primary maritime SAR training and vessel-winching corridor for Prestwick Rescue 199 covering Clyde & Cairnryan–Belfast ferries.'
+    regionLabel: 'Outer Firth of Clyde & North Channel'
+  },
+  {
+    id: 'sar-cairngorms-macdui',
+    code: 'MACD',
+    heliAdminAliases: ['MACD'],
+    name: 'Cairngorms — Ben Macdui & Cairn Gorm Plateau',
+    shortName: 'Cairngorms / Ben Macdui (MACD)',
+    fieldOperator: 'HM Coastguard / SAR',
+    assetType: 'SAR Base',
+    sector: 'scotland_airports',
+    lat: 57.0704,
+    lon: -3.6691,
+    elevationFt: 4295,
+    primaryShoreBase: 'EGPE',
+    helicopterOperators: ['HM Coastguard'],
+    regionLabel: 'Cairngorms National Park'
+  },
+  {
+    id: 'sar-torridon-liathach',
+    code: 'TORR',
+    heliAdminAliases: ['TORR'],
+    name: 'Torridon — Liathach & Beinn Eighe',
+    shortName: 'Torridon / Liathach (TORR)',
+    fieldOperator: 'HM Coastguard / SAR',
+    assetType: 'SAR Base',
+    sector: 'scotland_airports',
+    lat: 57.5531,
+    lon: -5.4651,
+    elevationFt: 3461,
+    primaryShoreBase: 'EGPE',
+    helicopterOperators: ['HM Coastguard'],
+    regionLabel: 'Wester Ross'
+  },
+  {
+    id: 'sar-skye-cuillin',
+    code: 'CUIL',
+    heliAdminAliases: ['CUIL'],
+    name: 'Isle of Skye — Black Cuillin Ridge',
+    shortName: 'Skye / Cuillin (CUIL)',
+    fieldOperator: 'HM Coastguard / SAR',
+    assetType: 'SAR Base',
+    sector: 'scotland_airports',
+    lat: 57.2063,
+    lon: -6.2244,
+    elevationFt: 3255,
+    primaryShoreBase: 'EGPO',
+    helicopterOperators: ['HM Coastguard'],
+    regionLabel: 'Isle of Skye'
+  },
+  {
+    id: 'sar-harris-clisham',
+    code: 'CLIS',
+    heliAdminAliases: ['CLIS'],
+    name: 'Isle of Harris — Clisham Hills',
+    shortName: 'Harris / Clisham (CLIS)',
+    fieldOperator: 'HM Coastguard / SAR',
+    assetType: 'SAR Base',
+    sector: 'scotland_airports',
+    lat: 57.9633,
+    lon: -6.8094,
+    elevationFt: 2621,
+    primaryShoreBase: 'EGPO',
+    helicopterOperators: ['HM Coastguard'],
+    regionLabel: 'Outer Hebrides'
+  },
+  {
+    id: 'sar-shetland-ronas',
+    code: 'RONA',
+    heliAdminAliases: ['RONA'],
+    name: 'Shetland — Ronas Hill & Northmavine Cliffs',
+    shortName: 'Shetland / Ronas Hill (RONA)',
+    fieldOperator: 'HM Coastguard / SAR',
+    assetType: 'SAR Base',
+    sector: 'scotland_airports',
+    lat: 60.5333,
+    lon: -1.45,
+    elevationFt: 1476,
+    primaryShoreBase: 'EGPB',
+    helicopterOperators: ['HM Coastguard'],
+    regionLabel: 'Shetland'
+  },
+  {
+    id: 'sar-lakes-scafell',
+    code: 'SCAF',
+    heliAdminAliases: ['SCAF'],
+    name: 'Lake District — Scafell Pike & Great Gable',
+    shortName: 'Lake District / Scafell Pike (SCAF)',
+    fieldOperator: 'HM Coastguard / SAR',
+    assetType: 'SAR Base',
+    sector: 'uk_airports',
+    lat: 54.4542,
+    lon: -3.2115,
+    elevationFt: 3209,
+    primaryShoreBase: 'EGPK',
+    helicopterOperators: ['HM Coastguard'],
+    regionLabel: 'Cumbria'
+  },
+  {
+    id: 'sar-snowdonia-yr-wyddfa',
+    code: 'SNOW',
+    heliAdminAliases: ['SNOW'],
+    name: 'Eryri / Snowdonia — Yr Wyddfa (Snowdon)',
+    shortName: 'Snowdonia / Yr Wyddfa (SNOW)',
+    fieldOperator: 'HM Coastguard / SAR',
+    assetType: 'SAR Base',
+    sector: 'uk_airports',
+    lat: 53.0685,
+    lon: -4.0763,
+    elevationFt: 3560,
+    primaryShoreBase: 'EGCK',
+    helicopterOperators: ['HM Coastguard'],
+    regionLabel: 'North Wales'
+  },
+  {
+    id: 'sar-brecon-pen-y-fan',
+    code: 'PENF',
+    heliAdminAliases: ['PENF'],
+    name: 'Bannau Brycheiniog / Brecon Beacons — Pen y Fan',
+    shortName: 'Brecon Beacons / Pen y Fan (PENF)',
+    fieldOperator: 'HM Coastguard / SAR',
+    assetType: 'SAR Base',
+    sector: 'uk_airports',
+    lat: 51.884,
+    lon: -3.4367,
+    elevationFt: 2907,
+    primaryShoreBase: 'EGDX',
+    helicopterOperators: ['HM Coastguard'],
+    regionLabel: 'South Wales'
+  },
+  {
+    id: 'sar-dartmoor-willhays',
+    code: 'DART',
+    heliAdminAliases: ['DART'],
+    name: 'Dartmoor — High Willhays & Yes Tor',
+    shortName: 'Dartmoor / High Willhays (DART)',
+    fieldOperator: 'HM Coastguard / SAR',
+    assetType: 'SAR Base',
+    sector: 'uk_airports',
+    lat: 50.6853,
+    lon: -4.0094,
+    elevationFt: 2039,
+    primaryShoreBase: 'EGHQ',
+    helicopterOperators: ['HM Coastguard'],
+    regionLabel: 'Devon'
   },
   {
     id: 'apt-egpi',
@@ -1708,8 +1845,8 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
     maxHeliType: 'AW189 / Sikorsky S-92A',
     primaryShoreBase: 'EGPK',
     helicopterOperators: ['HM Coastguard', 'Commercial Airline'],
-    regionLabel: 'Inner Hebrides · 56 NM WNW of Prestwick (Islay & Jura Medevacs)',
-    notes: 'Key West Coast island refuel and hospital medevac pickup airfield for Prestwick Rescue 199.'
+    regionLabel: 'Inner Hebrides · Islay & Jura',
+    notes: 'Island airport with Loganair flights to Glasgow; used for island medevacs.'
   },
   {
     id: 'apt-egec',
@@ -1726,8 +1863,8 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
     maxHeliType: 'AW189 / Sikorsky S-92A',
     primaryShoreBase: 'EGPK',
     helicopterOperators: ['HM Coastguard', 'Commercial Airline'],
-    regionLabel: 'Mull of Kintyre · 38 NM W of Prestwick',
-    notes: 'Long ex-RAF runway serving Kintyre hospital medevacs and North Channel SAR operations from Prestwick.'
+    regionLabel: 'Mull of Kintyre',
+    notes: 'Ex-RAF runway with Loganair flights to Glasgow; used for Kintyre medevacs.'
   },
   {
     id: 'apt-egeo',
@@ -1744,8 +1881,8 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
     maxHeliType: 'AW189 / Sikorsky S-92A',
     primaryShoreBase: 'EGPK',
     helicopterOperators: ['HM Coastguard'],
-    regionLabel: 'Argyll & Sound of Mull · 62 NM NNW of Prestwick',
-    notes: 'Forward refuel and Argyll / Isle of Mull medevac staging airfield for Prestwick Rescue 199.'
+    regionLabel: 'Argyll & Sound of Mull',
+    notes: 'Argyll airfield with island flights; used for Argyll and Mull medevacs.'
   },
   {
     id: 'apt-egpu',
@@ -1762,8 +1899,8 @@ export const INSTALLATIONS_AND_AIRPORTS: InstallationOrAirport[] = [
     maxHeliType: 'AW189 / Sikorsky S-92A',
     primaryShoreBase: 'EGPK',
     helicopterOperators: ['HM Coastguard', 'Commercial Airline'],
-    regionLabel: 'Inner Hebrides · 92 NM NW of Prestwick (Tiree & Coll)',
-    notes: 'Westernmost Inner Hebrides airfield; critical refuel and island medevac stop between Prestwick and Stornoway.'
+    regionLabel: 'Inner Hebrides · Tiree & Coll',
+    notes: 'Westernmost Inner Hebrides airfield with Loganair flights to Glasgow; used as a refuel stop.'
   },
 
   // =========================================================================
@@ -1826,6 +1963,15 @@ export const HELIADMIN_CODE_TO_FACILITY_ID: Record<string, string> = {
   GCOE: 'sar-glencoe-mrt',
   BNEV: 'sar-ben-nevis-mrt',
   ACRG: 'sar-ailsa-craig-clyde',
+  MACD: 'sar-cairngorms-macdui',
+  TORR: 'sar-torridon-liathach',
+  CUIL: 'sar-skye-cuillin',
+  CLIS: 'sar-harris-clisham',
+  RONA: 'sar-shetland-ronas',
+  SCAF: 'sar-lakes-scafell',
+  SNOW: 'sar-snowdonia-yr-wyddfa',
+  PENF: 'sar-brecon-pen-y-fan',
+  DART: 'sar-dartmoor-willhays',
   GLA: 'apt-egpf',
   EGPF: 'apt-egpf',
   EDI: 'apt-egph',

@@ -145,9 +145,10 @@ export default function App() {
   // Active locked installation or airport (persisted in localStorage)
   const [activeFacilityId, setActiveFacilityId] = useState<string>(() => {
     try {
-      return localStorage.getItem('choppercheck_home_rig_id') || 'wos-glen-lyon-fpso';
+      // First visit: Aberdeen, the main offshore heliport, until the visitor picks their own rig
+      return localStorage.getItem('choppercheck_home_rig_id') || 'apt-egpd';
     } catch {
-      return 'wos-glen-lyon-fpso';
+      return 'apt-egpd';
     }
   });
   const [referenceLocation] = useState({ lat: 57.65, lon: 0.8 });
@@ -186,7 +187,7 @@ export default function App() {
     } catch {
       // ignore storage errors
     }
-    return ['wos-glen-lyon-fpso', 'apache-forties-charlie', 'uk-culzean', 'apt-egpd'];
+    return ['apt-egpd'];
   });
 
   // Single-Rig Focus Mode (hides all other 60+ rigs on the map so phone screen only shows your 1 rig + shore base)

@@ -722,21 +722,14 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
     dateInput: activeHour?.hourIso ? new Date(activeHour.hourIso + 'Z') : new Date(),
   });
 
-  const prestwickSarQuickSites = allFacilities.filter((f) =>
-    [
-      'apt-egpk',
-      'sar-goatfell-arran',
-      'sar-galloway-merrick',
-      'sar-ben-lomond-mrt',
-      'sar-glencoe-mrt',
-      'sar-ben-nevis-mrt',
-      'sar-ailsa-craig-clyde',
-      'apt-egpi',
-      'apt-egec',
-      'apt-egeo',
-      'apt-egpu',
-    ].includes(f.id)
-  );
+  // Rescue bases and mountain/island/sea rescue spots nearest this location (same for every area)
+  const nearbyRescueSites = allFacilities
+    .filter((f) => f.assetType === 'SAR Base' || f.assetType === 'Hospital Helipad')
+    .map((f) => ({ site: f, distNm: calculateDistanceNm(facility.lat, facility.lon, f.lat, f.lon) }))
+    .filter((x) => x.distNm <= 120)
+    .sort((a, b) => a.distNm - b.distNm)
+    .slice(0, 10)
+    .map((x) => x.site);
 
   return (
     <div className="flex flex-col h-full min-w-0 w-full bg-slate-950 text-slate-100 overflow-y-auto overflow-x-hidden p-3 sm:p-5 space-y-4">
@@ -1771,19 +1764,16 @@ export const HelideckWeatherPanel: React.FC<HelideckWeatherPanelProps> = ({
               </span>
             </div>
 
-            {/* Prestwick (Rescue 199) West Coast Islands, Mountain Rescue (MRT) & Clyde Quick-Switch Bar */}
-            {prestwickSarQuickSites.length > 0 && onSelectFacility && (
+            {nearbyRescueSites.length > 0 && onSelectFacility && (
               <div className="p-2 rounded-lg bg-slate-950/90 border border-slate-800 space-y-1.5">
                 <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-orange-300">
-                  <span className="font-bold">
-                    🚁 PRESTWICK (RESCUE 199 · EGPK) MOUNTAIN, ISLAND &amp; CLYDE SAR ZONES:
-                  </span>
+                  <span className="font-bold">🚁 RESCUE BASES &amp; SPOTS NEAR HERE:</span>
                   <span className="text-slate-400 hidden sm:inline">
                     Tap any site or click anywhere on the Radar Map
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {prestwickSarQuickSites.map((site) => {
+                  {nearbyRescueSites.map((site) => {
                     const isCurrent = site.id === facility.id;
                     const isMrt = site.elevationFt >= 800;
                     return (
